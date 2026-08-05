@@ -168,6 +168,31 @@ def test_freeze_record_captures_and_rotates_to_configured_log() -> None:
             performance_monitor._LOG_PATH = original
 
 
+def test_desktop_heartbeat_captures_stacks_only_for_a_real_delay() -> None:
+    original = performance_monitor._LOG_PATH
+    with tempfile.TemporaryDirectory() as temp_dir:
+        performance_monitor._LOG_PATH = Path(temp_dir) / "host-freezes.jsonl"
+        try:
+            before = len(performance_monitor._freezes)
+            delay = performance_monitor.record_host_heartbeat(time.time() - 0.6, active_callback="move_window")
+            assert delay >= 0.5
+            record = list(performance_monitor._freezes)[-1]
+            assert len(performance_monitor._freezes) >= before
+            assert record["subsystem"] == "desktop_webview_bridge"
+            assert record["thread_stacks"]
+            assert record["details"]["active_callback"] == "move_window"
+        finally:
+            performance_monitor._LOG_PATH = original
+
+
+def test_mini_drag_coalesces_webview_bridge_calls() -> None:
+    source = (ROOT / "reyes_agent" / "static" / "mini.html").read_text(encoding="utf-8")
+    assert "moveInFlight" in source
+    assert "queuedMove" in source
+    assert "requestAnimationFrame(flushMove)" in source
+    assert "host_heartbeat" in source
+
+
 def test_browser_runtime_keeps_all_actions_on_one_owner_thread() -> None:
     runtime = BrowserRuntime()
     owner: dict[str, int] = {}

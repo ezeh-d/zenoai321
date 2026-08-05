@@ -831,7 +831,7 @@ body.focus #agent-team-overview { opacity: 0; }
 </div>
 
 <script type="module">
-import { initOrb } from "/static/orb.js?v=4";
+import { initOrb } from "/static/orb.js?v=6";
 
 const orb = initOrb(document.getElementById("orb-canvas"));
 // Exposed for the dev overlay and for testing orb state/expressions
@@ -2704,9 +2704,22 @@ window.zenoTimeline = { open: openTimeline, reload: loadTimeline };
   const canvasEl = document.getElementById('orb-canvas');
   const dragTarget = document.body;
   let dragging = false, startX = 0, startY = 0, winX = 0, winY = 0, moved = false;
+  let moveInFlight = false, queuedMove = null;
 
   function api() {
     return (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+  }
+  function flushMove() {
+    if (moveInFlight || !queuedMove) return;
+    const point = queuedMove;
+    queuedMove = null;
+    const a = api();
+    if (!a || !a.move_window) return;
+    moveInFlight = true;
+    Promise.resolve(a.move_window(point.x, point.y)).catch(() => {}).finally(() => {
+      moveInFlight = false;
+      if (queuedMove) requestAnimationFrame(flushMove);
+    });
   }
 
   dragTarget.addEventListener('mousedown', (e) => {
@@ -2726,8 +2739,8 @@ window.zenoTimeline = { open: openTimeline, reload: loadTimeline };
     if (!dragging) return;
     const dx = e.screenX - startX, dy = e.screenY - startY;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-    const a = api();
-    if (a && a.move_window) a.move_window(winX + dx, winY + dy);
+    queuedMove = { x: winX + dx, y: winY + dy };
+    requestAnimationFrame(flushMove);
   });
 
   window.addEventListener('mouseup', () => {

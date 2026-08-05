@@ -203,6 +203,16 @@ def prepare_shutdown(request: Request) -> dict[str, bool]:
             "events_flushed": bool(result.get("stopped") or result.get("already_stopping"))}
 
 
+@app.get("/api/internal/diagnostics/threads")
+def diagnostic_thread_stacks(request: Request) -> dict[str, Any]:
+    """Loopback-only, on-demand Python stack capture for freeze diagnosis."""
+    client = request.client.host if request.client else ""
+    if client not in {"127.0.0.1", "::1"}:
+        raise HTTPException(403, "Loopback only.")
+    from reyes_agent.performance_monitor import thread_stack_snapshot
+    return thread_stack_snapshot()
+
+
 _STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 

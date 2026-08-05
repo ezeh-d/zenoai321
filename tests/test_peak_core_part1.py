@@ -81,6 +81,22 @@ def test_desktop_uses_a_persistent_non_private_webview_profile() -> None:
     assert "storage_path=str(_WEBVIEW_STORAGE)" in source
 
 
+def test_desktop_bridge_does_not_expose_the_pywebview_window_object() -> None:
+    source = (ROOT / "reyes_agent" / "desktop_app.py").read_text(encoding="utf-8")
+    assert "self._window = None" in source
+    assert "api._window = window" in source
+    assert "self.window = None" not in source
+    assert "api.window = window" not in source
+
+
+def test_every_companion_drag_path_coalesces_native_moves() -> None:
+    for name in ("mini.html", "index.html"):
+        source = (ROOT / "reyes_agent" / "static" / name).read_text(encoding="utf-8")
+        assert "moveInFlight" in source
+        assert "queuedMove" in source
+        assert "requestAnimationFrame(flushMove)" in source
+
+
 def test_web_lifecycle_delegates_to_kernel_and_has_no_unreachable_shutdown() -> None:
     source = (ROOT / "reyes_agent" / "web.py").read_text(encoding="utf-8")
     tree = ast.parse(source)

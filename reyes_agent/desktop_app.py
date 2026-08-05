@@ -17,6 +17,7 @@ import atexit
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -192,12 +193,41 @@ class _DesktopApi:
     """
 
     def __init__(self) -> None:
-        self.window = None
+        # pywebview reflects every public non-callable attribute into its JS
+        # bridge. Keeping the Window object public made its reflection walk
+        # recursively descend into the full WinForms/WebView2 COM graph on
+        # every navigation. That was captured in a real frozen-host stack in
+        # ``webview.util.get_functions`` / Accessibility. This must remain
+        # private: the browser needs the methods below, never the window.
+        self._window = None
         self._orb_pos = None  # last known companion-orb position (x, y)
+        self._bridge_lock = threading.Lock()
+        self._active_bridge_callback = ""
+        self._bridge_calls = 0
+
+    def _bridge_start(self, name: str) -> None:
+        with self._bridge_lock:
+            self._active_bridge_callback = name
+            self._bridge_calls += 1
+
+    def _bridge_end(self, name: str) -> None:
+        with self._bridge_lock:
+            if self._active_bridge_callback == name:
+                self._active_bridge_callback = ""
+
+    def host_heartbeat(self, sent_at_s: float) -> dict:
+        """Tiny renderer-to-host heartbeat; never performs GUI work itself."""
+        with self._bridge_lock:
+            active = self._active_bridge_callback
+            calls = self._bridge_calls
+        from reyes_agent.performance_monitor import record_host_heartbeat
+        delay = record_host_heartbeat(sent_at_s, active_callback=active,
+                                      bridge_activity={"calls": calls})
+        return {"delay_ms": round(delay * 1000, 1)}
 
     def toggle_fullscreen(self) -> bool:
-        if self.window is not None:
-            self.window.toggle_fullscreen()
+        if self._window is not None:
+            self._window.toggle_fullscreen()
             return True
         return False
 
@@ -216,8 +246,10 @@ class _DesktopApi:
         return {"w": 1920, "h": 1080}
 
     def move_window(self, x: int, y: int) -> bool:
-        w = self.window
+        self._bridge_start("move_window")
+        w = self._window
         if w is None:
+            self._bridge_end("move_window")
             return False
         try:
             scr = self.screen_size()
@@ -230,11 +262,13 @@ class _DesktopApi:
             return True
         except Exception:  # noqa: BLE001
             return False
+        finally:
+            self._bridge_end("move_window")
 
     def snap_orb(self, size: int = 210, margin: int = 30) -> dict:
         """Snap the companion orb to the nearest edge/corner, then report
         where it landed so the page can remember it."""
-        w = self.window
+        w = self._window
         if w is None:
             return {"ok": False}
         scr = self.screen_size()
@@ -263,7 +297,7 @@ class _DesktopApi:
         other apps) while REYES works, then restore. Called by the page
         auto-shrink logic. Best-effort -- silently no-ops if the pywebview
         build doesn't support a given call."""
-        w = self.window
+        w = self._window
         if w is None:
             return False
         try:
@@ -293,24 +327,32 @@ class _DesktopApi:
 
     def show_mini(self) -> bool:
         """Switch this one WebView to the lightweight companion document."""
-        if not self.set_mini(True) or self.window is None:
+        self._bridge_start("show_mini")
+        if not self.set_mini(True) or self._window is None:
+            self._bridge_end("show_mini")
             return False
         try:
-            self.window.load_url(f"{_URL}/mini")
+            self._window.load_url(f"{_URL}/mini")
             return True
         except Exception:  # noqa: BLE001
             return False
+        finally:
+            self._bridge_end("show_mini")
 
     def show_dashboard(self) -> bool:
         """Return the same WebView (not a second frontend) to the dashboard."""
-        if self.window is None:
+        self._bridge_start("show_dashboard")
+        if self._window is None:
+            self._bridge_end("show_dashboard")
             return False
         try:
             self.set_mini(False)
-            self.window.load_url(_URL)
+            self._window.load_url(_URL)
             return True
         except Exception:  # noqa: BLE001
             return False
+        finally:
+            self._bridge_end("show_dashboard")
 
 
 def main() -> None:
@@ -338,7 +380,7 @@ def main() -> None:
             on_top=True,
             js_api=api,
         )
-        api.window = window
+        api._window = window
         try:
             window.events.minimized += lambda: api.show_mini()
         except Exception:  # noqa: BLE001 -- older pywebview builds lack this event

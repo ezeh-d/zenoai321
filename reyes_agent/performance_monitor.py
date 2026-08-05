@@ -32,6 +32,50 @@ _memory_samples: deque[tuple[float, int]] = deque(maxlen=_MAX_SAMPLES)
 _freezes: deque[dict[str, Any]] = deque(maxlen=100)
 _frontend_audits: deque[dict[str, Any]] = deque(maxlen=120)
 _last_freeze_at: dict[str, float] = {}
+_last_host_incident_at = 0.0
+
+
+def thread_stack_snapshot(*, limit: int = 32) -> dict[str, Any]:
+    """Return a bounded, safe snapshot of every live Python thread.
+
+    This is intentionally diagnostic-only. It does not acquire application
+    locks or signal threads, so a hung process can be inspected without
+    changing the condition being investigated.
+    """
+    frames = sys._current_frames()
+    threads = []
+    for thread in threading.enumerate():
+        frame = frames.get(thread.ident)
+        threads.append({
+            "id": thread.ident,
+            "name": thread.name,
+            "daemon": thread.daemon,
+            "stack": traceback.format_stack(frame, limit=limit) if frame else [],
+        })
+    return {"pid": os.getpid(), "captured_at": time.time(), "threads": threads}
+
+
+def record_host_heartbeat(sent_at_s: float, *, active_callback: str = "",
+                          bridge_activity: dict[str, Any] | None = None) -> float:
+    """Record a heartbeat delivered through the real WebView bridge.
+
+    The timestamp is set in the renderer. A late arrival proves that either
+    the WebView/WinForms message path or its bridge dispatch was delayed.
+    Stack capture is rate-limited and runs on the callback worker, never the
+    WinForms message-loop itself.
+    """
+    global _last_host_incident_at
+    delay = max(0.0, time.time() - float(sent_at_s))
+    if delay >= 0.5 and time.time() - _last_host_incident_at >= 5.0:
+        _last_host_incident_at = time.time()
+        record_freeze(delay, subsystem="desktop_webview_bridge", source="host-heartbeat", details={
+            "capture_stacks": True,
+            "host_pid": os.getpid(),
+            "host_thread": threading.get_ident(),
+            "active_callback": active_callback,
+            "bridge_activity": bridge_activity or {},
+        })
+    return delay
 
 
 def record_latency(subsystem: str, seconds: float) -> None:

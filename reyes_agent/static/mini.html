@@ -19,12 +19,23 @@ async function refresh(){
   }catch(e){orb.setState('error');}
 }
 refresh();setInterval(()=>{if(!document.hidden)refresh();},2000);
-let dragging=false,moved=false,startX=0,startY=0,winX=0,winY=0;
+let dragging=false,moved=false,startX=0,startY=0,winX=0,winY=0,moveInFlight=false,queuedMove=null;
+function flushMove(){
+  if(moveInFlight||!queuedMove)return;
+  const point=queuedMove;queuedMove=null;const a=api();
+  if(!a||!a.move_window)return;
+  moveInFlight=true;
+  a.move_window(point.x,point.y).catch(()=>{}).finally(()=>{moveInFlight=false;if(queuedMove)requestAnimationFrame(flushMove);});
+}
 document.addEventListener('mousedown',e=>{const a=api();if(!a||!a.move_window)return;dragging=true;moved=false;startX=e.screenX;startY=e.screenY;const saved=JSON.parse(localStorage.getItem('zeno_orb_pos')||'null');winX=saved?saved.x:0;winY=saved?saved.y:0;document.body.classList.add('dragging');});
-document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX-startX,dy=e.screenY-startY;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;const a=api();if(a&&a.move_window)a.move_window(winX+dx,winY+dy);});
+document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX-startX,dy=e.screenY-startY;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;queuedMove={x:winX+dx,y:winY+dy};requestAnimationFrame(flushMove);});
 document.addEventListener('mouseup',()=>{if(!dragging)return;dragging=false;document.body.classList.remove('dragging');const a=api();if(a&&a.snap_orb)a.snap_orb().then(p=>{if(p&&p.ok)localStorage.setItem('zeno_orb_pos',JSON.stringify({x:p.x,y:p.y}));});});
 document.addEventListener('click',()=>{if(!moved)openDashboard();});
 window.addEventListener('pywebviewready',()=>{const saved=JSON.parse(localStorage.getItem('zeno_orb_pos')||'null'),a=api();if(saved&&a&&a.restore_orb_position)a.restore_orb_position(saved.x,saved.y);});
+// One awaited heartbeat (max 4/s) proves that WebView messages are crossing
+// into the Python host. It is never tied to animation frames and cannot
+// accumulate bridge calls while the host is delayed.
+setInterval(async()=>{const a=api();if(!document.hidden&&a&&a.host_heartbeat){try{await a.host_heartbeat(Date.now()/1000);}catch(_e){}}},250);
 // The compact companion keeps the same wake behavior as the dashboard but
 // does only one thing with it: wake ZENO by opening the full interface.
 // Microphone permission is shared by this local origin, so an earlier grant
