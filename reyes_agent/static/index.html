@@ -1145,6 +1145,7 @@ const COMMANDS = [
   { label: 'Show what ZENO just did', hint: 'Explainability panel', run: () => { explainPanel.classList.add('open'); renderExplainPanel(); } },
   { label: 'Open Timeline', hint: 'Everything ZENO has done, from the event record', run: () => openTimeline() },
   { label: 'Situation Room', hint: 'Everything at once: agents, system, missions, model, events', run: () => openSituation() },
+  { label: 'Knowledge Galaxy', hint: 'Your vault as a map — notes, tags, real links', run: () => openGalaxy() },
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map of real links and tags', run: () => openGalaxy() },
   { label: 'Evolution report', hint: 'What ZENO measured about its own performance', run: () => runTurn('Run an evolution report on yourself.') },
   { label: 'Agent Monitor', hint: 'Live worker state, heartbeats, queues, metrics', run: () => openAgentMonitor() },
@@ -1512,8 +1513,10 @@ async function runTurn(text) {
         if (evt.type === 'stage') {
           setStage(evt.stage);
         } else if (evt.type === 'tool') {
-          setMini(true);  // real work started -> shrink to the corner orb
-          if (window.zenoCompanion) window.zenoCompanion.setWorking(true);  // mission ring on
+          // Keep the dashboard visible while work is running.  The separate
+          // Mini Orb remains available on demand, but navigating a WebView
+          // away during this SSE turn would discard the live reply handler.
+          if (window.zenoCompanion) window.zenoCompanion.setWorking(true);
           const [ico, lbl] = friendlyTool(evt.name, evt.input);
           thinkingBubble.textContent = ico + ' ' + lbl + '...';
           orb.setState(orbStateForTool(evt.name));
@@ -2226,6 +2229,10 @@ settingsBtn.addEventListener('click', () => {
 // Draws the REAL vault graph from /api/galaxy. Built once per open with
 // plain SVG: no physics loop, no per-frame work, so an open galaxy costs
 // nothing after the initial render.
+/* Superseded by the static-SVG renderer below. Kept here only as historical
+   context until the next frontend consolidation; it must not install a
+   second set of handlers or rebuild the graph twice. */
+/*
 let galaxyData = null;
 async function openGalaxy() {
   document.getElementById('galaxy-overlay').classList.add('open');
@@ -2331,6 +2338,98 @@ document.getElementById('galaxy-search').addEventListener('input', (e) => {
   svg.querySelectorAll('text').forEach(t => t.classList.toggle('dim', !hit.has(t.dataset.id)));
 });
 window.zenoGalaxy = { open: openGalaxy, focus: focusGalaxyNode };
+*/
+
+// --- Knowledge Galaxy -------------------------------------------------
+// Draws the REAL vault graph from /api/galaxy as static SVG. Positions
+// are computed server-side, so there is no physics loop here -- a force
+// simulation is exactly the kind of per-frame GPU work that made this app
+// lag before. Rendered once per open; search only toggles classes.
+let galaxyData = null;
+function renderGalaxy(highlight) {
+  const svg = document.getElementById('galaxy-svg');
+  if (!galaxyData) return;
+  const S = 1000;
+  const pos = {};
+  galaxyData.nodes.forEach(n => { pos[n.id] = n; });
+  const q = (highlight || '').trim().toLowerCase();
+
+  const matches = id => {
+    if (!q) return true;
+    const n = pos[id];
+    return n && n.label.toLowerCase().includes(q);
+  };
+  // A node is "lit" if it matches, or is directly connected to a match.
+  const lit = new Set();
+  if (q) {
+    galaxyData.nodes.forEach(n => { if (matches(n.id)) lit.add(n.id); });
+    galaxyData.edges.forEach(e => {
+      if (lit.has(e.src)) lit.add(e.dst);
+      else if (lit.has(e.dst)) lit.add(e.src);
+    });
+  }
+
+  const parts = [];
+  for (const e of galaxyData.edges) {
+    const a = pos[e.src], b = pos[e.dst];
+    if (!a || !b) continue;
+    const on = !q || (lit.has(e.src) && lit.has(e.dst));
+    parts.push(`<line class="gx-edge ${e.kind}${on && q ? ' hl' : ''}" x1="${(a.x*S).toFixed(1)}" y1="${(a.y*S).toFixed(1)}" x2="${(b.x*S).toFixed(1)}" y2="${(b.y*S).toFixed(1)}"${!on ? ' opacity="0.05"' : ''}/>`);
+  }
+  for (const n of galaxyData.nodes) {
+    const r = Math.min(13, 3.5 + n.degree * 0.9);
+    const dim = q && !lit.has(n.id) ? ' dim' : '';
+    parts.push(`<circle class="${n.kind}${dim}" cx="${(n.x*S).toFixed(1)}" cy="${(n.y*S).toFixed(1)}" r="${r.toFixed(1)}" data-id="${escapeHtml(n.id)}"><title>${escapeHtml(n.label)}</title></circle>`);
+    if (n.degree >= 2 || (q && lit.has(n.id))) {
+      parts.push(`<text class="${dim.trim()}" x="${(n.x*S).toFixed(1)}" y="${(n.y*S - r - 3).toFixed(1)}" text-anchor="middle">${escapeHtml(n.label.slice(0, 22))}</text>`);
+    }
+  }
+  svg.innerHTML = parts.join('');
+
+  svg.querySelectorAll('circle').forEach(c => {
+    c.addEventListener('click', () => {
+      const id = c.getAttribute('data-id');
+      const node = pos[id];
+      const links = galaxyData.edges
+        .filter(e => e.src === id || e.dst === id)
+        .map(e => {
+          const other = pos[e.src === id ? e.dst : e.src];
+          return other ? `${other.label} (${e.kind})` : null;
+        })
+        .filter(Boolean);
+      document.getElementById('galaxy-info').innerHTML =
+        `<b style="color:var(--text)">${escapeHtml(node.label)}</b> — ${escapeHtml(node.kind)}` +
+        (node.path ? ` · <span style="opacity:.7">${escapeHtml(node.path)}</span>` : '') +
+        (links.length
+          ? `<br>${links.length} connection(s): ${escapeHtml(links.slice(0, 12).join(', '))}`
+          : '<br>Nothing links to this yet — an orphan.');
+    });
+  });
+}
+
+async function openGalaxy() {
+  document.getElementById('galaxy-overlay').classList.add('open');
+  const info = document.getElementById('galaxy-info');
+  try {
+    galaxyData = await (await fetch('/api/galaxy')).json();
+  } catch (e) {
+    info.textContent = 'Could not load the knowledge graph.';
+    return;
+  }
+  document.getElementById('galaxy-count').textContent =
+    `${galaxyData.counts.nodes} nodes · ${galaxyData.counts.edges} links`;
+  if (!galaxyData.nodes.length) {
+    info.textContent = 'The vault has no notes yet, so there is nothing to map.';
+    document.getElementById('galaxy-svg').innerHTML = '';
+    return;
+  }
+  renderGalaxy('');
+  info.textContent = 'Click a star to see what it connects to. Bigger = more connections.';
+}
+document.getElementById('galaxy-close').addEventListener('click',
+  () => document.getElementById('galaxy-overlay').classList.remove('open'));
+document.getElementById('galaxy-search').addEventListener('input', (e) => renderGalaxy(e.target.value));
+window.zenoGalaxy = { open: openGalaxy, render: renderGalaxy };
 
 // --- Situation Room ---------------------------------------------------
 // Renders /api/situation, which composes live subsystem state. Unknown
@@ -2721,6 +2820,13 @@ document.addEventListener('keydown', (e) => {
 // resize happens in the desktop app; the CSS collapse happens everywhere.
 let miniActive = false;
 function setMini(on) {
+  // The native companion uses a deliberately tiny document instead of this
+  // dashboard. Do this only on explicit user action: a live streamed turn
+  // must retain this document until it has delivered its final result.
+  if (on && window.pywebview && window.pywebview.api && window.pywebview.api.show_mini) {
+    try { window.pywebview.api.show_mini(); } catch (e) {}
+    return;
+  }
   if (on === miniActive) return;
   miniActive = on;
   document.body.classList.toggle('mini', on);
@@ -2974,7 +3080,9 @@ if (window.EventSource) {
     const type = update.type || '';
     if (type.startsWith('mission.')) refreshMissions();
     if (type.startsWith('confirmation.') || type.startsWith('tool.')) refreshPending();
-    if (type.startsWith('heartbeat.') || type.startsWith('notification.')) refreshNotices();
+    // Heartbeats are useful to the backend's health monitor, but do not
+    // represent new UI state. Notifications are the only notice trigger.
+    if (type.startsWith('notification.')) refreshNotices();
     if (document.getElementById('agents-overlay').classList.contains('open') && type.startsWith('agent.')) refreshAgentMonitor();
     if (document.getElementById('situation-overlay').classList.contains('open')) refreshSituation();
     if (document.getElementById('timeline-overlay').classList.contains('open')) loadTimeline();

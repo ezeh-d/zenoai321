@@ -20,6 +20,7 @@ import json
 import os
 import queue
 import socket
+import sys
 import threading
 import time
 from pathlib import Path
@@ -92,10 +93,12 @@ def _boot_background_services() -> None:
     try:
         from reyes_agent import (
             activity_monitor, email_watcher, heartbeat, notification_listener,
-            proactive, resource_manager, warmup,
+            proactive, resource_manager,
         )
 
-        warmup.start_background_keepalive()
+        # Do not issue an automatic model/provider request after launch.  It
+        # competes with first-use work and is not needed to render or operate
+        # the dashboard; the provider loads only for a real user request.
         heartbeat.start_background()
         notification_listener.start_background()
         activity_monitor.start_background()
@@ -923,6 +926,29 @@ def events_stream() -> StreamingResponse:
             event_bus.unsubscribe(subscriber)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/mini-status")
+def mini_status() -> dict[str, Any]:
+    """Small companion payload; it deliberately avoids dashboard snapshots."""
+    from reyes_agent.kernel import get_kernel
+
+    workers = get_kernel().diagnostics().get("workers", {})
+    active = workers.get("active_tasks", [])
+    task = active[0] if active else None
+    agents: list[str] = []
+    runtime = sys.modules.get("reyes_agent.agent_runtime")
+    if runtime is not None:
+        try:
+            agents = list(runtime.health().get("working_now", []))
+        except Exception:  # noqa: BLE001 -- companion status is best effort
+            pass
+    return {
+        "task": task,
+        "queue_depth": workers.get("queue_depth", 0),
+        "active_count": len(active),
+        "agents": agents,
+    }
 
 
 @app.get("/api/events/stats")
