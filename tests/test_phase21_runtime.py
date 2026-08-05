@@ -160,8 +160,9 @@ def test_freeze_record_captures_and_rotates_to_configured_log() -> None:
                 0.25, subsystem="test", source=f"pytest-{time.monotonic()}"
             )
             assert record is not None
+            assert record["thread_stacks"] == {}
             assert record["duration_ms"] >= 200
-            assert record["call_stack"]
+            assert record["call_stack"] == []
             assert performance_monitor._LOG_PATH.exists()
         finally:
             performance_monitor._LOG_PATH = original

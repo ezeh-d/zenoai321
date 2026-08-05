@@ -780,8 +780,9 @@ body.focus #agent-team-overview { opacity: 0; }
       <select id="camera-select" style="background:#0c1018;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;max-width:150px;"><option value="">Default</option></select>
     </div>
     <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
-      <span class="label">Phone Companion<span class="sub">Open this on your phone (same Wi-Fi), then enter the code below</span></span>
-      <div id="phone-pair-info" style="font:12px ui-monospace,monospace;color:var(--text-dim);word-break:break-all;">Loading...</div>
+      <span class="label">Phone Companion<span class="sub">Secure browser pairing through Cloudflare Access; no same Wi-Fi required</span></span>
+      <button id="phone-pair-btn" class="vt-btn">Pair Phone</button>
+      <div id="phone-pair-info" style="font:12px ui-monospace,monospace;color:var(--text-dim);word-break:break-all;">Configure Cloudflare Tunnel and Access first.</div>
     </div>
     <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
       <span class="label">Agent voices<span class="sub">Preview each specialist, or paste a new ElevenLabs voice ID</span></span>
@@ -1011,6 +1012,9 @@ const sendEl = document.getElementById('send');
 const pendingPanelEl = document.getElementById('pending-panel');
 const pendingBadgeEl = document.getElementById('pending-badge');
 const statusMetaEl = document.getElementById('status-meta');
+const performanceAuditEnabled = new URLSearchParams(location.search).get('audit') === '1';
+let frontendMessageCount = 0;
+function recordFrontendMessage() { if (performanceAuditEnabled) frontendMessageCount++; }
 
 let turnActive = false;
 let assistantBubble = null;
@@ -1509,6 +1513,7 @@ async function runTurn(text) {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const evt = JSON.parse(line.slice(6));
+        recordFrontendMessage();
         lastEvent = evt;
         if (evt.type === 'stage') {
           setStage(evt.stage);
@@ -1945,16 +1950,22 @@ micIndicator.addEventListener('click', () => {
   }
 })();
 
-// Phone Companion pairing info -- fetched once on load so Settings always
-// shows the current LAN URL + code without the user needing to find it
-// any other way (see reyes_agent/config.py's PHONE_PAIR_TOKEN and
-// static/phone.html).
-fetch('/api/phone/pair-info').then((r) => r.json()).then((info) => {
+// Pairing secrets are one-time values. They are never kept in browser
+// storage; the service keeps a hash only and expires it after five minutes.
+document.getElementById('phone-pair-btn')?.addEventListener('click', async () => {
   const el = document.getElementById('phone-pair-info');
-  if (el) el.textContent = info.lan_url + '  ·  code: ' + info.token;
-}).catch(() => {
-  const el = document.getElementById('phone-pair-info');
-  if (el) el.textContent = 'Unavailable right now.';
+  try {
+    const response = await fetch('/api/phone/admin/pairing', { method: 'POST' });
+    const info = await response.json();
+    if (!response.ok) throw Error(info.detail || 'Pairing unavailable');
+    el.replaceChildren();
+    const qr = document.createElement('img');
+    qr.src = info.qr_png; qr.alt = 'ZENO phone pairing QR code'; qr.width = 180; qr.height = 180;
+    const code = document.createElement('div'); code.textContent = 'Manual code: ' + info.manual_code + ' (expires in 5 minutes)';
+    const url = document.createElement('div'); url.textContent = info.url;
+    const manual = document.createElement('div'); manual.textContent = 'Manual address: ' + info.manual_url;
+    el.append(qr, code, url, manual);
+  } catch (e) { el.textContent = e.message; }
 });
 
 // Desktop notifications are announced out loud server-side (SAPI, so it
@@ -1972,6 +1983,7 @@ if (!!window.EventSource) {
     } catch (e) {
       return;
     }
+    recordFrontendMessage();
     if (data.type === 'notification' && recognitionShouldRun) {
       awaitingCommand = true;
       micStatusEl.textContent = 'Waiting for your reply to ' + data.app + '...';
@@ -3076,6 +3088,7 @@ if (window.EventSource) {
   dashboardEvents.onmessage = (event) => {
     let update;
     try { update = JSON.parse(event.data); } catch (e) { return; }
+    recordFrontendMessage();
     lastEvent = update;
     const type = update.type || '';
     if (type.startsWith('mission.')) refreshMissions();
@@ -3091,7 +3104,35 @@ if (window.EventSource) {
 // Provider/connection state is cheap, and only the small text node is
 // touched when it actually changes.  CPU/RAM remain on their 2s snapshot
 // cadence in the visible Situation Room/developer diagnostic views.
-setInterval(() => { if (!document.hidden) refreshStatus(); }, 2000);
+const statusTimer = setInterval(() => { if (!document.hidden) refreshStatus(); }, 2000);
+
+// A/B-only renderer telemetry. This runs no animation loop in normal use;
+// when explicitly launched with ZENO_PERFORMANCE_AUDIT=1 it records real
+// rAF cadence and reports a bounded summary every five seconds.
+if (performanceAuditEnabled) {
+  let auditLast = performance.now(), auditFrames = 0, auditTotal = 0, auditWorst = 0, auditStarted = auditLast;
+  function auditFrame(now) {
+    const delta = now - auditLast; auditLast = now;
+    if (delta < 1000) { auditFrames++; auditTotal += delta; auditWorst = Math.max(auditWorst, delta); }
+    requestAnimationFrame(auditFrame);
+  }
+  requestAnimationFrame(auditFrame);
+  setInterval(() => {
+    const elapsed = Math.max(0.001, (performance.now() - auditStarted) / 1000);
+    const orbAudit = orb.auditMetrics ? orb.auditMetrics() : {};
+    const timers = 1 + (rendererWatchdog !== null ? 1 : 0) + (devRaf !== null ? 1 : 0)
+      + (orbitTimer !== null ? 1 : 0) + (sitClockTimer !== null ? 1 : 0)
+      + (orbAudit.particle_loop ? 1 : 0) + (orbAudit.blink_timer ? 1 : 0);
+    fetch('/api/performance/frontend', { method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        avg_frame_ms: auditFrames ? auditTotal / auditFrames : 0, worst_frame_ms: auditWorst,
+        heartbeat_delay_ms: Math.max(0, auditWorst - 16.7), messages_per_second: frontendMessageCount / elapsed,
+        active_animation_loops: document.getAnimations({ subtree: true }).filter(a => a.playState === 'running').length,
+        active_timers: timers,
+      }) }).catch(() => {});
+    auditFrames = 0; auditTotal = 0; auditWorst = 0; frontendMessageCount = 0; auditStarted = performance.now();
+  }, 5000);
+}
 orb.setState('idle');
 inputEl.focus();
 </script>

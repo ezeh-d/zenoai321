@@ -277,6 +277,7 @@ export function initOrb(canvas) {
       root.classList.add("blinking");
       setTimeout(() => root.classList.remove("blinking"), 130);
     },
+    auditMetrics: () => ({ particle_loop: particleTimer !== null, blink_timer: blinkTimer !== null }),
     specialists: SPECIALIST_IDS.slice(),
   };
 }

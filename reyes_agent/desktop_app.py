@@ -14,6 +14,7 @@ Run: python -m reyes_agent.desktop_app
 from __future__ import annotations
 
 import atexit
+import os
 import subprocess
 import sys
 import time
@@ -25,16 +26,20 @@ from reyes_agent import config
 
 _PORT = 8765
 _URL = f"http://127.0.0.1:{_PORT}"
+_DASHBOARD_URL = _URL + ("?audit=1" if os.environ.get("ZENO_PERFORMANCE_AUDIT") == "1" else "")
+# A machine-local, stable profile: WebView2 stores origin permissions here.
+# Never clean, rotate or place this below a temporary workspace directory.
+_WEBVIEW_STORAGE = Path(os.environ.get("LOCALAPPDATA", str(config.PROJECT_ROOT))) / "ZENO" / "WebView2" / "UserData"
 _server_proc: subprocess.Popen | None = None
 _owns_server = False
 _MAX_LOG_BYTES = 2 * 1024 * 1024
 _BOOT_HTML = """<!doctype html><html><head><meta charset='utf-8'><title>ZENO</title>
 <style>html,body{height:100%;margin:0;background:#050b1e;color:#b9d7ff;font:15px Segoe UI,sans-serif}
-main{height:100%;display:grid;place-items:center;text-align:center}.orb{width:88px;height:88px;border-radius:50%;
+main{height:100%;display:grid;place-items:center}.orb{width:88px;height:88px;border-radius:50%;
 background:radial-gradient(circle at 35% 30%,#d9f6ff,#177bd1 42%,#07163e 72%);box-shadow:0 0 55px #1787e880;
-animation:pulse 1.4s ease-in-out infinite}.label{margin-top:24px;letter-spacing:.18em;font-size:12px;color:#7eb2ef}
+animation:pulse 2.8s ease-in-out infinite}
 @keyframes pulse{50%{transform:scale(1.08);box-shadow:0 0 78px #36a7ffb0}}</style></head>
-<body><main><div><div class='orb'></div><div class='label'>ZENO IS STARTING</div></div></main></body></html>"""
+<body><main><div class='orb'></div></main></body></html>"""
 
 
 def _rotate_log_if_needed(path: Path) -> None:
@@ -69,7 +74,8 @@ def _start_server() -> None:
     requests from a non-main thread on Windows -- it binds the port but
     hangs on actual requests -- so a thread here left the whole app dead on
     launch. A child process runs uvicorn in ITS main thread (the proven
-    path) and still binds 0.0.0.0 for phone/LAN access. Killed on exit.
+    path) and binds loopback-only. Cloudflare Tunnel is the sole remote
+    transport for the Phone Companion. Killed on exit.
     """
     global _server_proc, _owns_server
     if _server_proc is not None and _server_proc.poll() is None:
@@ -149,14 +155,14 @@ def _wait_for_server(timeout: float = 30.0) -> bool:
     return False
 
 
-def _load_when_ready(window) -> None:
+def _load_when_ready(window, api) -> None:
     """Wait away from the native UI thread, then hand the same window to the
     web panel. The user sees a real ZENO window immediately even if a provider
     import, database recovery, or background service is slow."""
     _start_server()
     if _wait_for_server():
         try:
-            window.load_url(_URL)
+            api.show_mini()
             return
         except Exception:  # noqa: BLE001
             pass
@@ -167,7 +173,7 @@ def _load_when_ready(window) -> None:
         )
         while _server_proc is None or _server_proc.poll() is None:
             if _wait_for_server(timeout=5.0):
-                window.load_url(_URL)
+                api.show_mini()
                 return
             if _server_proc is not None and _server_proc.poll() is not None:
                 window.evaluate_js(
@@ -272,6 +278,10 @@ class _DesktopApi:
             except Exception:  # noqa: BLE001
                 pass
             if on:
+                try:
+                    w.restore()
+                except Exception:  # noqa: BLE001
+                    pass
                 w.resize(210, 210)
                 w.move(sw - 240, sh - 300)   # bottom-right corner
             else:
@@ -315,23 +325,33 @@ def main() -> None:
 
     try:
         api = _DesktopApi()
-        # 1600x1000 -- fits inside a real 1080p display with room for the OS
-        # taskbar, while still being wide enough that the orb + side panel
-        # don't feel cramped. Resizable, with a floor so the layout never
-        # breaks. F11 / the fullscreen button toggle true fullscreen via `api`.
+        # ZENO starts as the compact, frameless companion. The full dashboard
+        # is intentionally opt-in through the Mini Orb's Open button.
         window = webview.create_window(
             title=config.ASSISTANT_NAME,
             html=_BOOT_HTML,
-            width=1600,
-            height=1000,
-            min_size=(1000, 700),
-            background_color="#050b1e",
+            width=210,
+            height=210,
+            min_size=(210, 210),
+            background_color="#000000",
+            frameless=True,
+            on_top=True,
             js_api=api,
         )
         api.window = window
+        try:
+            window.events.minimized += lambda: api.show_mini()
+        except Exception:  # noqa: BLE001 -- older pywebview builds lack this event
+            pass
         # debug=False -- user does not want the right-click "Inspect"
         # dev-tools option available at all when using the app normally.
-        webview.start(_load_when_ready, args=(window,), debug=False)
+        # pywebview defaults to a private, temporary WebView2 profile. That
+        # made Windows ask for microphone permission after every restart.
+        # This app-local profile preserves the user's one-time grants.
+        webview.start(
+            _load_when_ready, args=(window, api), debug=False,
+            private_mode=False, storage_path=str(_WEBVIEW_STORAGE),
+        )
         # Window closed -> shut the server process down so it doesn't linger.
         _stop_server()
     finally:

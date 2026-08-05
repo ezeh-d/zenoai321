@@ -10,8 +10,8 @@ front door, not a separate brain. Adds two things the CLIs don't have:
   the perceived-lag fix; the model itself is only as fast as its provider.
 
 Run: python -m reyes_agent.web
-Binds 0.0.0.0:8765 -- reachable from your phone on the same Wi-Fi at
-http://<this-machine's-LAN-IP>:8765 (see the console output on startup).
+Binds 127.0.0.1:8765. The Phone Companion is reached remotely only through
+the owner-configured Cloudflare Tunnel and Cloudflare Access hostname.
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (Cookie, Depends, FastAPI, File, HTTPException, Request,
+                     UploadFile, WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -51,6 +52,17 @@ async def _no_cache(request, call_next):
         pass
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
+    # Phone endpoints are intended to be reachable only through Cloudflare
+    # Access. These headers also make the browser surface safe when it is
+    # opened directly on loopback during desktop pairing.
+    if request.url.path.startswith(("/phone", "/pair", "/api/phone")):
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self'; base-uri 'none'"
+        )
     return response
 
 
@@ -89,25 +101,13 @@ def _boot_core() -> None:
 
 
 def _boot_background_services() -> None:
-    """Stage nonessential polling/maintenance only after the panel is live."""
-    try:
-        from reyes_agent import (
-            activity_monitor, email_watcher, heartbeat, notification_listener,
-            proactive, resource_manager,
-        )
+    """Mark optional pollers ready without starting them during desktop boot.
 
-        # Do not issue an automatic model/provider request after launch.  It
-        # competes with first-use work and is not needed to render or operate
-        # the dashboard; the provider loads only for a real user request.
-        heartbeat.start_background()
-        notification_listener.start_background()
-        activity_monitor.start_background()
-        email_watcher.start_background()
-        proactive.start_background()
-        resource_manager.start_background()
-        _set_boot_phase("ready")
-    except Exception as exc:  # noqa: BLE001
-        _set_boot_phase("services_degraded", exc)
+    Notification, activity, e-mail, proactive and resource sweeps stay
+    available to their explicit feature entry points, but do not occupy
+    workers or wake the WebView while ZENO is idle.
+    """
+    _set_boot_phase("ready")
 
 
 def _boot_executive_runtime() -> None:
@@ -147,6 +147,13 @@ async def _on_startup() -> None:
     kernel.register_service("core-runtime", stage=STAGE_CORE, start=_boot_core)
     kernel.register_service("executive-runtime", stage=STAGE_CORE, start=_boot_executive_runtime)
     kernel.register_service("core-services", stage=STAGE_CORE, start=_boot_background_services)
+    # The connector has no credentials in this process. It starts only when
+    # the owner supplied a named-tunnel configuration, and remains bounded
+    # under the kernel's lifecycle/shutdown authority.
+    from reyes_agent.cloudflare_tunnel import get_cloudflare_tunnel
+    tunnel = get_cloudflare_tunnel()
+    kernel.register_service("phone-cloudflare-tunnel", stage=STAGE_CORE,
+                            start=tunnel.start, stop=tunnel.stop)
     kernel.register_service(
         "browser-runtime", stage=STAGE_LAZY,
         start=lambda: __import__("reyes_agent.browser_runtime", fromlist=["get_browser_runtime"]).get_browser_runtime(),
@@ -750,6 +757,15 @@ class FreezeReport(BaseModel):
     details: dict[str, Any] = {}
 
 
+class FrontendAuditReport(BaseModel):
+    avg_frame_ms: float = 0.0
+    worst_frame_ms: float = 0.0
+    heartbeat_delay_ms: float = 0.0
+    messages_per_second: float = 0.0
+    active_animation_loops: int = 0
+    active_timers: int = 0
+
+
 @app.get("/api/performance")
 def performance_snapshot() -> dict[str, Any]:
     """Measured process/runtime metrics for the developer performance panel."""
@@ -767,6 +783,15 @@ def performance_freeze(report: FreezeReport) -> dict[str, Any]:
         source="renderer", details={"fps": report.fps, **report.details},
     )
     return {"recorded": record is not None}
+
+
+@app.post("/api/performance/frontend")
+def performance_frontend(report: FrontendAuditReport) -> dict[str, bool]:
+    """Receive opt-in WebView audit telemetry; never enables a render loop."""
+    from reyes_agent.performance_monitor import record_frontend_audit
+
+    record_frontend_audit(report.model_dump())
+    return {"recorded": True}
 
 
 @app.get("/api/session")
@@ -1040,104 +1065,189 @@ def _action_dict(action: confirmation.PendingAction) -> dict[str, Any]:
     }
 
 
-# --- Phone Companion ---------------------------------------------------
-# A mobile-shaped page on this SAME server (reusing /api/chat/stream,
-# /api/tts, /api/notification-events, /api/pending as-is -- they already
-# work from any device on the LAN, phone included) rather than a separate
-# native app. Conversation sync is free: phone and desktop share the same
-# `_history` list already. The one genuinely new surface is pairing + file
-# transfer, both below. Scope note, stated plainly rather than silently
-# glossed over: the pairing token gates the /phone entry point and the new
-# file-transfer endpoints only -- the underlying /api/* endpoints have no
-# auth today on desktop either (this app has always assumed "reachable
-# only means someone on your own Wi-Fi"), so this raises the bar at the
-# phone's front door without claiming a LAN-wide auth system that doesn't
-# exist.
-def _check_phone_token(token: str) -> None:
-    import secrets
+# --- Phone Companion: dedicated authenticated remote surface ------------
+# The former LAN pairing token and file APIs intentionally do not survive
+# this replacement: a phone must never be able to call desktop /api routes.
+_PHONE_SCOPES = {"status", "talk", "missions", "agents", "saved_routines"}
 
-    if not token or not secrets.compare_digest(token, config.PHONE_PAIR_TOKEN):
-        raise HTTPException(403, "Invalid or missing pairing token.")
+class PhonePairRequest(BaseModel):
+    token: str
+    name: str
 
+class PhoneCredentialRequest(BaseModel):
+    credential: dict[str, Any]
+    challenge: str
+
+class PhoneLoginRequest(BaseModel):
+    device_id: str
+
+class PhoneCommandRequest(BaseModel):
+    command_id: str
+    nonce: str
+    timestamp: float
+    message: str
+
+def _phone_origin(request: Request) -> tuple[str, str]:
+    """Return the externally-visible HTTPS origin/RP ID.
+
+    Cloudflare Access terminates TLS, so it supplies X-Forwarded-Host and
+    X-Forwarded-Proto. Direct loopback is useful only for the desktop admin
+    panel and cannot perform WebAuthn registration.
+    """
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    host = host.split(":", 1)[0].lower()
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme).lower()
+    if proto != "https" or not host or host in {"127.0.0.1", "localhost"}:
+        raise HTTPException(503, "Secure Phone Companion hostname is not configured.")
+    configured = os.environ.get("ZENO_PHONE_PUBLIC_HOST", "").strip().lower()
+    if configured and host != configured:
+        raise HTTPException(403, "Unexpected Phone Companion host.")
+    return f"https://{host}", host
+
+def _loopback(request: Request) -> None:
+    if not request.client or request.client.host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(403, "Desktop-only endpoint.")
+
+def _phone_session(request: Request, zeno_phone_session: str | None = Cookie(default=None)):
+    from reyes_agent.phone_security import get_phone_security
+    try:
+        return get_phone_security().session(zeno_phone_session or "", request.headers.get("x-zeno-csrf", ""),
+                                            request.method not in {"GET", "HEAD"})
+    except PermissionError as exc:
+        raise HTTPException(401, str(exc)) from exc
 
 @app.get("/phone")
+@app.get("/pair")
 def phone_page() -> FileResponse:
     return FileResponse(_STATIC_DIR / "phone.html")
 
+@app.post("/api/phone/admin/pairing")
+def phone_create_pairing(request: Request) -> dict[str, Any]:
+    _loopback(request)
+    from reyes_agent.phone_security import get_phone_security
+    pair = get_phone_security().create_pair()
+    host = os.environ.get("ZENO_PHONE_PUBLIC_HOST", "").strip()
+    if not host:
+        raise HTTPException(503, "Set ZENO_PHONE_PUBLIC_HOST after configuring Cloudflare Tunnel and Access.")
+    pair["url"] = f"https://{host}/pair?token={pair.pop('token')}"
+    pair["manual_url"] = f"https://{host}/pair?code={pair['manual_code']}"
+    import base64
+    from io import BytesIO
+    import qrcode
+    image = qrcode.make(pair["url"])
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    pair["qr_png"] = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    return pair
 
-class PhoneVerifyRequest(BaseModel):
-    token: str
+@app.get("/api/phone/admin/devices")
+def phone_devices(request: Request) -> list[dict[str, Any]]:
+    _loopback(request)
+    from reyes_agent.phone_security import get_phone_security
+    return get_phone_security().devices()
 
-
-@app.post("/api/phone/verify")
-def phone_verify(req: PhoneVerifyRequest) -> dict[str, Any]:
-    import secrets
-
-    ok = bool(req.token) and secrets.compare_digest(req.token, config.PHONE_PAIR_TOKEN)
-    return {"ok": ok}
-
-
-@app.get("/api/phone/pair-info")
-def phone_pair_info() -> dict[str, Any]:
-    """For the DESKTOP settings panel to display -- the phone reads this
-    from its own trusted operator, not over the network unauthenticated."""
-    return {"lan_url": f"http://{_lan_ip()}:8765/phone", "token": config.PHONE_PAIR_TOKEN}
-
-
-_PHONE_TRANSFER_DIR = config.VAULT_PATH / "00-Inbox"
-
-
-@app.get("/api/phone/files")
-def phone_list_files(token: str) -> list[dict[str, Any]]:
-    _check_phone_token(token)
-    _PHONE_TRANSFER_DIR.mkdir(parents=True, exist_ok=True)
-    out = []
-    for base in (_PHONE_TRANSFER_DIR, config.VAULT_PATH / "02-Projects"):
-        if not base.is_dir():
-            continue
-        for p in sorted(base.rglob("*")):
-            if p.is_file():
-                out.append({"path": str(p.relative_to(config.VAULT_PATH)), "size": p.stat().st_size})
-    return out
-
-
-@app.get("/api/phone/download")
-def phone_download(token: str, path: str) -> FileResponse:
-    _check_phone_token(token)
-    target = (config.VAULT_PATH / path).resolve()
-    if config.VAULT_PATH.resolve() not in target.parents or not target.is_file():
-        raise HTTPException(404, "No such file.")
-    return FileResponse(target, filename=target.name)
-
-
-@app.post("/api/phone/upload")
-def phone_upload(token: str, file: UploadFile = File(...)) -> dict[str, Any]:
-    """Phone -> desktop file transfer. Lands in the vault's own Inbox --
-    the same place a human dropping a file in Obsidian would put it, so it
-    shows up for search_notes/list_notes/RAG like anything else, not in a
-    side channel only the phone endpoint knows about."""
-    _check_phone_token(token)
-    _PHONE_TRANSFER_DIR.mkdir(parents=True, exist_ok=True)
-    safe_name = Path(file.filename or "upload").name  # strip any path components
-    target = _PHONE_TRANSFER_DIR / safe_name
-    temporary = target.with_name(target.name + ".uploading")
-    maximum = 100 * 1024 * 1024
-    total = 0
+@app.post("/api/phone/admin/devices/{device_id}/{state}")
+def phone_set_device(device_id: str, state: str, request: Request) -> dict[str, bool]:
+    _loopback(request)
+    from reyes_agent.phone_security import get_phone_security
     try:
-        with temporary.open("wb") as out:
-            while chunk := file.file.read(1024 * 1024):
-                total += len(chunk)
-                if total > maximum:
-                    raise HTTPException(413, "Upload is larger than 100 MiB.")
-                out.write(chunk)
-        temporary.replace(target)
-    except Exception:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
-    return {"ok": True, "saved_as": str(target.relative_to(config.VAULT_PATH)), "size": total}
+        get_phone_security().set_device(device_id, state=state.upper())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+@app.post("/api/phone/pair/options")
+def phone_pair_options(req: PhonePairRequest, request: Request) -> dict[str, Any]:
+    from reyes_agent.phone_security import get_phone_security
+    origin, rp_id = _phone_origin(request)
+    try:
+        return get_phone_security().registration_options(req.token, req.name, rp_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+
+@app.post("/api/phone/pair/complete")
+def phone_pair_complete(req: PhoneCredentialRequest, request: Request) -> dict[str, Any]:
+    from reyes_agent.phone_security import get_phone_security
+    origin, rp_id = _phone_origin(request)
+    try:
+        device_id = get_phone_security().finish_registration(req.credential, req.challenge, origin, rp_id)
+    except Exception as exc:
+        raise HTTPException(403, f"Secure device verification failed: {exc}") from exc
+    return {"state": "PENDING_APPROVAL", "device_id": device_id}
+
+@app.post("/api/phone/login/options")
+def phone_login_options(req: PhoneLoginRequest, request: Request) -> dict[str, Any]:
+    from reyes_agent.phone_security import get_phone_security
+    _, rp_id = _phone_origin(request)
+    try:
+        return get_phone_security().authentication_options(req.device_id, rp_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+
+@app.post("/api/phone/login/complete")
+def phone_login_complete(req: PhoneCredentialRequest, request: Request) -> Response:
+    from reyes_agent.phone_security import get_phone_security
+    origin, rp_id = _phone_origin(request)
+    try:
+        login = get_phone_security().finish_authentication(req.credential, req.challenge, origin, rp_id)
+    except Exception as exc:
+        raise HTTPException(403, f"Secure device verification failed: {exc}") from exc
+    response = Response(json.dumps({"device_id": login["device_id"], "csrf": login["csrf"]}), media_type="application/json")
+    response.set_cookie("zeno_phone_session", login["session"], httponly=True, secure=True, samesite="strict", max_age=1800, path="/")
+    return response
+
+@app.get("/api/phone/status")
+def phone_status(request: Request, session=Depends(_phone_session)) -> dict[str, Any]:
+    return {"desktop": "ready", "device_id": session["device_id"], "device": session["name"],
+            "scopes": json.loads(session["scopes"]), "runtime": _boot_state["phase"]}
+
+@app.post("/api/phone/command")
+def phone_command(req: PhoneCommandRequest, request: Request, session=Depends(_phone_session)) -> dict[str, Any]:
+    if "talk" not in json.loads(session["scopes"]):
+        raise HTTPException(403, "This phone is not permitted to talk to ZENO.")
+    if not req.command_id or not req.nonce or abs(time.time() - req.timestamp) > 60 or len(req.message) > 4000:
+        raise HTTPException(400, "Invalid, expired, or oversized command.")
+    from reyes_agent.phone_security import get_phone_security
+    if not get_phone_security().claim_command(session["device_id"], req.command_id, req.nonce):
+        raise HTTPException(409, "Duplicate or replayed command.")
+    from reyes_agent import event_bus
+    event_bus.publish("phone.command_received", {"command_id": req.command_id, "device_id": session["device_id"]}, source="phone")
+    # Reuse the established bounded worker-backed conversation endpoint; the
+    # mobile client receives a compact final reply rather than desktop SSE.
+    result = chat(ChatRequest(message=req.message.strip()))
+    return {"command_id": req.command_id, "response": result}
+
+@app.websocket("/ws/phone")
+async def phone_events(websocket: WebSocket) -> None:
+    """Small authenticated event feed; revocation is checked at every beat."""
+    from reyes_agent import event_bus
+    from reyes_agent.phone_security import get_phone_security
+    token = websocket.cookies.get("zeno_phone_session", "")
+    try:
+        session = get_phone_security().session(token)
+    except PermissionError:
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    subscription = event_bus.subscribe()
+    try:
+        await websocket.send_json({"type": "connected", "device_id": session["device_id"]})
+        import asyncio
+        while True:
+            try:
+                # A short timeout creates a bounded revocation/health check and
+                # avoids any timer or polling loop on the desktop UI thread.
+                event = await asyncio.wait_for(asyncio.to_thread(subscription.get, True, 10.0), timeout=11.0)
+                if event.type.startswith(("mission.", "agent.", "task.", "phone.")):
+                    await websocket.send_json({"type": event.type, "payload": event.payload})
+            except (queue.Empty, TimeoutError):
+                get_phone_security().session(token)  # locked/revoked closes now
+                await websocket.send_json({"type": "heartbeat"})
+    except (PermissionError, WebSocketDisconnect):
+        try: await websocket.close(code=4403)
+        except Exception: pass
+    finally:
+        event_bus.unsubscribe(subscription)
 
 
 def _lan_ip() -> str:
@@ -1156,8 +1266,8 @@ def main() -> None:
 
     print(f"{config.ASSISTANT_NAME} panel:")
     print(f"  this machine -> http://127.0.0.1:8765")
-    print(f"  phone / LAN  -> http://{_lan_ip()}:8765")
-    uvicorn.run(app, host="0.0.0.0", port=8765, log_level="warning")
+    print("  network access -> disabled (loopback only; Cloudflare Tunnel is required for Phone Companion)")
+    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
 
 
 if __name__ == "__main__":

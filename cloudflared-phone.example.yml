@@ -1,0 +1,12 @@
+# Copy outside the repository to %LOCALAPPDATA%\ZENO\Cloudflare\phone.yml,
+# then use its absolute path for ZENO_CLOUDFLARE_TUNNEL_CONFIG. Credentials
+# and tunnel JSON files stay in Cloudflare's protected local directory.
+tunnel: REPLACE_WITH_EXISTING_NAMED_TUNNEL_UUID
+credentials-file: C:\\Users\\YOUR_WINDOWS_USER\\AppData\\Local\\ZENO\\Cloudflare\\REPLACE.json
+ingress:
+  # This is intentionally the only public route group. Cloudflare Access
+  # must protect this hostname with an owner-only policy before ZENO starts it.
+  - hostname: zeno.example.com
+    path: ^/(phone|pair|api/phone/.*|ws/phone)$
+    service: http://127.0.0.1:8765
+  - service: http_status:404

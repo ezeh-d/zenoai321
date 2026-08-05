@@ -10,6 +10,10 @@ python-dotenv>=1.0
 requests>=2.31
 psutil>=5.9
 
+# --- Phone Companion security (passkeys and desktop QR pairing) ---
+webauthn>=3.0
+qrcode[pil]>=8.2
+
 # --- GUI HUD (python main.py) ---
 PySide6>=6.6
 

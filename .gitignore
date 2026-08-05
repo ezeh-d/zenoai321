@@ -64,6 +64,7 @@ chrome_profile/
 # Local databases and indexes that should not be committed
 *.sqlite-journal
 *.db-journal
+*.sqlite
 
 # Local model binaries
 models/audio/*.onnx

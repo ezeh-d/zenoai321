@@ -73,6 +73,14 @@ def test_desktop_has_single_instance_guard_before_window_creation() -> None:
     assert text.index("instance.acquire()") < text.index("create_window(")
 
 
+def test_desktop_uses_a_persistent_non_private_webview_profile() -> None:
+    source = (ROOT / "reyes_agent" / "desktop_app.py").read_text(encoding="utf-8")
+    assert '"LOCALAPPDATA"' in source
+    assert '"ZENO" / "WebView2" / "UserData"' in source
+    assert "private_mode=False" in source
+    assert "storage_path=str(_WEBVIEW_STORAGE)" in source
+
+
 def test_web_lifecycle_delegates_to_kernel_and_has_no_unreachable_shutdown() -> None:
     source = (ROOT / "reyes_agent" / "web.py").read_text(encoding="utf-8")
     tree = ast.parse(source)

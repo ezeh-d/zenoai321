@@ -1,0 +1,255 @@
+"""Security core for ZENO's browser-based Phone Companion.
+
+This module deliberately keeps the phone surface separate from the desktop
+dashboard API.  It stores only public WebAuthn credentials, hashes all
+bearer-like values at rest and makes device revocation invalidate sessions
+immediately.  Cloudflare Access remains the outer, network-side gate.
+"""
+from __future__ import annotations
+
+import base64
+from contextlib import contextmanager
+import hashlib
+import json
+import os
+import secrets
+import sqlite3
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+from webauthn import (generate_authentication_options, generate_registration_options,
+                      verify_authentication_response, verify_registration_response)
+from webauthn.helpers import base64url_to_bytes, options_to_json
+from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
+                                      PublicKeyCredentialDescriptor,
+                                      ResidentKeyRequirement, UserVerificationRequirement)
+
+from reyes_agent import config
+
+PENDING_APPROVAL = "PENDING_APPROVAL"
+TRUSTED, LOCKED, REVOKED, EXPIRED = "TRUSTED", "LOCKED", "REVOKED", "EXPIRED"
+DEFAULT_SCOPES = {"status", "talk", "missions", "agents", "saved_routines"}
+PAIR_TTL_S, CHALLENGE_TTL_S, SESSION_TTL_S = 300, 300, 1800
+_DB = Path(os.environ.get("LOCALAPPDATA", str(config.PROJECT_ROOT))) / "ZENO" / "phone" / "devices.sqlite"
+
+
+def _hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+class PhoneSecurity:
+    """Durable pairing, device and session registry; one instance per process."""
+    def __init__(self, db_path: Path = _DB) -> None:
+        self.db_path = db_path
+        self._lock = threading.RLock()
+        self._init_db()
+
+    def _conn(self) -> sqlite3.Connection:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.db_path, timeout=5)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    @contextmanager
+    def _connection(self):
+        """Commit and close every SQLite handle (essential on Windows)."""
+        conn = self._conn()
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _init_db(self) -> None:
+        with self._connection() as conn:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS pairs(token_hash TEXT PRIMARY KEY, manual_hash TEXT UNIQUE,
+              expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, cancelled INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS devices(device_id TEXT PRIMARY KEY, name TEXT NOT NULL,
+              credential_id TEXT UNIQUE NOT NULL, public_key BLOB NOT NULL, sign_count INTEGER NOT NULL,
+              state TEXT NOT NULL, scopes TEXT NOT NULL, created REAL NOT NULL, last_auth REAL, last_activity REAL,
+              revoked_at REAL);
+            CREATE TABLE IF NOT EXISTS challenges(challenge_hash TEXT PRIMARY KEY, challenge TEXT NOT NULL,
+              purpose TEXT NOT NULL, subject TEXT NOT NULL, expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, device_id TEXT NOT NULL,
+              csrf_hash TEXT NOT NULL, expires REAL NOT NULL, last_activity REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS commands(device_id TEXT NOT NULL, command_id TEXT NOT NULL,
+              nonce_hash TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(device_id,command_id), UNIQUE(device_id,nonce_hash));
+            CREATE TABLE IF NOT EXISTS audit(ts REAL NOT NULL, event TEXT NOT NULL, device_id TEXT, detail TEXT NOT NULL);
+            """)
+
+    def _audit(self, event: str, device_id: str | None = None, **detail: Any) -> None:
+        with self._connection() as conn:
+            conn.execute("INSERT INTO audit VALUES(?,?,?,?)", (time.time(), event, device_id, json.dumps(detail)))
+        try:
+            from reyes_agent import event_bus
+            event_bus.publish("phone." + event, {"device_id": device_id, **detail}, source="phone-security")
+        except Exception:
+            pass
+
+    def create_pair(self) -> dict[str, Any]:
+        token, manual = secrets.token_urlsafe(32), f"{secrets.randbelow(10**8):08d}"
+        expires = time.time() + PAIR_TTL_S
+        with self._connection() as conn:
+            conn.execute("UPDATE pairs SET cancelled=1 WHERE consumed=0")
+            conn.execute("INSERT INTO pairs(token_hash,manual_hash,expires) VALUES(?,?,?)",
+                         (_hash(token), _hash(manual), expires))
+        self._audit("pair_created", expires=expires)
+        return {"token": token, "manual_code": manual, "expires_at": expires}
+
+    def cancel_pair(self, token: str) -> None:
+        with self._connection() as conn:
+            conn.execute("UPDATE pairs SET cancelled=1 WHERE token_hash=?", (_hash(token),))
+
+    def _valid_pair(self, token: str) -> bool:
+        return self._pair_hash(token) is not None
+
+    def _pair_hash(self, token_or_manual_code: str) -> str | None:
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM pairs WHERE token_hash=? OR manual_hash=?",
+                               (_hash(token_or_manual_code), _hash(token_or_manual_code))).fetchone()
+        if not row or row["consumed"] or row["cancelled"] or row["expires"] <= time.time():
+            return None
+        return row["token_hash"]
+
+    def registration_options(self, pair_token: str, name: str, rp_id: str) -> dict[str, Any]:
+        pair_hash = self._pair_hash(pair_token)
+        if pair_hash is None:
+            raise PermissionError("Pairing link is invalid, expired, or already used.")
+        challenge = secrets.token_bytes(32)
+        subject = json.dumps({"pair": pair_hash, "name": name[:64]})
+        self._save_challenge(challenge, "registration", subject)
+        options = generate_registration_options(
+            rp_id=rp_id, rp_name=config.ASSISTANT_NAME, user_name="zeno-phone-" + _hash(pair_token)[:12],
+            user_id=secrets.token_bytes(32), user_display_name=name[:64], challenge=challenge,
+            authenticator_selection=AuthenticatorSelectionCriteria(
+                resident_key=ResidentKeyRequirement.PREFERRED,
+                user_verification=UserVerificationRequirement.REQUIRED),
+        )
+        return json.loads(options_to_json(options))
+
+    def _save_challenge(self, challenge: bytes, purpose: str, subject: str) -> None:
+        with self._connection() as conn:
+            conn.execute("INSERT INTO challenges VALUES(?,?,?,?,?,0)",
+                         (_hash(_b64(challenge)), _b64(challenge), purpose, subject, time.time() + CHALLENGE_TTL_S))
+
+    def _take_challenge(self, challenge: str, purpose: str) -> sqlite3.Row:
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM challenges WHERE challenge_hash=?", (_hash(challenge),)).fetchone()
+            if not row or row["purpose"] != purpose or row["used"] or row["expires"] < time.time():
+                raise PermissionError("Verification challenge expired or was already used.")
+            conn.execute("UPDATE challenges SET used=1 WHERE challenge_hash=?", (row["challenge_hash"],))
+        return row
+
+    def finish_registration(self, credential: dict[str, Any], challenge: str, origin: str, rp_id: str) -> str:
+        row = self._take_challenge(challenge, "registration")
+        subject = json.loads(row["subject"])
+        if not self._valid_pair_hash(subject["pair"]):
+            raise PermissionError("Pairing link is no longer valid.")
+        verified = verify_registration_response(credential=credential, expected_challenge=base64url_to_bytes(challenge),
+            expected_rp_id=rp_id, expected_origin=origin, require_user_verification=True)
+        device_id = str(uuid.uuid4())
+        with self._connection() as conn:
+            conn.execute("UPDATE pairs SET consumed=1 WHERE token_hash=?", (subject["pair"],))
+            conn.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (
+                device_id, subject["name"], _b64(verified.credential_id), verified.credential_public_key,
+                verified.sign_count, PENDING_APPROVAL, json.dumps(sorted(DEFAULT_SCOPES)), time.time(), None, None, None))
+        self._audit("device_pending", device_id, name=subject["name"])
+        return device_id
+
+    def _valid_pair_hash(self, token_hash: str) -> bool:
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM pairs WHERE token_hash=?", (token_hash,)).fetchone()
+        return bool(row and not row["cancelled"] and row["expires"] > time.time())
+
+    def authentication_options(self, device_id: str, rp_id: str) -> dict[str, Any]:
+        device = self._device(device_id, trusted=True)
+        challenge = secrets.token_bytes(32)
+        self._save_challenge(challenge, "authentication", device_id)
+        options = generate_authentication_options(rp_id=rp_id, challenge=challenge,
+            allow_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(device["credential_id"]))],
+            user_verification=UserVerificationRequirement.REQUIRED)
+        return json.loads(options_to_json(options))
+
+    def finish_authentication(self, credential: dict[str, Any], challenge: str, origin: str, rp_id: str) -> dict[str, str]:
+        challenge_row = self._take_challenge(challenge, "authentication")
+        device = self._device(challenge_row["subject"], trusted=True)
+        verified = verify_authentication_response(credential=credential, expected_challenge=base64url_to_bytes(challenge),
+            expected_rp_id=rp_id, expected_origin=origin, credential_public_key=device["public_key"],
+            credential_current_sign_count=device["sign_count"], require_user_verification=True)
+        token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+        now = time.time()
+        with self._connection() as conn:
+            conn.execute("UPDATE devices SET sign_count=?,last_auth=?,last_activity=? WHERE device_id=?",
+                         (verified.new_sign_count, now, now, device["device_id"]))
+            conn.execute("INSERT INTO sessions VALUES(?,?,?,?,?)", (_hash(token), device["device_id"], _hash(csrf), now + SESSION_TTL_S, now))
+        self._audit("authenticated", device["device_id"])
+        return {"session": token, "csrf": csrf, "device_id": device["device_id"]}
+
+    def _device(self, device_id: str, trusted: bool = False) -> sqlite3.Row:
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
+        if not row or (trusted and row["state"] != TRUSTED):
+            raise PermissionError("This device is not trusted.")
+        return row
+
+    def session(self, token: str, csrf: str = "", require_csrf: bool = False) -> sqlite3.Row:
+        with self._connection() as conn:
+            row = conn.execute("SELECT s.*,d.state,d.name,d.scopes FROM sessions s JOIN devices d ON d.device_id=s.device_id WHERE s.token_hash=?", (_hash(token),)).fetchone()
+            if not row or row["expires"] < time.time() or row["state"] != TRUSTED:
+                raise PermissionError("Phone session expired, locked, or revoked.")
+            if require_csrf and (not csrf or not secrets.compare_digest(row["csrf_hash"], _hash(csrf))):
+                raise PermissionError("Invalid request protection token.")
+            conn.execute("UPDATE sessions SET last_activity=? WHERE token_hash=?", (time.time(), _hash(token)))
+            conn.execute("UPDATE devices SET last_activity=? WHERE device_id=?", (time.time(), row["device_id"]))
+        return row
+
+    def devices(self) -> list[dict[str, Any]]:
+        with self._connection() as conn:
+            rows = conn.execute("SELECT device_id,name,state,scopes,created,last_auth,last_activity,revoked_at FROM devices ORDER BY created DESC").fetchall()
+        return [dict(r) | {"scopes": json.loads(r["scopes"])} for r in rows]
+
+    def set_device(self, device_id: str, state: str | None = None, scopes: set[str] | None = None) -> None:
+        if state and state not in {TRUSTED, LOCKED, REVOKED, EXPIRED}:
+            raise ValueError("Invalid device state")
+        with self._connection() as conn:
+            if state:
+                conn.execute("UPDATE devices SET state=?,revoked_at=? WHERE device_id=?", (state, time.time() if state == REVOKED else None, device_id))
+            if scopes is not None:
+                conn.execute("UPDATE devices SET scopes=? WHERE device_id=?", (json.dumps(sorted(scopes)), device_id))
+            if state in {LOCKED, REVOKED}:
+                conn.execute("DELETE FROM sessions WHERE device_id=?", (device_id,))
+        self._audit("device_" + (state or "scopes_changed").lower(), device_id)
+
+    def end_sessions(self, device_id: str | None = None) -> None:
+        with self._connection() as conn:
+            conn.execute("DELETE FROM sessions" + (" WHERE device_id=?" if device_id else ""), ((device_id,) if device_id else ()))
+        self._audit("sessions_ended", device_id)
+
+    def claim_command(self, device_id: str, command_id: str, nonce: str) -> bool:
+        """Atomically reject command-id or nonce replay for the device."""
+        try:
+            with self._connection() as conn:
+                conn.execute("DELETE FROM commands WHERE created<?", (time.time() - 3600,))
+                conn.execute("INSERT INTO commands VALUES(?,?,?,?)", (device_id, command_id, _hash(nonce), time.time()))
+            return True
+        except sqlite3.IntegrityError:
+            self._audit("command_replayed", device_id, command_id=command_id)
+            return False
+
+
+_security: PhoneSecurity | None = None
+_security_lock = threading.Lock()
+def get_phone_security() -> PhoneSecurity:
+    global _security
+    with _security_lock:
+        if _security is None:
+            _security = PhoneSecurity()
+        return _security

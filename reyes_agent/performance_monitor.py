@@ -30,6 +30,7 @@ _lock = threading.Lock()
 _latencies: dict[str, deque[tuple[float, float]]] = defaultdict(lambda: deque(maxlen=_MAX_SAMPLES))
 _memory_samples: deque[tuple[float, int]] = deque(maxlen=_MAX_SAMPLES)
 _freezes: deque[dict[str, Any]] = deque(maxlen=100)
+_frontend_audits: deque[dict[str, Any]] = deque(maxlen=120)
 _last_freeze_at: dict[str, float] = {}
 
 
@@ -96,6 +97,7 @@ def snapshot() -> dict[str, Any]:
     with _lock:
         _memory_samples.append((now, rss))
         recent_freezes = list(_freezes)[-10:]
+        recent_frontend_audits = list(_frontend_audits)[-12:]
 
     workers: dict[str, Any] = {}
     browser_workers: dict[str, Any] = {}
@@ -163,7 +165,15 @@ def snapshot() -> dict[str, Any]:
         "memory_trend": _memory_trend(),
         "freeze_count": len(recent_freezes),
         "recent_freezes": recent_freezes,
+        "frontend_audits": recent_frontend_audits,
     }
+
+
+def record_frontend_audit(report: dict[str, Any]) -> None:
+    """Keep bounded renderer measurements from an explicit audit session."""
+    record = {"timestamp": time.time(), **report}
+    with _lock:
+        _frontend_audits.append(record)
 
 
 def record_freeze(
@@ -183,13 +193,20 @@ def record_freeze(
             return None
         _last_freeze_at[source] = now
 
-    frames = sys._current_frames()
+    # Capturing and formatting every Python thread's stack can itself take
+    # hundreds of milliseconds with the agent runtime alive.  This function
+    # is called by the event-loop watchdog, so doing that work here turned a
+    # detected stall into another real stall.  Keep hot-path records cheap;
+    # an explicit diagnostic caller may opt into stack capture.
     stacks: dict[str, list[str]] = {}
-    for thread in threading.enumerate():
-        frame = frames.get(thread.ident)
-        if frame is not None:
-            stacks[thread.name] = traceback.format_stack(frame, limit=20)
-    main_stack = stacks.get("MainThread", [])
+    main_stack: list[str] = []
+    if details and details.get("capture_stacks"):
+        frames = sys._current_frames()
+        for thread in threading.enumerate():
+            frame = frames.get(thread.ident)
+            if frame is not None:
+                stacks[thread.name] = traceback.format_stack(frame, limit=20)
+        main_stack = stacks.get("MainThread", [])
     record = {
         "timestamp": now,
         "timestamp_human": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),

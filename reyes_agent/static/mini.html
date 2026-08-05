@@ -4,28 +4,38 @@
 <style>
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#dcecff;font:11px system-ui,sans-serif;cursor:grab;user-select:none}
   body.dragging{cursor:grabbing} #orb-simple{width:130px!important;height:130px!important} #orb-canvas{position:fixed;inset:0;width:100%;height:100%}
-  #stage{position:fixed;left:8px;right:8px;bottom:8px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#b7d7ff;text-shadow:0 1px 8px #000;pointer-events:none}
-  #open{position:fixed;right:6px;top:6px;border:0;border-radius:999px;background:#102342;color:#dcecff;padding:4px 7px;cursor:pointer;font-size:10px}
-</style></head><body><canvas id="orb-canvas"></canvas><button id="open" title="Open ZENO">Open</button><div id="stage">ZENO · idle</div>
+</style></head><body><canvas id="orb-canvas"></canvas>
 <script type="module">
 import { initOrb } from '/static/orb.js';
 const orb=initOrb(document.getElementById('orb-canvas'));
-const stage=document.getElementById('stage'); let signature='';
 function api(){return window.pywebview&&window.pywebview.api;}
-document.getElementById('open').onclick=()=>{const a=api();if(a&&a.show_dashboard)a.show_dashboard();else location.href='/';};
+function openDashboard(){const a=api();if(a&&a.show_dashboard)a.show_dashboard();else location.href='/';}
 async function refresh(){
   try{const data=await(await fetch('/api/mini-status')).json(),task=data.task||{},progress=task.progress||{};
     const elapsed=task.run_ms?` · ${Math.floor(task.run_ms/1000)}s`:'';
     const agent=data.agents&&data.agents[0]?` · ${data.agents[0]}`:'';
     const text=task.name?`${task.name} · ${progress.stage||'working'}${elapsed}${agent}`:'ZENO · idle';
-    if(text!==signature){signature=text;stage.textContent=text;orb.setState(task.name?'processing':'idle');}
-  }catch(e){if(signature!=='offline'){signature='offline';stage.textContent='ZENO · offline';orb.setState('error');}}
+    orb.setState(task.name?'processing':'idle');
+  }catch(e){orb.setState('error');}
 }
 refresh();setInterval(()=>{if(!document.hidden)refresh();},2000);
 let dragging=false,moved=false,startX=0,startY=0,winX=0,winY=0;
-document.addEventListener('mousedown',e=>{if(e.target.closest('button'))return;const a=api();if(!a||!a.move_window)return;dragging=true;moved=false;startX=e.screenX;startY=e.screenY;const saved=JSON.parse(localStorage.getItem('zeno_orb_pos')||'null');winX=saved?saved.x:0;winY=saved?saved.y:0;document.body.classList.add('dragging');});
+document.addEventListener('mousedown',e=>{const a=api();if(!a||!a.move_window)return;dragging=true;moved=false;startX=e.screenX;startY=e.screenY;const saved=JSON.parse(localStorage.getItem('zeno_orb_pos')||'null');winX=saved?saved.x:0;winY=saved?saved.y:0;document.body.classList.add('dragging');});
 document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX-startX,dy=e.screenY-startY;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;const a=api();if(a&&a.move_window)a.move_window(winX+dx,winY+dy);});
 document.addEventListener('mouseup',()=>{if(!dragging)return;dragging=false;document.body.classList.remove('dragging');const a=api();if(a&&a.snap_orb)a.snap_orb().then(p=>{if(p&&p.ok)localStorage.setItem('zeno_orb_pos',JSON.stringify({x:p.x,y:p.y}));});});
-document.addEventListener('dblclick',()=>{if(!moved)document.getElementById('open').click();});
+document.addEventListener('click',()=>{if(!moved)openDashboard();});
 window.addEventListener('pywebviewready',()=>{const saved=JSON.parse(localStorage.getItem('zeno_orb_pos')||'null'),a=api();if(saved&&a&&a.restore_orb_position)a.restore_orb_position(saved.x,saved.y);});
+// The compact companion keeps the same wake behavior as the dashboard but
+// does only one thing with it: wake ZENO by opening the full interface.
+// Microphone permission is shared by this local origin, so an earlier grant
+// carries over. A first-ever grant is still controlled by WebView2/Windows.
+const WakeRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+if(WakeRecognition){
+  const wake=new WakeRecognition();wake.continuous=true;wake.interimResults=false;wake.lang='en-US';
+  let shouldListen=true;
+  wake.onresult=e=>{const result=e.results[e.results.length-1];if(result&&result.isFinal&&/\b(?:wake up zeno|hey zeno|zeno)\b/i.test(result[0].transcript))openDashboard();};
+  wake.onend=()=>{if(shouldListen)try{wake.start();}catch(_e){}};
+  wake.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed')shouldListen=false;};
+  try{wake.start();}catch(_e){}
+}
 </script></body></html>
