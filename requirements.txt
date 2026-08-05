@@ -1,0 +1,40 @@
+# ============================================================
+# REYES dependencies.  Easiest install:  python install.py
+# (that handles OS differences and optional groups for you)
+# ============================================================
+
+# --- Core: terminal brain (python run.py) ---
+litellm>=1.40
+pydantic-settings>=2.0
+python-dotenv>=1.0
+requests>=2.31
+psutil>=5.9
+
+# --- GUI HUD (python main.py) ---
+PySide6>=6.6
+
+# --- Voice (listen + speak) ---
+SpeechRecognition>=3.10
+PyAudio>=0.2.14
+pyttsx3>=2.90
+faster-whisper>=1.0
+onnxruntime>=1.17
+soundfile>=0.12
+
+# --- Desktop automation ---
+pyautogui>=0.9.54
+pyperclip>=1.8
+mss>=9.0
+
+# --- Browser automation (also run: playwright install chromium) ---
+playwright>=1.44
+
+# --- Windows-only audio ducking (auto-skipped on macOS/Linux) ---
+pycaw>=20240210 ; sys_platform == "win32"
+comtypes>=1.4 ; sys_platform == "win32"
+
+# --- Optional extras (uncomment or use: python install.py --all) ---
+# openwakeword>=0.6      # low-CPU always-on wake word (recommended)
+# pytesseract            # screen OCR / vision (also install the Tesseract binary)
+# opencv-python          # image locate on screen
+# duckduckgo-search>=6.0 # nicer web search results

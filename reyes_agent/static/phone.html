@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>ZENO — Phone</title>
+<link rel="icon" href="/favicon.ico" />
+<style>
+  :root {
+    --bg: #05060a; --panel: #0e1119; --border: rgba(120,170,255,0.18);
+    --text: #e8ecf6; --text-dim: #90a0c0; --accent: #6ea8ff; --danger: #ff6e6e; --ok: #6effa0;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, system-ui, sans-serif;
+    display: flex; flex-direction: column;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    display: flex; align-items: center; gap: 10px; padding: 14px 16px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    padding-top: calc(14px + env(safe-area-inset-top));
+  }
+  header h1 { font-size: 17px; margin: 0; flex: 1; font-weight: 700; letter-spacing: 0.02em; }
+  #dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+  #dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+
+  #gate {
+    position: fixed; inset: 0; background: var(--bg); z-index: 50;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; padding: 24px;
+  }
+  #gate h2 { margin: 0; font-size: 20px; }
+  #gate p { color: var(--text-dim); text-align: center; margin: 0; font-size: 13.5px; max-width: 320px; }
+  #gate input {
+    width: 100%; max-width: 320px; padding: 14px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); font-size: 16px; text-align: center;
+  }
+  #gate button, .btn {
+    padding: 13px 20px; border-radius: 12px; border: none; background: var(--accent);
+    color: #05060a; font-weight: 700; font-size: 15px; cursor: pointer; width: 100%; max-width: 320px;
+  }
+  #gate .err { color: var(--danger); font-size: 13px; min-height: 16px; }
+
+  nav { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  nav button {
+    flex: 1; padding: 11px 4px; background: transparent; border: none; color: var(--text-dim);
+    font-size: 12.5px; border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+  .tab { display: none; flex: 1; flex-direction: column; padding: 12px 14px; overflow-y: auto; }
+  .tab.active { display: flex; }
+
+  #chat-log { flex: 1; display: flex; flex-direction: column; gap: 10px; padding-bottom: 8px; }
+  .bubble { max-width: 86%; padding: 10px 13px; border-radius: 14px; font-size: 14.5px; white-space: pre-wrap; }
+  .bubble.user { align-self: flex-end; background: var(--accent); color: #05060a; }
+  .bubble.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
+  .bubble.tool { align-self: flex-start; color: var(--text-dim); font-size: 12px; background: transparent; padding: 2px 4px; }
+  .bubble.stage { align-self: center; color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+  #composer {
+    display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); flex-shrink: 0;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  #composer input {
+    flex: 1; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); font-size: 15px;
+  }
+  #mic, #send { width: 46px; height: 46px; border-radius: 50%; border: none; background: var(--panel);
+    border: 1px solid var(--border); color: var(--text); font-size: 18px; flex-shrink: 0; }
+  #mic.listening { background: var(--danger); color: #fff; }
+  #send { background: var(--accent); color: #05060a; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .card .meta { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; word-break: break-word; }
+  .row { display: flex; gap: 8px; }
+  .row button { flex: 1; padding: 9px; border-radius: 9px; border: none; font-weight: 600; font-size: 13.5px; }
+  .approve { background: var(--ok); color: #05060a; }
+  .deny { background: var(--danger); color: #05060a; }
+  .empty { color: var(--text-dim); text-align: center; padding: 30px 10px; font-size: 13.5px; }
+
+  #upload-row { display: flex; gap: 8px; margin-bottom: 14px; }
+  #upload-row input[type=file] { flex: 1; font-size: 12px; color: var(--text-dim); }
+  .file-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .file-row a { color: var(--accent); text-decoration: none; font-size: 13px; flex-shrink: 0; }
+
+  #toast {
+    position: fixed; top: calc(10px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%) translateY(-140%);
+    background: var(--panel); border: 1px solid var(--accent); color: var(--text); padding: 10px 16px;
+    border-radius: 12px; font-size: 13.5px; z-index: 60; transition: transform 0.3s ease; max-width: 90vw;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h2>Pair with ZENO</h2>
+  <p>Enter the pairing code shown in ZENO's desktop Settings panel to connect this phone.</p>
+  <input id="gate-input" type="text" placeholder="Pairing code" autocomplete="off" autocapitalize="off" />
+  <button id="gate-btn">Pair</button>
+  <div class="err" id="gate-err"></div>
+</div>
+
+<div id="toast"></div>
+
+<header>
+  <h1>ZENO</h1>
+  <span id="dot"></span>
+</header>
+
+<nav>
+  <button class="tab-btn active" data-tab="chat">Chat</button>
+  <button class="tab-btn" data-tab="approvals">Approvals</button>
+  <button class="tab-btn" data-tab="notices">Notices</button>
+  <button class="tab-btn" data-tab="files">Files</button>
+</nav>
+
+<main>
+  <div class="tab active" id="tab-chat">
+    <div id="chat-log"></div>
+  </div>
+  <div class="tab" id="tab-approvals"><div id="approvals-list"></div></div>
+  <div class="tab" id="tab-notices"><div id="notices-list"></div></div>
+  <div class="tab" id="tab-files">
+    <div id="upload-row">
+      <input id="upload-input" type="file" />
+      <button class="btn" id="upload-btn" style="width:auto;">Send</button>
+    </div>
+    <div id="files-list"></div>
+  </div>
+</main>
+
+<div id="composer">
+  <button id="mic">&#127908;</button>
+  <input id="input" type="text" placeholder="Talk to ZENO..." autocomplete="off" />
+  <button id="send">&#8593;</button>
+</div>
+
+<script>
+// --- Pairing ---------------------------------------------------------
+// Gates access to this page's UI; the underlying /api/chat, /api/tts,
+// /api/pending, /api/notices, /api/notification-events endpoints have no
+// server-side auth of their own (same as the desktop panel today -- this
+// build has always assumed "reachable only means someone on your own
+// Wi-Fi"). This token specifically protects the phone's own front door
+// and the file-transfer endpoints, which DO check it server-side.
+let PAIR_TOKEN = localStorage.getItem('zeno_phone_token') || '';
+
+const gateEl = document.getElementById('gate');
+const gateInput = document.getElementById('gate-input');
+const gateBtn = document.getElementById('gate-btn');
+const gateErr = document.getElementById('gate-err');
+
+async function tryVerify(token) {
+  try {
+    const res = await fetch('/api/phone/verify', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json();
+    return !!data.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function initGate() {
+  if (PAIR_TOKEN && await tryVerify(PAIR_TOKEN)) {
+    gateEl.style.display = 'none';
+    initApp();
+    return;
+  }
+  gateEl.style.display = 'flex';
+}
+
+gateBtn.addEventListener('click', async () => {
+  const val = gateInput.value.trim();
+  if (!val) return;
+  gateBtn.disabled = true;
+  gateErr.textContent = '';
+  const ok = await tryVerify(val);
+  gateBtn.disabled = false;
+  if (ok) {
+    PAIR_TOKEN = val;
+    localStorage.setItem('zeno_phone_token', val);
+    gateEl.style.display = 'none';
+    initApp();
+  } else {
+    gateErr.textContent = 'Wrong code -- check the ZENO desktop Settings panel.';
+  }
+});
+gateInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') gateBtn.click(); });
+
+// --- Tabs --------------------------------------------------------------
+document.querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'approvals') loadApprovals();
+    if (btn.dataset.tab === 'notices') loadNotices();
+    if (btn.dataset.tab === 'files') loadFiles();
+  });
+});
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+let appInited = false;
+function initApp() {
+  if (appInited) return;
+  appInited = true;
+  document.getElementById('dot').classList.add('on');
+  initNotifications();
+  loadApprovals();
+  loadNotices();
+}
+
+// --- Chat (same /api/chat/stream every other front door uses) ----------
+const chatLog = document.getElementById('chat-log');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+let turnActive = false;
+
+function addBubble(role, text) {
+  const el = document.createElement('div');
+  el.className = 'bubble ' + role;
+  el.textContent = text;
+  chatLog.appendChild(el);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return el;
+}
+
+function friendlyToolLabel(name) {
+  return name === 'delegate' ? 'delegating to a specialist...' : 'using ' + name + '...';
+}
+
+async function runTurn(text) {
+  if (!text || turnActive) return;
+  turnActive = true;
+  inputEl.disabled = true; sendBtn.disabled = true;
+  addBubble('user', text);
+  let assistantEl = null;
+  let fullReply = '';
+  let sawText = false;
+
+  try {
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    });
+    if (!res.ok || !res.body) {
+      addBubble('assistant', 'Could not reach ZENO (HTTP ' + res.status + ').');
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const evt = JSON.parse(line.slice(6));
+        if (evt.type === 'stage') {
+          addBubble('stage', evt.stage);
+        } else if (evt.type === 'tool') {
+          addBubble('tool', friendlyToolLabel(evt.name));
+        } else if (evt.type === 'text') {
+          if (!sawText) { sawText = true; assistantEl = addBubble('assistant', ''); }
+          fullReply += evt.text;
+          assistantEl.textContent = fullReply;
+          chatLog.scrollTop = chatLog.scrollHeight;
+        } else if (evt.type === 'error') {
+          addBubble('assistant', 'Error: ' + evt.message);
+        }
+      }
+    }
+    if (sawText) speak(fullReply);
+  } catch (e) {
+    addBubble('assistant', 'Connection lost: ' + e);
+  } finally {
+    turnActive = false;
+    inputEl.disabled = false; sendBtn.disabled = false;
+  }
+}
+
+async function speak(text) {
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error('tts unavailable');
+    const blob = await res.blob();
+    new Audio(URL.createObjectURL(blob)).play();
+  } catch (e) {
+    if ('speechSynthesis' in window) {
+      speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    }
+  }
+}
+
+sendBtn.addEventListener('click', () => {
+  const text = inputEl.value.trim();
+  inputEl.value = '';
+  runTurn(text);
+});
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBtn.click(); });
+
+// --- Mic (tap-to-talk, single utterance -- deliberately not always-on
+// wake-word listening like the desktop panel; that's a heavier, more
+// battery-hungry pattern that doesn't fit a phone companion well) -------
+const micBtn = document.getElementById('mic');
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const rec = new SR();
+  rec.continuous = false; rec.interimResults = false; rec.lang = 'en-US';
+  let listening = false;
+  rec.onresult = (e) => {
+    const text = e.results[0][0].transcript;
+    runTurn(text);
+  };
+  rec.onend = () => { listening = false; micBtn.classList.remove('listening'); };
+  rec.onerror = () => { listening = false; micBtn.classList.remove('listening'); };
+  micBtn.addEventListener('click', () => {
+    if (listening) { rec.stop(); return; }
+    listening = true;
+    micBtn.classList.add('listening');
+    rec.start();
+  });
+} else {
+  micBtn.disabled = true;
+  micBtn.title = 'Voice input not supported in this browser';
+}
+
+// --- Notifications (same SSE stream the desktop panel listens on) ------
+function initNotifications() {
+  if (!window.EventSource) return;
+  const src = new EventSource('/api/notification-events');
+  src.onmessage = (evt) => {
+    let data;
+    try { data = JSON.parse(evt.data); } catch (e) { return; }
+    if (data.type === 'notification') {
+      toast('New message on ' + (data.app || 'desktop') + ' -- open Chat to reply.');
+    }
+  };
+}
+
+// --- Approvals (Tier 6 gate -- same /api/pending the desktop panel uses) ---
+async function loadApprovals() {
+  const list = document.getElementById('approvals-list');
+  list.innerHTML = '<div class="empty">Loading...</div>';
+  const res = await fetch('/api/pending');
+  const items = (await res.json()).filter((a) => a.status === 'pending');
+  if (!items.length) { list.innerHTML = '<div class="empty">Nothing waiting right now.</div>'; return; }
+  list.innerHTML = '';
+  items.forEach((a) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = a.description;
+    const row = document.createElement('div');
+    row.className = 'row';
+    const yes = document.createElement('button');
+    yes.className = 'approve'; yes.textContent = 'Approve';
+    yes.addEventListener('click', async () => {
+      await fetch('/api/pending/' + a.id + '/approve', { method: 'POST' });
+      loadApprovals();
+    });
+    const no = document.createElement('button');
+    no.className = 'deny'; no.textContent = 'Deny';
+    no.addEventListener('click', async () => {
+      await fetch('/api/pending/' + a.id + '/deny', { method: 'POST' });
+      loadApprovals();
+    });
+    row.appendChild(yes); row.appendChild(no);
+    card.appendChild(meta); card.appendChild(row);
+    list.appendChild(card);
+  });
+}
+
+// --- Notices (Tier 5 heartbeat findings, same /api/notices) -------------
+async function loadNotices() {
+  const list = document.getElementById('notices-list');
+  list.innerHTML = '<div class="empty">Loading...</div>';
+  const res = await fetch('/api/notices');
+  const items = await res.json();
+  if (!items.length) { list.innerHTML = '<div class="empty">Nothing noteworthy right now.</div>'; return; }
+  list.innerHTML = '';
+  items.forEach((n) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.style.color = 'var(--text)';
+    meta.textContent = n.message;
+    card.appendChild(meta);
+    list.appendChild(card);
+  });
+}
+
+// --- Files (secure transfer to/from the vault's Inbox) ------------------
+async function loadFiles() {
+  const list = document.getElementById('files-list');
+  list.innerHTML = '<div class="empty">Loading...</div>';
+  const res = await fetch('/api/phone/files?token=' + encodeURIComponent(PAIR_TOKEN));
+  if (!res.ok) { list.innerHTML = '<div class="empty">Could not load files.</div>'; return; }
+  const items = await res.json();
+  if (!items.length) { list.innerHTML = '<div class="empty">Nothing here yet.</div>'; return; }
+  list.innerHTML = '';
+  items.forEach((f) => {
+    const card = document.createElement('div');
+    card.className = 'card file-row';
+    const name = document.createElement('span');
+    name.textContent = f.path;
+    name.style.overflow = 'hidden'; name.style.textOverflow = 'ellipsis'; name.style.whiteSpace = 'nowrap';
+    const link = document.createElement('a');
+    link.textContent = 'Download';
+    link.href = '/api/phone/download?token=' + encodeURIComponent(PAIR_TOKEN) + '&path=' + encodeURIComponent(f.path);
+    card.appendChild(name); card.appendChild(link);
+    list.appendChild(card);
+  });
+}
+document.getElementById('upload-btn').addEventListener('click', async () => {
+  const input = document.getElementById('upload-input');
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  const res = await fetch('/api/phone/upload?token=' + encodeURIComponent(PAIR_TOKEN), { method: 'POST', body: fd });
+  if (res.ok) {
+    input.value = '';
+    toast('Sent to ZENO.');
+    loadFiles();
+  } else {
+    toast('Upload failed.');
+  }
+});
+
+initGate();
+</script>
+</body>
+</html>

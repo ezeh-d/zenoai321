@@ -1,0 +1,40 @@
+REYES — CORRECTED ORIGINAL PROJECT
+
+This package is your original REYES project with the audio files corrected in place.
+Your existing GUI, data, routing, automation, memory, and project structure were preserved.
+
+The config.py now contains the settings required by setup_audio.py:
+- AUDIO_MODELS_DIR
+- KOKORO_MODEL_PATH
+- KOKORO_VOICES_PATH
+- KOKORO_VOICE / KOKORO_SPEED
+- WHISPER_MODEL / device / compute settings
+- voice-focus and music-ducking settings
+
+INSTALL / UPDATE
+1. Back up your current REYES folder.
+2. Extract this ZIP and replace the old REYES folder with this corrected folder.
+3. Open Command Prompt in the folder containing main.py.
+4. Activate the environment:
+
+   .venv\Scripts\activate
+
+5. Install matched dependencies:
+
+   python -m pip install -r requirements.txt
+
+6. Download Kokoro model files:
+
+   python setup_audio.py
+
+7. Test audio:
+
+   python test_audio_engine.py
+
+8. Start the existing GUI:
+
+   python main.py
+
+IMPORTANT
+Run commands from the OUTER REYES folder—the one where gui, main.py, setup_audio.py,
+and requirements.txt are directly visible.

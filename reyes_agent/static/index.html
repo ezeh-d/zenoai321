@@ -1,0 +1,2991 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>ZENO</title>
+<style>
+  :root {
+    --text: #eef1f7;
+    --text-dim: #9aa3b8;
+    --accent: #35c1ff;
+    --panel: rgba(14, 17, 24, 0.62);
+    --border: rgba(255, 255, 255, 0.08);
+    --warn: #ffb454;
+    --danger: #ff5c6c;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%; margin: 0; overflow: hidden;
+    background: #050b1e; color: var(--text);
+    font-family: -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  #orb-canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
+  /* Deep navy, not near-black -- a real dark blue field with ZENO's orb
+     glowing at center, pure CSS (zero image load, zero GPU cost beyond a
+     gradient). The generated reactor image is still opt-in via .bg-photo
+     if it's ever wanted instead. */
+  #static-bg {
+    position: fixed; inset: 0; z-index: 0;
+    background:
+      radial-gradient(ellipse 95% 75% at 50% 40%, rgba(60,130,255,0.22), transparent 62%),
+      radial-gradient(ellipse 130% 95% at 50% 100%, rgba(20,40,90,0.55), #050b1e 72%),
+      linear-gradient(180deg, #081026 0%, #050b1e 55%, #040814 100%);
+  }
+  /* The orb remains the visual focus.  The old full-window grid/mask was
+     decorative compositor work, so visual performance mode leaves it off. */
+  #static-bg::before { display: none; }
+  #static-bg.bg-photo { background: #050b1e url('/static/reyes-bg.jpg') center/cover no-repeat; }
+  #static-bg.bg-photo::before { display: none; }
+
+  #ui { position: fixed; inset: 0; z-index: 1; display: flex; flex-direction: column; pointer-events: none; }
+  #ui a, #ui button, #ui input { pointer-events: auto; }
+
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 20px; pointer-events: auto;
+  }
+  header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  header h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: 0.08em; }
+  header .meta { color: var(--text-dim); font-size: 12px; }
+  header .spacer { flex: 1; }
+  #pending-badge {
+    display: none; background: var(--warn); color: #241705;
+    font-size: 11px; font-weight: 800; padding: 3px 10px; border-radius: 999px;
+  }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  main .spacer { flex: 1; }
+
+  /* HUD, not a messaging app: no chat bubbles, no boxed "Conversation"
+     panel, no persistent scrollback that reads like WhatsApp/Slack. A
+     live caption near the bottom shows what's being said RIGHT NOW (like
+     a subtitle), and a slim activity ticker shows what ZENO is doing.
+     Both fade rather than stack -- the orb is the interface, this is
+     just its voice made visible. */
+  #side-col {
+    width: 380px; max-width: 92vw; flex-shrink: 0; margin: 0 16px 16px 0;
+    display: flex; flex-direction: column; gap: 10px; pointer-events: auto;
+    max-height: calc(100% - 90px); align-self: flex-end;
+  }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    padding: 12px; overflow: hidden; display: flex; flex-direction: column;
+  }
+  .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin: 0 0 8px; }
+
+  /* Caption: the LAST thing said, big and centered, near the bottom of
+     the screen -- not a scrolling log of "user: / assistant:" turns. */
+  #caption-wrap {
+    position: fixed; left: 50%; bottom: 128px; transform: translateX(-50%);
+    width: min(760px, 86vw); text-align: center; pointer-events: none;
+    z-index: 2; display: flex; flex-direction: column; gap: 6px; align-items: center;
+  }
+  #caption-text {
+    font-size: 19px; line-height: 1.45; font-weight: 500;
+    color: var(--text); text-shadow: 0 2px 18px rgba(0,0,0,0.65), 0 0 24px rgba(53,193,255,0.15);
+    opacity: 0; transform: translateY(6px);
+    transition: opacity .35s ease, transform .35s ease;
+  }
+  #caption-text.show { opacity: 1; transform: translateY(0); }
+  #caption-text.user-line { font-size: 14px; font-weight: 600; color: var(--accent); letter-spacing: .02em; opacity: .85; }
+  #caption-text.error-line { color: var(--danger); }
+
+  /* Activity ticker: a slim pill row for what's happening RIGHT NOW,
+     floating near the orb -- replaces the old chat-style tool-chip list. */
+  #activity-ticker {
+    position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 2; pointer-events: none;
+    max-width: 90vw; flex-wrap: wrap; justify-content: center;
+  }
+  \* Task Execution Engine stage indicator: names the pipeline step
+     ZENO is currently in (planning/delegating/acting/verifying/
+     responding) -- purely informational, fades on its own. */
+  #stage-label {
+    position: fixed; left: 50%; bottom: 128px; transform: translateX(-50%);
+    z-index: 2; pointer-events: none; font-size: 11px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--text-dim); opacity: 0;
+    transition: opacity 0.35s ease; background: rgba(10,14,22,0.55);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px;
+  }
+  #stage-label.show { opacity: 0.85; }
+  #transcript { display: none; } /* legacy scrollback -- kept for bookkeeping only, never shown */
+  .msg { display: none !important; }
+  .tool-chip {
+    font-size: 12.5px; color: var(--text-dim); background: rgba(10,14,22,0.72);
+    border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px;
+    display: inline-flex; gap: 7px; align-items: center; pointer-events: none;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+  }
+  .tool-chip.done { color: #8fd6a8; border-color: rgba(120,220,150,0.4); box-shadow: 0 0 16px rgba(120,220,150,0.15); }
+  .tool-chip .tc-status { opacity: 0.85; }
+  .tc-thumb {
+    max-width: 140px; max-height: 140px; border-radius: 10px; border: 1px solid var(--border);
+    box-shadow: 0 8px 26px rgba(0,0,0,0.5); pointer-events: none;
+  }
+  /* Mini mode: REYES shrinks to just the orb (window is resized small by
+     the desktop app). Hide all chrome so only the glowing orb shows. */
+  body.mini #ui, body.mini #map-overlay, body.mini #dev-overlay, body.mini #code-overlay, body.mini #news-overlay, body.mini #cmdk-overlay, body.mini #explain-btn, body.mini #explain-panel, body.mini #timeline-overlay, body.mini #agents-overlay, body.mini #situation-overlay, body.mini #galaxy-overlay { display: none !important; }
+  body.mini #orb-canvas { cursor: pointer; }
+  /* Companion mode: the whole window IS the orb. Shrink the orb to fit the
+     210px window and drop the desktop background so only the glow shows. */
+  body.mini #static-bg { opacity: 0; }
+  body.mini #orb-simple { width: 130px; height: 130px; }
+  body.mini #caption-wrap, body.mini #activity-ticker, body.mini #stage-label { display: none !important; }
+  body.mini { cursor: grab; }
+  body.mini.dragging { cursor: grabbing; }
+
+  /* Hover card: live status without opening the dashboard. Only rendered
+     in mini mode, and only on hover, so it costs nothing at rest. */
+  #mini-card {
+    display: none; position: fixed; left: 50%; bottom: 8px;
+    transform: translateX(-50%); z-index: 5; width: 186px;
+    background: rgba(10,14,24,0.82); border: 1px solid rgba(120,170,255,0.35);
+    border-radius: 12px; padding: 8px 10px; pointer-events: none;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.55);
+    font: 11px system-ui, sans-serif; color: var(--text-dim);
+  }
+  body.mini.hovering #mini-card { display: block; }
+  #mini-card .mc-title { color: var(--text); font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+  #mini-card .mc-row { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; }
+  #mini-card .mc-row b { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 108px; }
+
+  /* Mission ring: rotates around the orb while work is running. One
+     GPU-composited transform, no per-frame JS. */
+  #mini-ring {
+    display: none; position: fixed; top: 50%; left: 50%; width: 158px; height: 158px;
+    margin: -79px 0 0 -79px; border-radius: 50%; pointer-events: none; z-index: 2;
+    border: 2px solid transparent; border-top-color: var(--accent);
+    border-right-color: rgba(110,168,255,0.35);
+    animation: mini-ring-spin 1.5s linear infinite;
+  }
+  body.mini.working #mini-ring { display: block; }
+  @keyframes mini-ring-spin { to { transform: rotate(360deg); } }
+
+  body.mini::after {
+    content: "click to open";
+    position: fixed; left: 0; right: 0; bottom: 6px; text-align: center;
+    font: 10px system-ui, sans-serif; color: rgba(180,200,240,0.5);
+    pointer-events: none;
+  }
+  body.mini.hovering::after { content: ""; }
+
+  #pending-panel { max-height: 32vh; overflow-y: auto; }
+  .empty-note { color: var(--text-dim); font-size: 12px; }
+  .action-card { border: 1px solid var(--border); background: rgba(255,255,255,0.04); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+  .action-card .name { font-weight: 700; font-size: 12px; }
+  .action-card .desc { color: var(--text-dim); font-size: 11px; margin: 4px 0 8px; word-break: break-word; }
+  .action-card .row { display: flex; gap: 6px; }
+  .action-card button { flex: 1; border: none; border-radius: 7px; padding: 6px 0; font-size: 11px; font-weight: 700; cursor: pointer; }
+  .btn-approve { background: var(--ok); color: #063014; }
+  .btn-deny { background: var(--danger); color: #360a0f; }
+  .status-tag { font-size: 10px; padding: 2px 7px; border-radius: 999px; font-weight: 700; }
+  .status-approved { background: rgba(53,193,255,0.18); color: var(--accent); }
+  /* Voice Test panel: one row per agent, preview + editable voice id. */
+  .vt-btn {
+    background: rgba(80,140,255,0.16); border: 1px solid var(--border); color: var(--text);
+    border-radius: 7px; padding: 5px 8px; font-size: 11px; cursor: pointer;
+  }
+  .vt-btn:hover { background: rgba(80,140,255,0.3); }
+  .vt-btn:disabled { opacity: 0.5; cursor: default; }
+  .vt-row { display: flex; align-items: center; gap: 5px; padding: 3px 0; }
+  .vt-name { width: 62px; font: 700 10.5px system-ui; color: var(--text); flex-shrink: 0; }
+  .vt-id {
+    flex: 1; min-width: 0; background: #0c1018; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 5px;
+    font: 10px ui-monospace, monospace;
+  }
+  .vt-id.dirty { color: var(--warn); border-color: var(--warn); }
+  .mission-bar-track { height: 5px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; margin-top: 6px; }
+  .mission-bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .4s ease; }
+  .mission-meta { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim); margin-top: 4px; }
+  .status-denied { background: rgba(255,92,108,0.14); color: var(--danger); }
+  .status-expired { background: rgba(255,180,84,0.14); color: var(--warn); }
+  .result-text { font-size: 11px; color: var(--text-dim); margin-top: 6px; white-space: pre-wrap; }
+
+  #composer {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    margin: 0 16px 24px 16px; pointer-events: auto;
+  }
+  /* Not a button -- REYES listens on its own once permission exists from
+     a prior visit; this is just a small "is it listening" indicator dot.
+     Only becomes a click target on the very first-ever visit, when the
+     browser requires one gesture to grant mic access at all. */
+  #mic-indicator {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--text-dim);
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  #mic-indicator.listening {
+    background: var(--ok);
+    box-shadow: 0 0 0 6px rgba(74,222,128,0.15);
+    animation: mic-pulse 1.8s ease-in-out infinite;
+  }
+  #mic-indicator.needs-permission {
+    background: var(--warn); cursor: pointer;
+    box-shadow: 0 0 0 6px rgba(255,180,84,0.15);
+  }
+  @keyframes mic-pulse {
+    0%, 100% { box-shadow: 0 0 0 6px rgba(74,222,128,0.12); }
+    50% { box-shadow: 0 0 0 12px rgba(74,222,128,0.04); }
+  }
+  #mic-status { font-size: 12px; color: var(--text-dim); }
+
+  #text-composer { display: none; width: 100%; max-width: 640px; gap: 10px; }
+  #text-composer.visible { display: flex; }
+  #text-composer input {
+    flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: 14px 18px; font-size: 14px; outline: none;
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  }
+  #text-composer input:focus { border-color: var(--accent); }
+  #text-composer button {
+    background: var(--accent); color: #06222e; border: none; border-radius: 999px;
+    padding: 0 22px; font-weight: 800; font-size: 14px; cursor: pointer;
+  }
+  #text-composer button:disabled { opacity: 0.5; cursor: default; }
+
+  #settings-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    width: 30px; height: 30px; border-radius: 50%; cursor: pointer; font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #settings-btn:hover { color: var(--text); border-color: var(--accent); }
+  #settings-panel {
+    display: none; position: absolute; top: 54px; right: 20px; width: 240px;
+    z-index: 3;
+  }
+  #settings-panel.open { display: block; }
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 13px; padding: 8px 0;
+  }
+  .toggle-row .label { display: flex; flex-direction: column; }
+  .toggle-row .sub { color: var(--text-dim); font-size: 11px; }
+  .switch { position: relative; width: 38px; height: 22px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    position: absolute; inset: 0; background: var(--border); border-radius: 999px;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .switch .track::before {
+    content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px;
+    background: var(--text); border-radius: 50%; transition: transform 0.15s;
+  }
+  .switch input:checked + .track { background: var(--ok); }
+  .switch input:checked + .track::before { transform: translateX(16px); background: #06220f; }
+
+  #dev-overlay {
+    display: none; position: fixed; bottom: 16px; left: 16px; z-index: 2;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 11px;
+    color: #7fffb0; background: rgba(0,0,0,0.55); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; pointer-events: none; line-height: 1.6;
+    backdrop-filter: blur(10px);
+  }
+  #dev-overlay.on { display: block; }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+
+  @media (max-width: 720px) {
+    #side-col { width: 100%; margin: 0 12px 12px 12px; }
+    #composer { margin: 0 12px 16px 12px; }
+  }
+</style>
+</head>
+<body>
+<style>
+/* Premium native UI motion -- built from scratch (no React, no paid kits).
+   All GPU-light: transform/opacity/shadow only, so it stays smooth even
+   with the animated orb off. */
+@keyframes reyes-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes reyes-pop  { from { opacity: 0; transform: scale(.96) translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes reyes-pulse{ 0%,100% { box-shadow: 0 0 8px var(--accent); } 50% { box-shadow: 0 0 18px var(--accent), 0 0 30px rgba(53,193,255,.5); } }
+@keyframes reyes-sheen{ 0% { background-position: -140% 0; } 100% { background-position: 240% 0; } }
+
+.panel { animation: reyes-rise .35s cubic-bezier(.2,.7,.2,1) both; transition: border-color .25s, box-shadow .25s; }
+.panel:hover { border-color: rgba(53,193,255,.4); box-shadow: 0 6px 26px rgba(0,0,0,.35); }
+#settings-panel.open { animation: reyes-pop .28s cubic-bezier(.2,.8,.2,1) both; }
+
+.msg { animation: reyes-rise .3s ease both; }
+.tool-chip { animation: reyes-rise .3s ease both; transition: color .2s, border-color .2s; }
+
+header .dot { animation: reyes-pulse 2.8s ease-in-out infinite; }
+
+/* Header title gets a slow moving light sheen */
+header h1 {
+  background: linear-gradient(100deg, var(--text) 40%, var(--accent) 50%, var(--text) 60%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: reyes-sheen 6s linear infinite;
+}
+
+/* Buttons: smooth glow + press feedback */
+#settings-btn, #fullscreen-btn { transition: transform .15s, color .2s, border-color .2s, box-shadow .2s; }
+#settings-btn:hover, #fullscreen-btn:hover { transform: translateY(-1px); box-shadow: 0 0 14px rgba(53,193,255,.45); }
+#settings-btn:active, #fullscreen-btn:active { transform: translateY(0) scale(.94); }
+
+/* Switches: glow when on, springy knob */
+.switch .track { transition: background .25s; }
+.switch .track::before { transition: transform .25s cubic-bezier(.34,1.56,.64,1), background .25s; }
+.switch input:checked + .track { box-shadow: 0 0 12px rgba(80,220,150,.55); }
+
+/* Send button gentle idle breathe + hover lift */
+#text-composer button { transition: transform .15s, box-shadow .2s; }
+#text-composer button:hover { transform: translateY(-1px); box-shadow: 0 4px 18px rgba(53,193,255,.5); }
+</style>
+
+<style>
+/* Agent Ring: the 13 specialists orbiting ZENO's main orb. Idle agents
+   drift slowly around the ring; a dispatched agent grows, brightens, and
+   draws a beam to center -- with real parallel delegation now in place
+   (see agent.py), more than one can light up at once, which is the whole
+   point of a "ring" over a single status line. Positioned/animated in JS
+   (agent-ring.js below) since 13 elements around a circle need real trig,
+   not hand-written CSS positions. */
+#agent-ring { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+#agent-beams { position: fixed; inset: 0; z-index: 1; pointer-events: none; width: 100%; height: 100%; }
+.agent-dot {
+  position: absolute; top: 0; left: 0; pointer-events: auto; cursor: pointer;
+  width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: 13px;
+  background: rgba(10,14,24,0.65); border: 1.5px solid var(--dot-color, #6ea8ff);
+  color: var(--dot-color, #6ea8ff); opacity: 0.55; filter: saturate(0.7);
+  transition: width .35s, height .35s, margin .35s, opacity .35s, filter .35s, box-shadow .35s, background .35s;
+  box-shadow: 0 0 0 rgba(0,0,0,0);
+}
+.agent-dot:hover { opacity: 0.9; }
+.agent-dot.active {
+  width: 46px; height: 46px; margin: -23px 0 0 -23px; opacity: 1; filter: saturate(1.3);
+  background: rgba(10,14,24,0.9);
+  box-shadow: 0 0 22px var(--dot-color, #6ea8ff), 0 0 46px var(--dot-color, #6ea8ff);
+  animation: reyes-pulse 1.1s ease-in-out infinite;
+}
+#agent-team-overview {
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 1;
+  font: 11px system-ui, sans-serif; color: var(--text-dim); letter-spacing: 0.05em;
+  pointer-events: none; opacity: 0.75;
+}
+body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, body.mini #agent-dashboard { display: none !important; }
+
+#agent-dashboard {
+  display: none; position: fixed; z-index: 10000; width: 240px;
+  background: #0a0c12; border: 1px solid rgba(120,170,255,0.35); border-radius: 12px;
+  padding: 14px; box-shadow: 0 16px 50px rgba(0,0,0,0.6); font: 13px system-ui, sans-serif;
+}
+#agent-dashboard.open { display: block; }
+#agent-dashboard .ad-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+#agent-dashboard .ad-icon { font-size: 20px; }
+#agent-dashboard .ad-name { font-weight: 700; font-size: 14.5px; }
+#agent-dashboard .ad-role { color: var(--text-dim); font-size: 11.5px; }
+#agent-dashboard .ad-row { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 12px; color: var(--text-dim); }
+#agent-dashboard .ad-row b { color: var(--text); font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+#agent-dashboard .ad-close { position: absolute; top: 8px; right: 10px; background: none; border: none; color: var(--text-dim); font-size: 16px; cursor: pointer; }
+</style>
+<div id="static-bg"></div>
+<canvas id="orb-canvas"></canvas>
+<svg id="agent-beams"></svg>
+<div id="agent-ring"></div>
+<div id="agent-team-overview"></div>
+<div id="agent-dashboard">
+  <button class="ad-close" id="agent-dashboard-close">&times;</button>
+  <div class="ad-head"><span class="ad-icon" id="ad-icon"></span><div><div class="ad-name" id="ad-name"></div><div class="ad-role" id="ad-role"></div></div></div>
+  <div class="ad-row"><span>Status</span><b id="ad-status"></b></div>
+  <div class="ad-row"><span>Current task</span><b id="ad-task"></b></div>
+  <div class="ad-row"><span>Last result</span><b id="ad-result"></b></div>
+  <div class="ad-row"><span>Times used</span><b id="ad-count"></b></div>
+</div>
+<div id="dev-overlay"></div>
+
+<style>
+#map-overlay {
+  display: none;
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(88vw, 1100px);
+  height: min(78vh, 760px);
+  background: #0a0c12;
+  border: 1px solid rgba(120,170,255,0.35);
+  border-radius: 14px;
+  box-shadow: 0 20px 80px rgba(0,0,0,0.7), 0 0 40px rgba(80,140,255,0.15);
+  z-index: 9999;
+  overflow: hidden;
+  flex-direction: column;
+}
+#map-overlay.open { display: flex; }
+#map-overlay-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  background: rgba(20,26,40,0.95);
+  border-bottom: 1px solid rgba(120,170,255,0.2);
+  font: 600 14px system-ui, sans-serif; color: #cfe0ff;
+}
+#map-overlay-title { flex: 1; }
+#map-overlay-close {
+  background: transparent; border: none; color: #9fb4dd;
+  font-size: 22px; line-height: 1; cursor: pointer; padding: 0 6px;
+}
+#map-overlay-close:hover { color: #fff; }
+#map-frame { flex: 1; width: 100%; border: 0; }
+
+/* Coding + news workspaces -- same floating-panel chrome as #map-overlay
+   (title bar + close button), different body content. Kept as their own
+   IDs/blocks rather than merged into map-overlay's, since each has its own
+   trigger event and inner layout; the visual chrome is duplicated on
+   purpose for that isolation, not because it needed rebuilding. */
+#code-overlay, #news-overlay, #timeline-overlay, #agents-overlay, #situation-overlay, #galaxy-overlay {
+  display: none;
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 1200px);
+  height: min(82vh, 780px);
+  background: #0a0c12;
+  border: 1px solid rgba(120,170,255,0.35);
+  border-radius: 14px;
+  box-shadow: 0 20px 80px rgba(0,0,0,0.7), 0 0 40px rgba(80,140,255,0.15);
+  z-index: 9999;
+  overflow: hidden;
+  flex-direction: column;
+}
+#code-overlay.open, #news-overlay.open, #timeline-overlay.open, #agents-overlay.open, #situation-overlay.open, #galaxy-overlay.open { display: flex; }
+
+/* Knowledge Galaxy: the REAL vault graph as SVG. Static layout computed
+   server-side -- no physics loop, because a force simulation on this
+   machine's GPU is precisely what made the app lag before. */
+#galaxy-overlay { width: min(94vw, 1100px); height: min(88vh, 840px); }
+#galaxy-body { flex: 1; min-height: 0; overflow: hidden; }
+#galaxy-svg { width: 100%; height: 100%; display: block; }
+#galaxy-svg .gx-edge { stroke: rgba(120,170,255,0.16); stroke-width: 1; }
+#galaxy-svg .gx-edge.tag { stroke: rgba(245,197,24,0.14); }
+#galaxy-svg .gx-edge.hl { stroke: var(--accent); stroke-width: 1.8; }
+#galaxy-svg circle { cursor: pointer; transition: r .15s, opacity .15s; }
+#galaxy-svg circle.note { fill: #6ea8ff; }
+#galaxy-svg circle.tag { fill: #f5c518; }
+#galaxy-svg circle.folder { fill: #8fd6a8; }
+#galaxy-svg circle.memory { fill: #c88ffa; }
+#galaxy-svg circle.dim { opacity: 0.15; }
+#galaxy-svg text { fill: var(--text-dim); font: 9px system-ui, sans-serif; pointer-events: none; }
+#galaxy-svg text.dim { opacity: 0.12; }
+#galaxy-info {
+  flex-shrink: 0; padding: 9px 16px; border-top: 1px solid rgba(120,170,255,0.15);
+  font: 12px system-ui, sans-serif; color: var(--text-dim); max-height: 84px; overflow-y: auto;
+}
+
+/* Situation Room: the composed command view. Every number rendered here
+   comes from /api/situation, which reads live subsystem state -- if a
+   value is unknown it shows a dash rather than a plausible number. */
+#situation-overlay { width: min(96vw, 1320px); height: min(88vh, 860px); }
+#situation-body { flex: 1; overflow-y: auto; padding: 14px; }
+.sit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; }
+.sit-card {
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px 14px;
+}
+.sit-card h3 {
+  margin: 0 0 8px; font: 700 10.5px system-ui, sans-serif; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.sit-content { font: 12.5px system-ui, sans-serif; color: var(--text); }
+.sit-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; }
+.sit-row span { color: var(--text-dim); }
+.sit-row b { font-weight: 600; overflow-wrap: anywhere; text-align: right; }
+.sit-big { font: 700 26px system-ui, sans-serif; color: var(--text); line-height: 1.1; }
+.sit-big small { display: block; font: 400 11px system-ui; color: var(--text-dim); margin-top: 3px; }
+.sit-ok { color: #8fd6a8; }
+.sit-warn { color: var(--warn); }
+.sit-bad { color: var(--danger); }
+.sit-bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; margin: 5px 0 2px; }
+.sit-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.sit-bar i.hot { background: var(--danger); }
+
+/* Agent Monitor: one row per live worker. Every value here is observed
+   from the runtime (thread liveness, heartbeat age, queue depth, real
+   metrics) -- nothing is estimated, so a stalled agent looks stalled. */
+#agents-body { flex: 1; overflow-y: auto; padding: 4px 0; }
+.ag-row {
+  display: grid; grid-template-columns: 96px 74px 62px 52px 52px 1fr 64px;
+  gap: 8px; align-items: center; padding: 7px 16px;
+  border-bottom: 1px solid rgba(120,170,255,0.07);
+  font: 12px system-ui, sans-serif;
+}
+.ag-row.head { color: var(--text-dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; }
+.ag-name { font-weight: 700; color: var(--text); }
+.ag-name .ag-role { display: block; font-weight: 400; font-size: 10px; color: var(--text-dim); }
+.ag-state { font-size: 11px; padding: 2px 7px; border-radius: 999px; text-align: center; }
+.ag-state.idle { background: rgba(120,170,255,0.14); color: #9fc0ff; }
+.ag-state.working { background: rgba(120,220,150,0.18); color: #8fd6a8; }
+.ag-state.error, .ag-state.offline { background: rgba(255,110,110,0.18); color: #ff9d9d; }
+.ag-state.restarting, .ag-state.starting { background: rgba(245,197,24,0.18); color: #f5c518; }
+.ag-hb { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 11px; }
+.ag-hb.stale { color: var(--danger); font-weight: 700; }
+.ag-task { color: var(--text-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-restart {
+  background: rgba(255,110,110,0.14); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 6px; padding: 3px 6px; font-size: 10.5px; cursor: pointer;
+}
+.ag-restart:hover { background: rgba(255,110,110,0.3); color: #fff; }
+
+/* Timeline: the durable event record (event_bus.py) rendered as a
+   readable, grouped-by-day list. Read-only history, not a live ticker --
+   the activity pills already cover "right now". */
+#timeline-body { flex: 1; overflow-y: auto; padding: 6px 0; }
+.tl-day {
+  position: sticky; top: 0; background: #0a0c12; padding: 8px 18px 6px;
+  font: 700 11px system-ui, sans-serif; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text-dim);
+  border-bottom: 1px solid rgba(120,170,255,0.12);
+}
+.tl-row {
+  display: flex; gap: 12px; align-items: baseline; padding: 9px 18px;
+  border-bottom: 1px solid rgba(120,170,255,0.06); font: 13px system-ui, sans-serif;
+}
+.tl-row:hover { background: rgba(80,140,255,0.06); }
+.tl-time { color: var(--text-dim); font-size: 11.5px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.tl-what { flex: 1; color: var(--text); overflow-wrap: anywhere; }
+.tl-what .tl-detail { display: block; color: var(--text-dim); font-size: 11.5px; margin-top: 2px; }
+.tl-ms { color: var(--text-dim); font-size: 11px; flex-shrink: 0; }
+.ws-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  background: rgba(20,26,40,0.95);
+  border-bottom: 1px solid rgba(120,170,255,0.2);
+  font: 600 14px system-ui, sans-serif; color: #cfe0ff;
+}
+.ws-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-close {
+  background: transparent; border: none; color: #9fb4dd;
+  font-size: 22px; line-height: 1; cursor: pointer; padding: 0 6px;
+}
+.ws-close:hover { color: #fff; }
+
+#code-overlay-body { flex: 1; display: flex; overflow: hidden; }
+#code-overlay-files {
+  width: 220px; flex-shrink: 0; overflow-y: auto;
+  border-right: 1px solid rgba(120,170,255,0.15);
+  padding: 10px; font: 12.5px/1.7 ui-monospace, 'Cascadia Code', monospace;
+  color: #9fb4dd;
+}
+#code-overlay-files .ws-file { padding: 3px 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#code-overlay-files .ws-file.active { background: rgba(80,140,255,0.18); color: #dce8ff; }
+#code-overlay-current {
+  padding: 8px 14px; font: 12px system-ui, sans-serif; color: #7fe0a8;
+  border-bottom: 1px solid rgba(120,170,255,0.12); flex-shrink: 0;
+}
+#code-overlay-pane { flex: 1; overflow: auto; }
+#code-overlay-pane pre {
+  margin: 0; padding: 16px; font: 13px/1.55 ui-monospace, 'Cascadia Code', monospace;
+  color: #d6e2ff; white-space: pre-wrap; word-break: break-word;
+}
+
+#news-overlay-body { flex: 1; overflow-y: auto; padding: 8px 0; }
+.ws-headline {
+  display: block; padding: 12px 18px; border-bottom: 1px solid rgba(120,170,255,0.1);
+  color: #dce8ff; text-decoration: none; font: 14px/1.4 system-ui, sans-serif;
+}
+.ws-headline:hover { background: rgba(80,140,255,0.08); }
+.ws-headline .ws-source { display: block; margin-top: 4px; font-size: 11.5px; color: #7f93c2; }
+</style>
+<div id="code-overlay">
+  <div class="ws-bar">
+    <span class="ws-title" id="code-overlay-title">Coding Workspace</span>
+    <button class="ws-close" id="code-overlay-close" title="Close">&times;</button>
+  </div>
+  <div id="code-overlay-current"></div>
+  <div id="code-overlay-body">
+    <div id="code-overlay-files"></div>
+    <div id="code-overlay-pane"><pre id="code-overlay-code"></pre></div>
+  </div>
+</div>
+<div id="news-overlay">
+  <div class="ws-bar">
+    <span class="ws-title" id="news-overlay-title">News Workspace</span>
+    <button class="ws-close" id="news-overlay-close" title="Close">&times;</button>
+  </div>
+  <div id="news-overlay-body"></div>
+</div>
+<div id="galaxy-overlay">
+  <div class="ws-bar">
+    <span class="ws-title">Knowledge Galaxy</span>
+    <input id="galaxy-search" placeholder="search…" style="background:#0c1018;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:12px;width:150px;" />
+    <span id="galaxy-count" style="font:11px system-ui;color:var(--text-dim);"></span>
+    <button class="ws-close" id="galaxy-close" title="Close">&times;</button>
+  </div>
+  <div id="galaxy-body"><svg id="galaxy-svg" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet"></svg></div>
+  <div id="galaxy-info">Click a star to see what it connects to.</div>
+</div>
+<div id="situation-overlay">
+  <div class="ws-bar">
+    <span class="ws-title">Situation Room</span>
+    <span id="sit-clock" style="font:11px ui-monospace,monospace;color:var(--text-dim);"></span>
+    <button class="ws-close" id="situation-close" title="Close">&times;</button>
+  </div>
+  <div id="situation-body">
+    <div class="sit-grid">
+      <div class="sit-card" id="sit-agents"><h3>Agent Runtime</h3><div class="sit-content">—</div></div>
+      <div class="sit-card" id="sit-system"><h3>System</h3><div class="sit-content">—</div></div>
+      <div class="sit-card" id="sit-missions"><h3>Missions</h3><div class="sit-content">—</div></div>
+      <div class="sit-card" id="sit-model"><h3>Model Router</h3><div class="sit-content">—</div></div>
+      <div class="sit-card" id="sit-events"><h3>Event Bus</h3><div class="sit-content">—</div></div>
+      <div class="sit-card" id="sit-session"><h3>Session &amp; Policy</h3><div class="sit-content">—</div></div>
+    </div>
+  </div>
+</div>
+<div id="agents-overlay">
+  <div class="ws-bar">
+    <span class="ws-title">Agent Monitor — live runtime</span>
+    <span id="agents-summary" style="font:11px system-ui;color:var(--text-dim);"></span>
+    <button class="ws-close" id="agents-close" title="Close">&times;</button>
+  </div>
+  <div id="agents-body"></div>
+</div>
+<div id="timeline-overlay">
+  <div class="ws-bar">
+    <span class="ws-title">Timeline — what ZENO actually did</span>
+    <select id="timeline-filter" style="background:#0c1018;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-size:12px;">
+      <option value="">Everything</option>
+      <option value="tool">Tools</option>
+      <option value="ui">Interface</option>
+    </select>
+    <button class="ws-close" id="timeline-close" title="Close">&times;</button>
+  </div>
+  <div id="timeline-body"></div>
+</div>
+<div id="map-overlay">
+  <div id="map-overlay-bar">
+    <span id="map-overlay-title">Map</span>
+    <button id="map-overlay-close" title="Close">&times;</button>
+  </div>
+  <iframe id="map-frame" src="" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+</div>
+
+<style>
+/* Command Palette -- Ctrl+Space or Ctrl+K. Every entry is a REAL action:
+   a client-side UI toggle, or a real message sent through the normal
+   agent turn (runTurn) so it goes through the same tools/safety gate as
+   anything typed by hand -- never a shortcut that bypasses it. */
+#cmdk-overlay {
+  display: none; position: fixed; inset: 0; z-index: 10001;
+  background: rgba(3,5,10,0.55); align-items: flex-start; justify-content: center;
+  padding-top: 12vh;
+}
+#cmdk-overlay.open { display: flex; }
+#cmdk-box {
+  width: min(90vw, 560px); background: #0a0c12; border: 1px solid rgba(120,170,255,0.35);
+  border-radius: 14px; box-shadow: 0 20px 80px rgba(0,0,0,0.7); overflow: hidden;
+}
+#cmdk-input {
+  width: 100%; box-sizing: border-box; padding: 16px 18px; font-size: 15px;
+  background: transparent; border: none; border-bottom: 1px solid rgba(120,170,255,0.2);
+  color: var(--text); outline: none;
+}
+#cmdk-list { max-height: 50vh; overflow-y: auto; padding: 6px; }
+.cmdk-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 13.5px; color: var(--text); }
+.cmdk-item .cmdk-hint { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+.cmdk-item.sel, .cmdk-item:hover { background: rgba(80,140,255,0.16); }
+#cmdk-empty { padding: 14px 12px; color: var(--text-dim); font-size: 12.5px; }
+
+/* Focus Mode: dim the field, drop idle ring dots, keep only what's
+   actually working visible. Real perf.setPerformanceMode(true) is
+   engaged in JS alongside this, not just a visual dim. */
+/* Focus mode DIMS idle specialists rather than hiding them -- the ring of
+   subagents around ZENO is the signature look and must stay visible even
+   here (user, 2026-08-03: "simple orb with the subagent around"). Active
+   agents still stand out because .agent-dot.active overrides opacity. */
+body.focus #static-bg { opacity: 0.45; }
+body.focus .agent-dot:not(.active) { opacity: 0.28; }
+body.focus #agent-team-overview { opacity: 0; }
+
+#explain-btn {
+  position: fixed; right: 14px; bottom: 66px; z-index: 3; pointer-events: auto;
+  background: rgba(10,14,22,0.7); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 999px; padding: 5px 12px; font-size: 11px; cursor: pointer;
+}
+#explain-panel {
+  display: none; position: fixed; right: 14px; bottom: 96px; z-index: 3; width: 260px;
+  background: #0a0c12; border: 1px solid rgba(120,170,255,0.3); border-radius: 12px;
+  padding: 12px 14px; font-size: 12px; color: var(--text-dim); box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+}
+#explain-panel.open { display: block; }
+#explain-panel .ex-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; }
+#explain-panel .ex-row b { color: var(--text); font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+</style>
+<div id="cmdk-overlay">
+  <div id="cmdk-box">
+    <input id="cmdk-input" type="text" placeholder="Type a command..." autocomplete="off" />
+    <div id="cmdk-list"></div>
+  </div>
+</div>
+<button id="explain-btn" title="What did ZENO just do?">ℹ️ Explain</button>
+<div id="explain-panel"></div>
+<div id="mini-ring"></div>
+<div id="mini-card">
+  <div class="mc-title" id="mc-state">ZENO</div>
+  <div class="mc-row"><span>Mission</span><b id="mc-mission">—</b></div>
+  <div class="mc-row"><span>Agent</span><b id="mc-agent">idle</b></div>
+  <div class="mc-row"><span>Tasks</span><b id="mc-tasks">0</b></div>
+  <div class="mc-row"><span>Approvals</span><b id="mc-pending">0</b></div>
+  <div class="mc-row"><span>CPU</span><b id="mc-cpu">—</b></div>
+  <div class="mc-row"><span>RAM</span><b id="mc-ram">—</b></div>
+</div>
+
+<div id="ui">
+  <header>
+    <div class="dot"></div>
+    <h1>ZENO</h1>
+    <span class="meta" id="status-meta">connecting...</span>
+    <div class="spacer"></div>
+    <span id="pending-badge">0 pending</span>
+    <button id="fullscreen-btn" title="Fullscreen (F11)">&#9974;</button>
+    <button id="settings-btn" title="Settings">&#9881;</button>
+  </header>
+
+  <div class="panel" id="settings-panel">
+    <h2>Settings</h2>
+    <div class="toggle-row">
+      <span class="label">Animated orb<span class="sub">Off = static image (no lag). On = live orb (needs a decent GPU)</span></span>
+      <label class="switch"><input type="checkbox" id="orb-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Developer mode<span class="sub">FPS, state, raw events</span></span>
+      <label class="switch"><input type="checkbox" id="dev-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Performance mode<span class="sub">Lower render clarity, smoother</span></span>
+      <label class="switch"><input type="checkbox" id="perf-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Pause heartbeat<span class="sub">Kill switch -- stops proactive checks</span></span>
+      <label class="switch"><input type="checkbox" id="kill-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Focus mode<span class="sub">Dims idle visuals, drops to performance mode (Ctrl+Space for commands)</span></span>
+      <label class="switch"><input type="checkbox" id="focus-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Hand gestures<span class="sub" id="gesture-sub">Webcam: ✋ play/pause, 👍 vol up, 👎 down, ✊ mute, ✌️ next</span></span>
+      <label class="switch"><input type="checkbox" id="gesture-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Mouse control (hand)<span class="sub" id="mouse-sub">Move cursor with your index finger, pinch to click</span></span>
+      <label class="switch"><input type="checkbox" id="mouse-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Camera<span class="sub">Which webcam to use for hand tracking</span></span>
+      <select id="camera-select" style="background:#0c1018;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;max-width:150px;"><option value="">Default</option></select>
+    </div>
+    <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+      <span class="label">Phone Companion<span class="sub">Open this on your phone (same Wi-Fi), then enter the code below</span></span>
+      <div id="phone-pair-info" style="font:12px ui-monospace,monospace;color:var(--text-dim);word-break:break-all;">Loading...</div>
+    </div>
+    <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+      <span class="label">Agent voices<span class="sub">Preview each specialist, or paste a new ElevenLabs voice ID</span></span>
+      <div style="display:flex;gap:6px;margin-bottom:4px;">
+        <button id="voice-rollcall-btn" class="vt-btn" style="flex:1;">▶ Roll call</button>
+        <button id="voice-diag-btn" class="vt-btn" style="flex:1;">Diagnose</button>
+      </div>
+      <div id="voice-diag-out" style="font:11px system-ui;color:var(--text-dim);"></div>
+      <div id="voice-test-list" style="width:100%;max-height:34vh;overflow-y:auto;"></div>
+    </div>
+  </div>
+
+  <div id="caption-wrap">
+    <div id="caption-text"></div>
+  </div>
+  <div id="activity-ticker"></div>
+  <div id="stage-label"></div>
+
+  <main>
+    <div class="spacer"></div>
+    <div id="side-col">
+      <div id="transcript" style="display:none;"></div>
+      <div class="panel" id="pending-wrap">
+        <h2>Needs your approval</h2>
+        <div id="pending-panel"><div class="empty-note">Nothing waiting right now.</div></div>
+      </div>
+      <div class="panel" id="notices-wrap">
+        <h2>Noticed while you were away</h2>
+        <div id="notices-panel"><div class="empty-note">Nothing noteworthy right now.</div></div>
+      </div>
+      <div class="panel" id="missions-wrap">
+        <h2>Active missions</h2>
+        <div id="missions-panel"><div class="empty-note">No active missions right now.</div></div>
+      </div>
+    </div>
+  </main>
+
+  <div id="composer">
+    <div id="mic-indicator" title="Always-on listening status"></div>
+    <span id="mic-status">Starting...</span>
+    <div id="text-composer">
+      <input id="input" type="text" placeholder="Talk to ZENO..." autocomplete="off" />
+      <button id="send">Send</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { initOrb } from "/static/orb.js?v=4";
+
+const orb = initOrb(document.getElementById("orb-canvas"));
+// Exposed for the dev overlay and for testing orb state/expressions
+// without driving a whole turn (same pattern as window.agentRing).
+window.zenoOrb = orb;
+
+// --- Agent Ring: 13 specialists orbiting ZENO, real activation state ----
+// Color/icon per the user's own spec. "Role" and every dashboard field
+// are derived from real data (delegate's own description text, the
+// actual task string sent, the actual result that came back) -- no
+// fabricated CPU/GPU/confidence-score numbers, since nothing backs those
+// for an LLM sub-agent call on this architecture.
+const AGENTS = {
+  aris:        { name: 'ARIS',   color: '#3ddc7a', icon: '\u{1F4D6}', role: 'Research Intelligence' },
+  tosin:       { name: 'TOSIN',  color: '#a855f7', icon: '\u{1F4BB}', role: 'Software Engineering' },
+  stark:       { name: 'STARK',  color: '#ef4444', icon: '\u{1F6E1}️', role: 'Infrastructure & Defensive Security' },
+  zeal:        { name: 'ZEAL',   color: '#f5c518', icon: '\u{1F3A8}', role: 'Creative Intelligence' },
+  titan:       { name: 'TITAN',  color: '#f97316', icon: '\u{1F4BC}', role: 'Business Intelligence' },
+  apex:        { name: 'APEX',   color: '#22d3ee', icon: '\u{1F3AE}', role: 'Gaming Intelligence' },
+  nova:        { name: 'NOVA',   color: '#f472b6', icon: '\u{1F441}️', role: 'Vision Intelligence' },
+  hermes_comm: { name: 'HERMES', color: '#c8d0dc', icon: '\u{1F4AC}', role: 'Communication Intelligence' },
+  oracle:      { name: 'ORACLE', color: '#06b6d4', icon: '\u{1F4CA}', role: 'Data Intelligence' },
+  kate:        { name: 'KATE',   color: '#6366f1', icon: '\u{1F393}', role: 'Academic & Scientific Intelligence' },
+  ultron:      { name: 'ULTRON', color: '#b91c1c', icon: '⬢',    role: 'Strategic / Critical Review' },
+  atlas:       { name: 'ATLAS',  color: '#3b5a8a', icon: '\u{1F9ED}', role: 'Mission Control' },
+  helios:      { name: 'HELIOS', color: '#10b981', icon: '❤️', role: 'Wellbeing Intelligence' },
+};
+const AGENT_ORDER = Object.keys(AGENTS);
+
+const agentRing = (() => {
+  const ringEl = document.getElementById('agent-ring');
+  const beamsEl = document.getElementById('agent-beams');
+  const overviewEl = document.getElementById('agent-team-overview');
+  const dash = document.getElementById('agent-dashboard');
+  const dots = {};   // id -> element
+  const beams = {};  // id -> <line>
+  const state = {};  // id -> { active: bool, activeCount, task, lastResult, uses }
+  AGENT_ORDER.forEach((id) => { state[id] = { active: false, activeCount: 0, task: '', lastResult: '', uses: 0 }; });
+
+  // Idle agents drift slowly around the ring (per spec: "inactive agents
+  // slowly orbit"). Driven in JS, not a CSS transform on the container,
+  // so the SVG beam lines can be recomputed to the SAME coordinates every
+  // tick -- a beam that didn't rotate with its dot would visibly detach.
+  let rotation = 0;
+  const pos = {};  // id -> {x, y}, so a beam can be redrawn without a full relayout
+  function layout() {
+    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+    const r = Math.min(window.innerWidth, window.innerHeight) * 0.36;
+    AGENT_ORDER.forEach((id, i) => {
+      const angle = (i / AGENT_ORDER.length) * Math.PI * 2 - Math.PI / 2 + rotation;
+      const x = cx + r * Math.cos(angle), y = cy + r * Math.sin(angle);
+      pos[id] = { x, y };
+      // transform, NOT left/top: left/top writes force a layout pass on
+      // every tick (26 elements, 10x a second, was a measurable chunk of
+      // the "still lagging" report). transform is composited on the GPU
+      // and skips layout entirely. Centering stays on the existing
+      // negative margin, so the active-state size change still works.
+      dots[id].style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      // Only redraw beams that are actually visible. Idle beams sit at
+      // stroke-opacity 0, so repainting 13 invisible SVG lines every tick
+      // was pure waste -- usually this loop now touches zero of them.
+      if (state[id] && state[id].active) drawBeam(id, cx, cy);
+    });
+  }
+
+  function drawBeam(id, cx, cy) {
+    if (cx === undefined) { cx = window.innerWidth / 2; cy = window.innerHeight / 2; }
+    const p = pos[id];
+    if (!p) return;
+    beams[id].setAttribute('x1', String(p.x));
+    beams[id].setAttribute('y1', String(p.y));
+    beams[id].setAttribute('x2', String(cx));
+    beams[id].setAttribute('y2', String(cy));
+  }
+
+  AGENT_ORDER.forEach((id) => {
+    const a = AGENTS[id];
+    const dot = document.createElement('div');
+    dot.className = 'agent-dot';
+    dot.style.setProperty('--dot-color', a.color);
+    dot.textContent = a.icon;
+    dot.title = a.name;
+    dot.addEventListener('click', () => openDashboard(id));
+    ringEl.appendChild(dot);
+    dots[id] = dot;
+
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('stroke', a.color);
+    line.setAttribute('stroke-width', '1.5');
+    line.setAttribute('stroke-opacity', '0');
+    line.style.transition = 'stroke-opacity .35s';
+    beamsEl.appendChild(line);
+    beams[id] = line;
+  });
+  layout();
+  window.addEventListener('resize', layout);
+  // The ring is static while no specialist is working.  Particle/glow motion
+  // keeps the visual identity alive without relaying out thirteen dots and
+  // SVG beams all day.  Active work gets a slow 2fps orbit only.
+  let orbitTimer = null;
+  function updateOrbit() {
+    const anyActive = AGENT_ORDER.some((id) => state[id].active);
+    if (!anyActive) {
+      clearInterval(orbitTimer); orbitTimer = null;
+      layout();
+    } else if (orbitTimer === null) {
+      orbitTimer = setInterval(() => { rotation += 0.00375; layout(); }, 500);
+    }
+  }
+
+  function updateOverview() {
+    const activeCount = AGENT_ORDER.filter((id) => state[id].active).length;
+    overviewEl.textContent = activeCount > 0
+      ? `${activeCount} agent${activeCount > 1 ? 's' : ''} active · ${AGENT_ORDER.length - activeCount} idle`
+      : '';
+  }
+
+  function activate(id, task) {
+    if (!state[id]) return;
+    state[id].activeCount++;
+    state[id].active = true;
+    state[id].task = task;
+    state[id].uses++;
+    dots[id].classList.add('active');
+    drawBeam(id);  // draw immediately -- layout() only maintains active beams
+    beams[id].setAttribute('stroke-opacity', '0.55');
+    updateOverview();
+    updateOrbit();
+    if (dash.classList.contains('open') && dash.dataset.agent === id) renderDashboard(id);
+  }
+
+  function deactivate(id, result) {
+    if (!state[id]) return;
+    state[id].activeCount = Math.max(0, state[id].activeCount - 1);
+    state[id].lastResult = result;
+    if (state[id].activeCount === 0) {
+      state[id].active = false;
+      dots[id].classList.remove('active');
+      beams[id].setAttribute('stroke-opacity', '0');
+    }
+    updateOverview();
+    updateOrbit();
+    if (dash.classList.contains('open') && dash.dataset.agent === id) renderDashboard(id);
+  }
+
+  function renderDashboard(id) {
+    const a = AGENTS[id];
+    const s = state[id];
+    document.getElementById('ad-icon').textContent = a.icon;
+    document.getElementById('ad-name').textContent = a.name;
+    document.getElementById('ad-role').textContent = a.role;
+    document.getElementById('ad-status').textContent = s.active ? 'Active' : 'Idle';
+    document.getElementById('ad-task').textContent = s.task ? (s.task.length > 80 ? s.task.slice(0, 80) + '…' : s.task) : '—';
+    document.getElementById('ad-result').textContent = s.lastResult ? (s.lastResult.length > 80 ? s.lastResult.slice(0, 80) + '…' : s.lastResult) : '—';
+    document.getElementById('ad-count').textContent = String(s.uses);
+  }
+
+  function openDashboard(id) {
+    dash.dataset.agent = id;
+    renderDashboard(id);
+    const rect = dots[id].getBoundingClientRect();
+    let left = rect.left + 24, top = rect.top;
+    if (left + 250 > window.innerWidth) left = rect.left - 254;
+    if (top + 180 > window.innerHeight) top = window.innerHeight - 190;
+    dash.style.left = Math.max(8, left) + 'px';
+    dash.style.top = Math.max(8, top) + 'px';
+    dash.classList.add('open');
+  }
+  document.getElementById('agent-dashboard-close').addEventListener('click', () => dash.classList.remove('open'));
+
+  return { activate, deactivate };
+})();
+window.agentRing = agentRing;
+
+const transcriptEl = document.getElementById('transcript');
+const inputEl = document.getElementById('input');
+const sendEl = document.getElementById('send');
+const pendingPanelEl = document.getElementById('pending-panel');
+const pendingBadgeEl = document.getElementById('pending-badge');
+const statusMetaEl = document.getElementById('status-meta');
+
+let turnActive = false;
+let assistantBubble = null;
+
+// --- settings: developer mode + performance mode, persisted locally ------
+const settingsBtn = document.getElementById('settings-btn');
+const settingsPanel = document.getElementById('settings-panel');
+const devToggle = document.getElementById('dev-toggle');
+const perfToggle = document.getElementById('perf-toggle');
+const orbToggle = document.getElementById('orb-toggle');
+const devOverlay = document.getElementById('dev-overlay');
+
+// Default ON for every toggle below (only an explicit '0' turns one off) --
+// user request 2026-08-03: "make all the toggles on". Remembered
+// per-machine same as before; any of these can still be switched off in
+// Settings and it'll stay off next launch.
+// Developer mode is the one toggle NOT defaulted on: it's a debug readout
+// (FPS/state/raw events), not a feature, and it needs a permanent 60fps
+// requestAnimationFrame loop plus an overlay on top of the UI. Given the
+// standing "must not lag at all" requirement it stays off until asked for.
+let devMode = localStorage.getItem('reyes_dev_mode') === '1';
+let perfMode = localStorage.getItem('reyes_perf_mode') !== '0';
+let orbAnimated = localStorage.getItem('reyes_orb_animated') !== '0';
+let lastEvent = null;
+let lastTurnFacts = null; // real per-turn facts for the Explainability panel
+
+const textComposerEl = document.getElementById('text-composer');
+
+devToggle.checked = devMode;
+perfToggle.checked = perfMode;
+orbToggle.checked = orbAnimated;
+devOverlay.classList.toggle('on', devMode);
+orb.setPerformanceMode(perfMode);
+orb.setActive(orbAnimated);  // off -> stops the render loop, static image shows
+orbToggle.addEventListener('change', () => {
+  orbAnimated = orbToggle.checked;
+  localStorage.setItem('reyes_orb_animated', orbAnimated ? '1' : '0');
+  orb.setActive(orbAnimated);
+});
+// REYES is a voice-first second brain, not a text bar -- the typed
+// fallback only shows in developer mode, for debugging without talking.
+textComposerEl.classList.toggle('visible', devMode);
+
+settingsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  settingsPanel.classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  if (!settingsPanel.contains(e.target) && e.target !== settingsBtn) {
+    settingsPanel.classList.remove('open');
+  }
+});
+
+devToggle.addEventListener('change', () => {
+  devMode = devToggle.checked;
+  localStorage.setItem('reyes_dev_mode', devMode ? '1' : '0');
+  devOverlay.classList.toggle('on', devMode);
+  textComposerEl.classList.toggle('visible', devMode);
+  startDevLoop();  // starts if now on; the loop self-stops when off
+});
+
+perfToggle.addEventListener('change', () => {
+  perfMode = perfToggle.checked;
+  localStorage.setItem('reyes_perf_mode', perfMode ? '1' : '0');
+  orb.setPerformanceMode(perfMode);
+});
+
+// Focus Mode: real effects only -- dims the background, hides idle (not
+// active) agent-ring dots via CSS, and force-engages performance mode
+// (remembering whatever perf-mode setting was active before, restored on
+// exit rather than silently overwriting the user's own preference).
+const focusToggle = document.getElementById('focus-toggle');
+let focusMode = false;
+let _prePerfMode = perfMode;
+function setFocusMode(on, persist = true) {
+  focusMode = on;
+  focusToggle.checked = on;
+  document.body.classList.toggle('focus', on);
+  if (on) {
+    _prePerfMode = perfMode;
+    orb.setPerformanceMode(true);
+  } else {
+    orb.setPerformanceMode(_prePerfMode);
+  }
+  if (persist) localStorage.setItem('reyes_focus_mode', on ? '1' : '0');
+}
+focusToggle.addEventListener('change', () => setFocusMode(focusToggle.checked));
+setFocusMode(localStorage.getItem('reyes_focus_mode') !== '0', false);
+
+// --- Explainability panel: real facts about the last turn only -------
+// No confidence score shown -- nothing in this pipeline produces an
+// honest one, and a fabricated number would be worse than omitting it.
+const explainBtn = document.getElementById('explain-btn');
+const explainPanel = document.getElementById('explain-panel');
+function renderExplainPanel() {
+  if (!lastTurnFacts) {
+    explainPanel.innerHTML = '<div class="ex-row">No turn has run yet.</div>';
+    return;
+  }
+  const f = lastTurnFacts;
+  const rows = [
+    ['Model', f.model],
+    ['Agents used', f.agents.length ? f.agents.join(', ') : 'none'],
+    ['Tools used', f.tools.length ? f.tools.join(', ') : 'none'],
+    ['Elapsed', (f.elapsedMs / 1000).toFixed(1) + 's'],
+  ];
+  explainPanel.innerHTML = rows.map(([k, v]) =>
+    `<div class="ex-row"><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`
+  ).join('');
+}
+explainBtn.addEventListener('click', () => {
+  const open = explainPanel.classList.toggle('open');
+  if (open) renderExplainPanel();
+});
+
+// --- Command Palette: Ctrl+Space or Ctrl+K. Every entry is either a
+// direct client-side UI action, or a real message sent through runTurn()
+// -- nothing here bypasses the normal agent/tool/confirmation pipeline.
+const cmdkOverlay = document.getElementById('cmdk-overlay');
+const cmdkInput = document.getElementById('cmdk-input');
+const cmdkList = document.getElementById('cmdk-list');
+function cmdkAsk(promptText) {
+  const q = window.prompt(promptText);
+  if (q && q.trim()) runTurn(q.trim());
+}
+const COMMANDS = [
+  { label: 'Toggle Focus Mode', hint: 'Dim visuals, show only active agents', run: () => setFocusMode(!focusMode) },
+  { label: 'Toggle Mini Mode', hint: 'Shrink to the corner orb', run: () => setMini(!document.body.classList.contains('mini')) },
+  { label: 'Toggle Animated Orb', hint: orbAnimated ? 'Currently on' : 'Currently off', run: () => { orbToggle.checked = !orbToggle.checked; orbToggle.dispatchEvent(new Event('change')); } },
+  { label: 'Toggle Developer Mode', hint: 'FPS, state, raw events', run: () => { devToggle.checked = !devToggle.checked; devToggle.dispatchEvent(new Event('change')); } },
+  { label: 'Open Settings', hint: '', run: () => settingsPanel.classList.add('open') },
+  { label: 'Show what ZENO just did', hint: 'Explainability panel', run: () => { explainPanel.classList.add('open'); renderExplainPanel(); } },
+  { label: 'Open Timeline', hint: 'Everything ZENO has done, from the event record', run: () => openTimeline() },
+  { label: 'Situation Room', hint: 'Everything at once: agents, system, missions, model, events', run: () => openSituation() },
+  { label: 'Knowledge Galaxy', hint: 'Your vault as a map of real links and tags', run: () => openGalaxy() },
+  { label: 'Evolution report', hint: 'What ZENO measured about its own performance', run: () => runTurn('Run an evolution report on yourself.') },
+  { label: 'Agent Monitor', hint: 'Live worker state, heartbeats, queues, metrics', run: () => openAgentMonitor() },
+  { label: 'Executive Meeting', hint: 'Every specialist reports status in its own voice', run: () => runTurn('Hold an executive meeting — every agent reports status.') },
+  { label: 'New mission...', hint: 'Create a tracked long-term goal', run: () => cmdkAsk('Mission name and what success looks like:') },
+  { label: 'List my missions', hint: '', run: () => runTurn('List my active missions.') },
+  { label: 'Search notes...', hint: '', run: () => cmdkAsk('Search your notes for:') },
+  { label: 'Check email', hint: '', run: () => runTurn('Check my email.') },
+  { label: "What's the news?", hint: '', run: () => runTurn("What's the top news right now?") },
+  { label: 'Show approvals', hint: '', run: () => document.getElementById('pending-wrap').scrollIntoView({ behavior: 'smooth' }) },
+];
+let cmdkSel = 0;
+let cmdkFiltered = COMMANDS;
+function cmdkRender() {
+  const q = cmdkInput.value.trim().toLowerCase();
+  cmdkFiltered = q ? COMMANDS.filter((c) => c.label.toLowerCase().includes(q)) : COMMANDS;
+  cmdkSel = Math.min(cmdkSel, Math.max(0, cmdkFiltered.length - 1));
+  if (!cmdkFiltered.length) {
+    cmdkList.innerHTML = '<div id="cmdk-empty">No matching command.</div>';
+    return;
+  }
+  cmdkList.innerHTML = cmdkFiltered.map((c, i) =>
+    `<div class="cmdk-item${i === cmdkSel ? ' sel' : ''}" data-i="${i}"><div>${escapeHtml(c.label)}</div>${c.hint ? `<div class="cmdk-hint">${escapeHtml(c.hint)}</div>` : ''}</div>`
+  ).join('');
+  cmdkList.querySelectorAll('.cmdk-item').forEach((el) => {
+    el.addEventListener('click', () => { cmdkSel = Number(el.dataset.i); cmdkRun(); });
+  });
+}
+function cmdkRun() {
+  const cmd = cmdkFiltered[cmdkSel];
+  cmdkClose();
+  if (cmd) cmd.run();
+}
+function cmdkOpen() {
+  cmdkOverlay.classList.add('open');
+  cmdkInput.value = '';
+  cmdkSel = 0;
+  cmdkRender();
+  setTimeout(() => cmdkInput.focus(), 0);
+}
+function cmdkClose() {
+  cmdkOverlay.classList.remove('open');
+}
+cmdkInput.addEventListener('input', () => { cmdkSel = 0; cmdkRender(); });
+cmdkInput.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); cmdkSel = Math.min(cmdkSel + 1, cmdkFiltered.length - 1); cmdkRender(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); cmdkSel = Math.max(cmdkSel - 1, 0); cmdkRender(); }
+  else if (e.key === 'Enter') { e.preventDefault(); cmdkRun(); }
+  else if (e.key === 'Escape') { e.preventDefault(); cmdkClose(); }
+});
+cmdkOverlay.addEventListener('click', (e) => { if (e.target === cmdkOverlay) cmdkClose(); });
+document.addEventListener('keydown', (e) => {
+  const isPaletteKey = (e.ctrlKey || e.metaKey) && (e.code === 'Space' || e.key === 'k' || e.key === 'K');
+  if (isPaletteKey) {
+    e.preventDefault();
+    if (cmdkOverlay.classList.contains('open')) cmdkClose(); else cmdkOpen();
+  }
+});
+
+const killToggle = document.getElementById('kill-toggle');
+killToggle.addEventListener('change', async () => {
+  const res = await fetch(`/api/kill-switch?killed=${killToggle.checked}`, { method: 'POST' });
+  const data = await res.json();
+  killToggle.checked = data.killed; // reflect what the server actually set
+});
+async function refreshKillSwitch() {
+  try {
+    const res = await fetch('/api/kill-switch');
+    const data = await res.json();
+    killToggle.checked = data.killed;
+  } catch (e) { /* transient -- leave the toggle as-is */ }
+}
+
+// Hand-gesture control -- loaded on demand (privacy: webcam only runs when
+// this is on). gesture.js is imported lazily so a load failure can't touch
+// the rest of the app.
+const gestureToggle = document.getElementById('gesture-toggle');
+const gestureSub = document.getElementById('gesture-sub');
+const mouseToggle = document.getElementById('mouse-toggle');
+const mouseSub = document.getElementById('mouse-sub');
+const cameraSelect = document.getElementById('camera-select');
+let gestureMod = null;
+async function loadGestureMod() {
+  if (!gestureMod) gestureMod = await import('/static/gesture.js');
+  return gestureMod;
+}
+// After the first enable (camera permission granted), populate the camera list.
+async function refreshCameras() {
+  try {
+    const mod = await loadGestureMod();
+    const cams = await mod.listCameras();
+    if (!cams.length) return;
+    const cur = cameraSelect.value;
+    cameraSelect.innerHTML = '<option value="">Default</option>' +
+      cams.map((c, i) => `<option value="${c.deviceId}">${c.label || ('Camera ' + (i+1))}</option>`).join('');
+    cameraSelect.value = cur;
+  } catch (e) {}
+}
+gestureToggle.addEventListener('change', async () => {
+  localStorage.setItem('zeno_gestures_on', gestureToggle.checked ? '1' : '0');
+  if (gestureToggle.checked) gestureSub.textContent = 'starting camera…';
+  try {
+    const mod = await loadGestureMod();
+    const ok = await mod.enableGestureActions(gestureToggle.checked, (m) => { gestureSub.textContent = m; });
+    if (gestureToggle.checked && !ok) { gestureToggle.checked = false; localStorage.setItem('zeno_gestures_on', '0'); }
+    else if (gestureToggle.checked) refreshCameras();
+    else gestureSub.textContent = 'Webcam: ✋ play/pause, 👍 vol up, 👎 down, ✊ mute, ✌️ next';
+  } catch (e) { gestureSub.textContent = 'unavailable: ' + (e.message || e); gestureToggle.checked = false; }
+});
+mouseToggle.addEventListener('change', async () => {
+  localStorage.setItem('zeno_mouse_control_on', mouseToggle.checked ? '1' : '0');
+  if (mouseToggle.checked) mouseSub.textContent = 'starting camera…';
+  try {
+    const mod = await loadGestureMod();
+    const ok = await mod.enableMouseControl(mouseToggle.checked, (m) => { mouseSub.textContent = m; });
+    if (mouseToggle.checked && !ok) { mouseToggle.checked = false; localStorage.setItem('zeno_mouse_control_on', '0'); }
+    else if (mouseToggle.checked) refreshCameras();
+    else mouseSub.textContent = 'Move cursor with your index finger, pinch to click';
+  } catch (e) { mouseSub.textContent = 'unavailable: ' + (e.message || e); mouseToggle.checked = false; }
+});
+cameraSelect.addEventListener('change', async () => {
+  localStorage.setItem('zeno_camera_device', cameraSelect.value || '');
+  try { const mod = await loadGestureMod(); await mod.setCameraDevice(cameraSelect.value, (m) => { gestureSub.textContent = m; }); } catch (e) {}
+});
+
+// Restore whatever was on last session -- "already active" instead of
+// making the user re-enable webcam features via Settings every launch.
+// Fires after a short delay so it doesn't compete with the rest of
+// startup (voice init, orb init) for the very first paint.
+// Camera/gesture settings remain available, but never auto-resume. A saved
+// preference must be explicitly re-enabled from Settings in this mode.
+gestureToggle.checked = false;
+mouseToggle.checked = false;
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+// Hidden bookkeeping node ONLY (transcript is display:none) -- kept so
+// the streaming-text-accumulation logic below still has a real element
+// to mutate; the VISIBLE HUD is driven separately by showCaption().
+function addMessage(role, text) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  el.textContent = text;
+  transcriptEl.appendChild(el);
+  return el;
+}
+
+let captionFadeTimer = null;
+function showCaption(text, cls) {
+  const capText = document.getElementById('caption-text');
+  if (!text || !text.trim()) return;
+  capText.textContent = text;
+  capText.className = cls || '';
+  // reflow so the fade-in transition actually plays on repeated calls
+  void capText.offsetWidth;
+  capText.classList.add('show');
+  if (captionFadeTimer) clearTimeout(captionFadeTimer);
+  captionFadeTimer = setTimeout(() => capText.classList.remove('show'), 9000);
+}
+
+// Human-readable "what REYES is doing" so the panel shows the work live,
+// instead of the user having to open Obsidian to see what happened.
+function friendlyTool(name, input) {
+  input = input || {};
+  const s = (v, n) => (v ? " " + (String(v).length > (n||42) ? String(v).slice(0,(n||42))+"…" : v) : "");
+  const M = {
+    write_note:            ['📝', "Writing note" + (input.title ? " '"+input.title+"'" : "")],
+    write_project_file:    ['📁', "Creating file" + s(input.filename, 40)],
+    list_project_files:    ['📁', "Listing project files"],
+    search_notes:          ['🔍', "Searching your notes" + (input.query ? " for '"+input.query+"'" : "")],
+    list_notes:            ['🔍', "Looking through your notes"],
+    create_canvas:         ['🧩', "Building a canvas"],
+    generate_image:        ['🎨', "Generating an image" + (input.prompt ? ":"+s(input.prompt,44) : "")],
+    take_screenshot:       ['🖥️', "Looking at your screen"],
+    take_webcam_photo:     ['📷', "Looking through the webcam"],
+    check_email:           ['📧', "Checking your email"],
+    read_email:            ['📧', "Reading an email"],
+    web_search:            ['🌐', "Searching the web" + (input.query ? " for '"+input.query+"'" : "")],
+    get_news:              ['📰', "Getting the news" + (input.topic ? " about "+input.topic : "")],
+    show_map:              ['🗺️', "Showing a map" + (input.location ? " of "+input.location : "")],
+    open_app:              ['🚀', "Opening" + s(input.name_or_path, 30)],
+    open_path:             ['📂', "Opening" + s(input.path, 40)],
+    run_command:           ['⌨️', "Running a command"],
+    media_control:         ['🎵', "Media " + (input.action || "")],
+    set_volume:            ['🔊', "Setting volume" + (input.level != null ? " to "+input.level : "")],
+    set_mic_level:         ['🎙️', "Adjusting the mic"],
+    lock_screen:           ['🔒', "Locking the screen"],
+    read_clipboard:        ['📋', "Reading the clipboard"],
+    write_clipboard:       ['📋', "Copying to clipboard"],
+    remember:              ['🧠', "Remembering that"],
+    list_memories:         ['🧠', "Recalling what I know"],
+    add_calendar_event:    ['📅', "Adding to your calendar" + (input.title ? ": "+input.title : "")],
+    list_calendar_events:  ['📅', "Checking your calendar"],
+    schedule_check:        ['⏰', "Setting up a check"],
+    track_work:            ['💼', "Tracking" + s(input.title, 40)],
+    list_work:             ['💼', "Reviewing your pipeline"],
+    send_slack_message:    ['💬', "Preparing a Slack message"],
+    send_telegram_message: ['✈️', "Preparing a Telegram message"],
+    delegate:              ['🤝', "Handing off to the " + (input.specialist || "") + " specialist"],
+    daily_activity_summary:['📊', "Reviewing your day"],
+    current_activity:      ['📊', "Checking what you're on"],
+    get_datetime:          ['🕐', "Checking the time"],
+    list_capabilities:     ['✨', "Listing what I can do"],
+  };
+  return M[name] || ['⚙️', name.replace(/_/g, ' ')];
+}
+
+// Maps a tool to a REAL, distinct orb visual state (see orb.js's STATES)
+// instead of one generic "processing" spinner for everything -- so the
+// orb visibly communicates WHAT kind of work is happening, not just that
+// something is. Falls back to 'processing' for anything uncategorized.
+function orbStateForTool(name) {
+  const groups = {
+    searching: ['web_search', 'search_notes', 'list_notes', 'search_vault_semantic', 'get_news', 'show_map', 'check_email', 'read_email'],
+    coding: ['write_project_file', 'list_project_files', 'run_command', 'create_3d_model'],
+    creating: ['generate_image', 'write_note', 'create_canvas', 'create_database_view'],
+    communicating: ['send_slack_message', 'send_telegram_message', 'media_control'],
+    learning: ['remember', 'list_memories', 'reindex_vault', 'track_work', 'list_work'],
+    reasoning: ['delegate', 'daily_activity_summary'],
+  };
+  for (const [state, names] of Object.entries(groups)) {
+    if (names.includes(name)) return state;
+  }
+  return 'processing';
+}
+
+// Activity ticker: floating pills near the orb showing what's happening
+// RIGHT NOW -- not a growing chat-style list. Each pill fades itself out
+// a few seconds after completing, so the ticker stays a live status
+// readout, never a scrollback log.
+const tickerEl = document.getElementById('activity-ticker');
+function addToolChip(name, input) {
+  const [icon, label] = friendlyTool(name, input);
+  const el = document.createElement('div');
+  el.className = 'tool-chip';
+  el.innerHTML = '<span class="tc-ico"></span> <span class="tc-label"></span> <span class="tc-status">…</span>';
+  el.querySelector('.tc-ico').textContent = icon;
+  el.querySelector('.tc-label').textContent = label;
+  tickerEl.appendChild(el);
+  return el;
+}
+
+// When a tool finishes, mark its chip done, briefly show visual outputs
+// (generated images, screenshots) right there so the user never has to
+// go dig them out of the vault, then fade the whole pill away.
+function finishActivityChip(el, name, result) {
+  if (!el) return;
+  const status = el.querySelector('.tc-status');
+  if (status) status.textContent = '✓';
+  el.classList.add('done');
+  const m = (result || '').match(/([^\\\/]+\.(?:jpg|jpeg|png))/i);
+  if (m && (name === 'generate_image' || name === 'take_screenshot' || name === 'take_webcam_photo')) {
+    const img = document.createElement('img');
+    img.className = 'tc-thumb';
+    img.src = '/captures/' + m[1];
+    img.alt = name;
+    tickerEl.appendChild(img);
+    setTimeout(() => img.remove(), 12000);
+  }
+  setTimeout(() => el.remove(), 3500);
+}
+
+// Task Execution Engine stage indicator -- one word naming whichever
+// pipeline step (planning/delegating/acting/verifying/responding) the
+// backend just entered. Purely a label; the orb state + ticker chips
+// already carry the real visual weight.
+const stageEl = document.getElementById('stage-label');
+let stageFadeTimer = null;
+const STAGE_LABELS = {
+  planning: 'Planning',
+  delegating: 'Selecting agents',
+  acting: 'Acting',
+  verifying: 'Verifying',
+  responding: 'Responding',
+};
+function setStage(stage) {
+  if (!stageEl) return;
+  stageEl.textContent = STAGE_LABELS[stage] || stage;
+  stageEl.classList.add('show');
+  clearTimeout(stageFadeTimer);
+  stageFadeTimer = setTimeout(() => stageEl.classList.remove('show'), 4000);
+}
+
+function updateIdleListenState() {
+  if (turnActive) return;
+  orb.setState(inputEl.value.trim() ? 'listening' : 'idle');
+}
+inputEl.addEventListener('input', updateIdleListenState);
+inputEl.addEventListener('focus', updateIdleListenState);
+inputEl.addEventListener('blur', () => { if (!turnActive) orb.setState('idle'); });
+
+// The one shared turn-runner: text composer, wake-word capture, and any
+// future input path all funnel through this, so "REYES always talks
+// back" is true everywhere, not just on whichever path someone tested.
+async function runTurn(text) {
+  if (!text || turnActive) return;
+  turnActive = true;
+  sendEl.disabled = true;
+  inputEl.disabled = true;
+  inputEl.placeholder = 'ZENO is thinking...';
+  addMessage('user', text);
+  showCaption(text, 'user-line'); // live caption of what the user just said, HUD-style
+  orb.setState('processing');
+  orb.pulse();
+  assistantBubble = null;
+  const thinkingBubble = addMessage('assistant', 'thinking…');
+
+  // Declared here, above try/catch/finally, on purpose -- a let/const
+  // declared *inside* a try block is out of scope inside its own finally
+  // block (real JS behavior, not a style nit: `try { let x=1 } finally {
+  // use(x) }` throws ReferenceError). That was silently breaking every
+  // turn's cleanup before this fix -- finally's later lines (setMini(false),
+  // turnActive = false, ...) never ran once the ReferenceError hit,
+  // permanently wedging the composer.
+  let sawText = false;
+  let fullReply = '';
+  const dispatchedAgents = new Set();
+  // Keyed by tool_call id, not a single "last" chip -- with parallel
+  // delegate() calls, several 'tool' events can arrive before any
+  // 'tool_result' comes back, and results resolve out of order as each
+  // specialist finishes. A single shared variable would lose every chip
+  // but the most recent one the moment two specialists run at once.
+  const openChips = new Map();
+  // tool_result events only carry a name+result, not which specialist --
+  // remembered here from the matching 'tool' event so the Agent Ring can
+  // deactivate the right dot even when several are active at once.
+  const callIdToAgent = new Map();
+  // Real per-turn facts for the Explainability panel -- everything here
+  // is something that actually happened this turn, nothing estimated.
+  const toolsUsedThisTurn = [];
+  const turnStartMs = Date.now();
+
+  try {
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    });
+    if (!res.ok || !res.body) {
+      thinkingBubble.remove();
+      addMessage('error', 'Could not reach ZENO (HTTP ' + res.status + ').');
+      showCaption('Could not reach ZENO (HTTP ' + res.status + ').', 'error-line');
+      orb.setState('error');
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const evt = JSON.parse(line.slice(6));
+        lastEvent = evt;
+        if (evt.type === 'stage') {
+          setStage(evt.stage);
+        } else if (evt.type === 'tool') {
+          setMini(true);  // real work started -> shrink to the corner orb
+          if (window.zenoCompanion) window.zenoCompanion.setWorking(true);  // mission ring on
+          const [ico, lbl] = friendlyTool(evt.name, evt.input);
+          thinkingBubble.textContent = ico + ' ' + lbl + '...';
+          orb.setState(orbStateForTool(evt.name));
+          openChips.set(evt.id, addToolChip(evt.name, evt.input));
+          toolsUsedThisTurn.push(evt.name);
+          if (evt.name === 'delegate' && evt.input && evt.input.specialist) {
+            const agentId = evt.input.specialist;
+            dispatchedAgents.add(agentId);
+            orb.dispatchAgent(agentId);
+            orb.setAgentWorking(agentId, true);
+            callIdToAgent.set(evt.id, agentId);
+            if (window.agentRing) window.agentRing.activate(agentId, evt.input.task || '');
+          }
+        } else if (evt.type === 'tool_result') {
+          finishActivityChip(openChips.get(evt.id), evt.name, evt.result);
+          openChips.delete(evt.id);
+          if (openChips.size === 0) orb.setState('processing');
+          if (callIdToAgent.has(evt.id) && window.agentRing) {
+            window.agentRing.deactivate(callIdToAgent.get(evt.id), evt.result || '');
+            callIdToAgent.delete(evt.id);
+          }
+        } else if (evt.type === 'text') {
+          if (!sawText) {
+            sawText = true;
+            thinkingBubble.textContent = '';
+            assistantBubble = thinkingBubble; // reuse the same bubble, no flash/jump
+            orb.setState('speaking');
+          }
+          assistantBubble.textContent += evt.text;
+          fullReply += evt.text;
+          showCaption(fullReply, ''); // live caption grows as the reply streams in
+        } else if (evt.type === 'error') {
+          thinkingBubble.remove();
+          addMessage('error', evt.message);
+          showCaption(evt.message, 'error-line');
+          orb.setState('error');
+        } else if (evt.type === 'done') {
+          // handled after the loop
+        }
+      }
+    }
+    if (!sawText) {
+      thinkingBubble.remove(); // tool ran but no final text (e.g. error path already handled it)
+    } else {
+      speakInBrowser(fullReply); // REYES always talks back, on every path
+    }
+    refreshPending();
+  } catch (e) {
+    thinkingBubble.remove();
+    addMessage('error', 'Connection lost: ' + e);
+    orb.setState('error');
+  } finally {
+    dispatchedAgents.forEach((agentId) => orb.setAgentWorking(agentId, false));
+    if (window.zenoCompanion) window.zenoCompanion.setWorking(false);  // mission ring off
+    setMini(false);  // work done -> pop back to full size with the answer
+    turnActive = false;
+    sendEl.disabled = false;
+    inputEl.disabled = false;
+    inputEl.placeholder = 'Talk to ZENO...';
+    setTimeout(() => { if (!turnActive) updateIdleListenState(); }, 600);
+    lastTurnFacts = {
+      model: (lastStatus && lastStatus.provider) || 'unknown',
+      agents: Array.from(dispatchedAgents),
+      tools: toolsUsedThisTurn,
+      elapsedMs: Date.now() - turnStartMs,
+    };
+    if (document.getElementById('explain-panel').classList.contains('open')) renderExplainPanel();
+  }
+}
+
+async function sendMessage() {
+  const text = inputEl.value.trim();
+  inputEl.value = '';
+  await runTurn(text);
+  inputEl.focus();
+}
+
+sendEl.addEventListener('click', sendMessage);
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+// --- voice: always listening for a wake word, no button per turn --------
+// Uses the browser's own continuous speech recognition (Web Speech API) --
+// not a click-to-record loop, and not our Deepgram endpoint -- so REYES
+// can listen at zero marginal cost per phrase and react the instant a
+// wake word is heard, matching wake_cli.py's desktop behavior but inside
+// the browser tab. TTS is also IN THE BROWSER (Web Speech API), not on
+// the server: this panel might be open from a phone on the LAN, and
+// server-side SAPI/ElevenLabs audio plays on the server's own speakers,
+// not the remote browser's.
+//
+// No button: mic permission grants persist per-origin once given, so on
+// every visit after the first, this checks the Permissions API and
+// starts listening on its own -- open the browser, say "Zeno", done.
+// The one thing no code can route around: a brand-new-ever browser
+// profile that has NEVER granted mic access requires one real click
+// somewhere, because that's a browser security policy, not a REYES
+// choice -- the small dot below becomes that one-time click target only
+// in that specific case, then disappears back into being just a status
+// light.
+//
+// Honest limitation: recognition is paused while REYES is speaking (to
+// avoid hearing itself) and resumes right after -- so unlike push-to-talk
+// mode, you can't interrupt REYES mid-sentence by voice here. Browser
+// speech-recognition support also varies (solid in Chrome/Edge/the
+// desktop app's WebView2, patchy or absent in some mobile browsers); if
+// it's unsupported, the status will say so plainly rather than silently
+// doing nothing.
+const micIndicator = document.getElementById('mic-indicator');
+const micStatusEl = document.getElementById('mic-status');
+// Longest phrase first -- "hello bro" must be tried before "bro" alone,
+// or "bro" matches inside it first and strands "hello" in the remainder.
+const WAKE_WORDS = ['wake up zeno', 'zeno', 'hey zeno', 'bro'].sort((a, b) => b.length - a.length);
+
+const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let ambientEnabled = false;
+let awaitingCommand = false;
+let recognitionShouldRun = false;
+
+// Chrome/Edge/WebView2 expose the OS's higher-quality "Online (Natural)"
+// neural voices alongside the flat default ones, but only via this list
+// -- and it loads asynchronously, sometimes after first render. Cache the
+// pick once voices are available instead of re-searching on every line,
+// preferring an online/natural English voice over the robotic offline
+// default so REYES actually sounds like someone talking, not a screen
+// reader.
+// ElevenLabs is the ONLY voice in this build (user, 2026-08-05).
+// The browser's Web Speech synthesis voice has been removed entirely --
+// it was the "dual voice": a failed or slow /api/tts made the panel speak
+// the same line in a different, robotic voice, sometimes overlapping the
+// ElevenLabs audio that arrived a moment later. Keeping a fallback voice
+// around at all invites that back, so there is no longer one to call.
+//
+// Audio is fetched from the server and played HERE rather than on the
+// server's speakers, because this panel may be open on a phone over LAN
+// and the sound has to reach whichever device is actually being used.
+//
+// speechSynthesis.cancel() is still called before speaking, purely to
+// silence anything a previous build may have left queued.
+let serverTtsAvailable = true;
+const _ttsAudioEl = new Audio();
+
+async function speakInBrowser(text) {
+  if (!text) return;
+  // Remembered so the persistent-listening loop can discard its own voice
+  // coming back through the mic (see looksLikeSelfEcho). recognition.stop()
+  // below already helps, but speakers keep playing after it restarts.
+  lastSpokenText = text;
+  if (recognition) recognition.stop(); // don't let REYES hear itself talk
+  window.speechSynthesis.cancel();
+  _ttsAudioEl.pause();
+
+  // ElevenLabs ONLY (user, 2026-08-05: "fix that dual voice issue,
+  // elevenlabs only please"). The old browser-voice fallback was the dual
+  // voice: on a slow or failed /api/tts the Web Speech API spoke the same
+  // line in a completely different voice, sometimes overlapping the
+  // ElevenLabs audio that arrived a moment later. There is now no second
+  // voice anywhere in this build -- if ElevenLabs can't speak, ZENO stays
+  // silent and the caption carries the reply.
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, agent: 'zeno' }),
+    });
+    if (res.ok) {
+      const url = URL.createObjectURL(await res.blob());
+      _ttsAudioEl.src = url;
+      orb.setState('speaking');
+      await new Promise((resolve) => {
+        _ttsAudioEl.onended = resolve;
+        _ttsAudioEl.onerror = resolve;
+        _ttsAudioEl.play().catch(resolve);
+      });
+      URL.revokeObjectURL(url);
+    } else if (res.status === 503) {
+      serverTtsAvailable = false;
+      micStatusEl.textContent = 'Voice unavailable — ElevenLabs not configured';
+    }
+  } catch (e) {
+    // Network hiccup: stay silent rather than switching voice mid-sentence.
+  }
+  if (!turnActive) orb.setState('idle');
+  if (recognitionShouldRun && recognition) {
+    try { recognition.start(); } catch (e) { /* already running */ }
+  }
+}
+
+// Heuristic, not real NLU: distinguishes "Zeno, open Chrome" (addressing
+// it) from "my assistant Zeno is fast" (talking ABOUT it) by checking
+// what comes immediately before the name. A possessive/article right
+// before it ("my zeno", "the zeno", "our zeno") means it's being
+// referred to, not addressed -- don't wake on those. Anything else
+// (start of sentence, after a comma, after "hey/yo/okay/morning", etc.)
+// wakes normally. This can't be perfect without a real classifier, but
+// it kills the most common false-positive pattern for free.
+const MENTION_PRECEDERS = ['my', 'the', 'our', 'his', 'her', 'their', 'a', 'an'];
+function isJustMentioned(text, hitStart) {
+  const before = text.slice(0, hitStart).trim().toLowerCase();
+  const words = before.split(/\s+/).filter(Boolean).map((w) => w.replace(/[.,!?]/g, ''));
+  if (!words.length) return false; // name is the first word -- definitely addressing it
+  // Check the last TWO words, not just one -- catches "my assistant Zeno"
+  // as well as bare "my Zeno", since a noun often sits between the
+  // possessive and the name. Genuinely honest limit: this still can't
+  // catch a determiner-free mention like "I think Zeno can help" --
+  // that needs real intent classification, not a word-lookback regex,
+  // and a false wake there just gets an odd-but-harmless reply anyway
+  // (nothing consequential fires without the separate confirmation gate).
+  const lastTwo = words.slice(-2);
+  return lastTwo.some((w) => MENTION_PRECEDERS.includes(w));
+}
+
+function findWakeWord(text) {
+  const lower = text.toLowerCase();
+  for (const word of WAKE_WORDS) {
+    const re = new RegExp('\\b' + word.replace(/ /g, '\\s+') + '\\b', 'i');
+    const m = re.exec(lower);
+    if (m && !isJustMentioned(text, m.index)) return { word, start: m.index, end: m.index + m[0].length };
+  }
+  return null;
+}
+
+// --- Advanced listening: long-form capture + correction handling ---------
+// The browser's speech API fires a separate "final" result every time it
+// detects a short pause -- treating each one as a complete command means
+// "Open Chrome... actually, open Edge" would fire on "Open Chrome" before
+// the correction is even heard. Instead: buffer finalized fragments and
+// wait for a real settle window (SETTLE_MS of silence) before treating the
+// combined text as one finished thought -- and if the person corrected
+// themselves mid-thought ("actually...", "no wait...", "I mean..."),
+// resolve to what they said AFTER the correction, not the whole thing.
+const SETTLE_MS = 1100;
+const CORRECTION_MARKERS = ['actually', 'scratch that', 'i mean', 'no wait', 'wait no', 'no, i mean'];
+let listenBuffer = '';
+let settleTimer = null;
+
+function resolveCorrections(text) {
+  const lower = text.toLowerCase();
+  let bestIdx = -1, bestLen = 0;
+  for (const marker of CORRECTION_MARKERS) {
+    const idx = lower.lastIndexOf(marker);
+    // idx > 0 (not at the very start) means there's real content before
+    // it that the correction is superseding.
+    if (idx > 0 && idx > bestIdx) { bestIdx = idx; bestLen = marker.length; }
+  }
+  if (bestIdx === -1) return text;
+  const after = text.slice(bestIdx + bestLen).replace(/^[,.\s]+/, '');
+  return after || text; // never resolve to an empty instruction
+}
+
+function noteSpeechFragment(chunk) {
+  listenBuffer = (listenBuffer + ' ' + chunk).trim();
+  if (listenBuffer.length > 12 && !turnActive) {
+    micStatusEl.textContent = 'Zeno is listening...';
+  }
+  if (settleTimer) clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    const combined = resolveCorrections(listenBuffer);
+    listenBuffer = '';
+    settleTimer = null;
+    handleHeard(combined);
+  }, SETTLE_MS);
+}
+
+// --- Persistent Listening ---------------------------------------------
+// Previously: wake -> run ONE command -> back to sleep, wake word needed
+// again every single time. Now the wake word opens a session that STAYS
+// open across as many commands as the user wants, and only an explicit
+// standby phrase closes it.
+let listeningMode = false;
+const STANDBY_PHRASES = [
+  'zeno standby', 'standby zeno', 'standby', 'go to sleep', 'sleep now',
+  'stop listening', 'goodbye zeno', 'goodbye',
+];
+// What ZENO last said out loud. The speakers feed straight back into the
+// mic, so without this ZENO hears its own reply and treats it as the next
+// command -- a self-trigger loop, and the single most likely way
+// persistent listening goes wrong.
+let lastSpokenText = '';
+function looksLikeSelfEcho(text) {
+  if (!lastSpokenText) return false;
+  const said = lastSpokenText.toLowerCase().replace(/[^a-z0-9 ]/g, '');
+  const heard = text.toLowerCase().replace(/[^a-z0-9 ]/g, '');
+  if (heard.length < 4) return false;
+  return said.includes(heard) || heard.includes(said.slice(0, 40));
+}
+
+// Exposed for the dev overlay and for testing the listening rules without
+// having to speak at the machine (same pattern as window.agentRing).
+window.zenoVoice = {
+  isStandbyPhrase: (t) => isStandbyPhrase(t),
+  looksLikeSelfEcho: (t) => looksLikeSelfEcho(t),
+  setLastSpoken: (t) => { lastSpokenText = t; },
+  get listening() { return listeningMode; },
+};
+
+function setListeningUi(state) {
+  if (state === 'listening') {
+    micStatusEl.textContent = 'Listening — just talk, no wake word needed';
+    if (!turnActive) orb.setState('listening');
+  } else if (state === 'standby') {
+    micStatusEl.textContent = 'Standing by — say "Zeno" to wake me';
+    if (!turnActive) orb.setState('idle');
+  }
+}
+
+function isStandbyPhrase(text) {
+  const t = text.toLowerCase().replace(/[^a-z ]/g, '').trim();
+  return STANDBY_PHRASES.some((p) => t === p || t.endsWith(' ' + p) || t.startsWith(p + ' '));
+}
+
+async function handleHeard(transcript) {
+  transcript = transcript.trim();
+  if (!transcript || turnActive) return;
+  if (looksLikeSelfEcho(transcript)) return;  // ZENO hearing itself
+
+  // Standby works whenever a session is open, wake word or not.
+  if ((listeningMode || awaitingCommand) && isStandbyPhrase(transcript)) {
+    listeningMode = false;
+    awaitingCommand = false;
+    speakInBrowser('Standing by.');
+    setListeningUi('standby');
+    return;
+  }
+
+  // Session already open -> treat anything heard as the next command and
+  // STAY open afterwards. This is the actual fix: no return to sleep.
+  if (awaitingCommand || listeningMode) {
+    awaitingCommand = false;
+    listeningMode = true;
+    await runTurn(transcript);
+    setListeningUi('listening');
+    return;
+  }
+
+  const hit = findWakeWord(transcript);
+  if (!hit) return; // heard something, not a wake word -- stay quiet, keep listening
+
+  listeningMode = true;  // session opens here and stays open
+  const remainder = (transcript.slice(0, hit.start) + transcript.slice(hit.end)).trim();
+  if (remainder) {
+    await runTurn(remainder); // wake word + command in one breath
+  } else {
+    speakInBrowser("I'm listening.");
+  }
+  setListeningUi('listening');
+}
+
+function startAmbientListening() {
+  if (!SpeechRecognitionCtor) {
+    micStatusEl.textContent = 'This browser doesn\'t support always-on voice -- try Chrome or Edge.';
+    return;
+  }
+  recognition = new SpeechRecognitionCtor();
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.lang = 'en-US';
+
+  recognition.onresult = (event) => {
+    const last = event.results[event.results.length - 1];
+    if (last.isFinal) noteSpeechFragment(last[0].transcript);
+  };
+  recognition.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'permission-denied') {
+      micStatusEl.textContent = 'Mic permission denied -- allow microphone access to talk to REYES.';
+      recognitionShouldRun = false;
+      ambientEnabled = false;
+      micIndicator.classList.remove('listening');
+      micIndicator.classList.add('needs-permission');
+    }
+    // 'no-speech' fires constantly during normal silence -- not an error worth surfacing.
+  };
+  recognition.onend = () => {
+    // Browsers auto-stop recognition after a period; restart to stay
+    // "always listening" as long as the user hasn't muted it.
+    if (recognitionShouldRun) recognition.start();
+  };
+
+  recognitionShouldRun = true;
+  recognition.start();
+  ambientEnabled = true;
+  micIndicator.classList.remove('needs-permission');
+  micIndicator.classList.add('listening');
+  micStatusEl.textContent = 'Always listening -- say "Zeno"...';
+  orb.setState('idle');
+}
+
+function stopAmbientListening() {
+  recognitionShouldRun = false;
+  if (recognition) recognition.stop();
+  ambientEnabled = false;
+  micIndicator.classList.remove('listening');
+  micStatusEl.textContent = 'Muted -- click the dot to listen again';
+}
+
+micIndicator.addEventListener('click', () => {
+  if (ambientEnabled) stopAmbientListening();
+  else startAmbientListening();
+});
+
+// Auto-start the moment permission already exists (every visit after the
+// first) -- no click, no button, matches "open the browser and just talk."
+(async function initVoice() {
+  if (!SpeechRecognitionCtor) {
+    micStatusEl.textContent = 'This browser doesn\'t support always-on voice -- try Chrome or Edge.';
+    return;
+  }
+  if (!navigator.permissions || !navigator.permissions.query) {
+    // No Permissions API to check ahead of time -- fall back to a single
+    // required tap, the unavoidable browser-security case.
+    micIndicator.classList.add('needs-permission');
+    micStatusEl.textContent = 'Click the dot once to enable "Zeno" / "Wake up Zeno" / "Bro"';
+    return;
+  }
+  try {
+    const status = await navigator.permissions.query({ name: 'microphone' });
+    if (status.state === 'granted') {
+      startAmbientListening();
+    } else {
+      micIndicator.classList.add('needs-permission');
+      micStatusEl.textContent = 'Click the dot once to enable "Zeno" / "Wake up Zeno" / "Bro"';
+    }
+  } catch (e) {
+    micIndicator.classList.add('needs-permission');
+    micStatusEl.textContent = 'Click the dot once to enable "Zeno" / "Wake up Zeno" / "Bro"';
+  }
+})();
+
+// Phone Companion pairing info -- fetched once on load so Settings always
+// shows the current LAN URL + code without the user needing to find it
+// any other way (see reyes_agent/config.py's PHONE_PAIR_TOKEN and
+// static/phone.html).
+fetch('/api/phone/pair-info').then((r) => r.json()).then((info) => {
+  const el = document.getElementById('phone-pair-info');
+  if (el) el.textContent = info.lan_url + '  ·  code: ' + info.token;
+}).catch(() => {
+  const el = document.getElementById('phone-pair-info');
+  if (el) el.textContent = 'Unavailable right now.';
+});
+
+// Desktop notifications are announced out loud server-side (SAPI, so it
+// still works even with this tab unfocused) -- this stream doesn't
+// re-speak that. It only arms the browser to treat the user's very next
+// utterance as a direct reply, no wake word needed, matching "REYES
+// should ask what to reply with, and he should just say it." Only arms
+// if already listening -- a muted mic stays muted, this doesn't override it.
+if (!!window.EventSource) {
+  const notifSource = new EventSource('/api/notification-events');
+  notifSource.onmessage = (evt) => {
+    let data;
+    try {
+      data = JSON.parse(evt.data);
+    } catch (e) {
+      return;
+    }
+    if (data.type === 'notification' && recognitionShouldRun) {
+      awaitingCommand = true;
+      micStatusEl.textContent = 'Waiting for your reply to ' + data.app + '...';
+    } else if (data.type === 'show_map' && data.embed_url) {
+      const frame = document.getElementById('map-frame');
+      document.getElementById('map-overlay-title').textContent = data.location || 'Map';
+      frame.src = data.embed_url;
+      document.getElementById('map-overlay').classList.add('open');
+    } else if (data.type === 'roll_call' && Array.isArray(data.sequence)) {
+      playRollCall(data.sequence);
+    } else if (data.type === 'workspace_code') {
+      openCodeWorkspace(data);
+    } else if (data.type === 'workspace_news') {
+      openNewsWorkspace(data);
+    }
+  };
+}
+
+const _mapClose = document.getElementById('map-overlay-close');
+if (_mapClose) {
+  _mapClose.addEventListener('click', () => {
+    document.getElementById('map-overlay').classList.remove('open');
+    document.getElementById('map-frame').src = '';  // stop it loading in the background
+  });
+}
+
+// Coding workspace: opens the moment write_project_file runs (see
+// tools/projects.py), showing the project's file list, which file just
+// changed, and its actual content -- "visualize the work" instead of only
+// describing it in the caption. No build/test/deploy status shown here
+// deliberately: those tools don't exist, and a progress bar for work that
+// isn't happening would be a fake status, not a visualization.
+function openCodeWorkspace(data) {
+  document.getElementById('code-overlay-title').textContent = 'Coding Workspace — ' + (data.project || '');
+  document.getElementById('code-overlay-current').textContent = 'Editing ' + (data.file || '');
+  document.getElementById('code-overlay-code').textContent = data.content || '';
+  const filesEl = document.getElementById('code-overlay-files');
+  filesEl.innerHTML = '';
+  (data.files || []).forEach((f) => {
+    const row = document.createElement('div');
+    row.className = 'ws-file' + (f === data.file ? ' active' : '');
+    row.textContent = f;
+    filesEl.appendChild(row);
+  });
+  document.getElementById('code-overlay').classList.add('open');
+}
+const _codeClose = document.getElementById('code-overlay-close');
+if (_codeClose) {
+  _codeClose.addEventListener('click', () => document.getElementById('code-overlay').classList.remove('open'));
+}
+
+// News workspace: opens when get_news runs, rendering headlines as a real
+// readable/clickable panel (each links to the actual article) instead of
+// only the spoken/captioned summary.
+function openNewsWorkspace(data) {
+  document.getElementById('news-overlay-title').textContent = data.topic || 'News Workspace';
+  const body = document.getElementById('news-overlay-body');
+  body.innerHTML = '';
+  (data.headlines || []).forEach((h) => {
+    const a = document.createElement('a');
+    a.className = 'ws-headline';
+    a.href = h.link || '#';
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    const title = document.createElement('span');
+    title.textContent = h.title || '';
+    a.appendChild(title);
+    if (h.source) {
+      const src = document.createElement('span');
+      src.className = 'ws-source';
+      src.textContent = h.source;
+      a.appendChild(src);
+    }
+    body.appendChild(a);
+  });
+  document.getElementById('news-overlay').classList.add('open');
+}
+const _newsClose = document.getElementById('news-overlay-close');
+if (_newsClose) {
+  _newsClose.addEventListener('click', () => document.getElementById('news-overlay').classList.remove('open'));
+}
+
+// --- Agent roll call --------------------------------------------------
+// Plays a sequence of lines, each through /api/tts with its own agent so
+// every specialist speaks in its assigned ElevenLabs voice. Sequential by
+// construction -- awaiting each clip's 'ended' event -- because twelve
+// overlapping voices is noise, not a roll call. Mic is paused throughout
+// so ZENO doesn't transcribe its own team.
+let rollCallActive = false;
+async function playRollCall(sequence) {
+  if (rollCallActive || !Array.isArray(sequence) || !sequence.length) return;
+  rollCallActive = true;
+  const wasListening = recognitionShouldRun;
+  try { if (recognition) recognition.stop(); } catch (e) {}
+  try {
+    for (const step of sequence) {
+      if (!rollCallActive) break;  // cancelled
+      showCaption((step.agent || 'zeno').toUpperCase().replace('_COMM', '') + ': ' + step.text, '');
+      orb.setState(step.agent === 'zeno' ? 'speaking' : 'communicating');
+      if (window.agentRing && step.agent !== 'zeno') window.agentRing.activate(step.agent, 'introducing');
+      try {
+        const res = await fetch('/api/tts', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: step.text, agent: step.agent || 'zeno' }),
+        });
+        if (res.ok) {
+          const url = URL.createObjectURL(await res.blob());
+          const audio = new Audio(url);
+          await new Promise((resolve) => {
+            audio.onended = resolve;
+            audio.onerror = resolve;   // never hang the sequence on one bad clip
+            audio.play().catch(resolve);
+          });
+          URL.revokeObjectURL(url);
+        } else {
+          // ElevenLabs only -- skip this line rather than speaking it in a
+          // different voice mid roll call.
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      } catch (e) { /* skip this line, keep the roll call going */ }
+      if (window.agentRing && step.agent !== 'zeno') window.agentRing.deactivate(step.agent, 'introduced');
+    }
+  } finally {
+    rollCallActive = false;
+    orb.setState('idle');
+    if (wasListening && recognition) { try { recognition.start(); } catch (e) {} }
+  }
+}
+window.zenoRollCall = { play: playRollCall, stop() { rollCallActive = false; } };
+
+// --- Voice Test panel -------------------------------------------------
+// Preview any agent's voice, see which id it's using, and change it.
+// Saving writes the single ELEVENLABS_VOICE_<AGENT> line in .env and
+// applies immediately, so preview reflects the new voice without a restart.
+async function buildVoiceTestPanel() {
+  const list = document.getElementById('voice-test-list');
+  if (!list) return;
+  let data;
+  try {
+    data = await (await fetch('/api/voices')).json();
+  } catch (e) {
+    list.innerHTML = '<div class="empty-note">Could not load voices.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const entry of data.registry) {
+    const row = document.createElement('div');
+    row.className = 'vt-row';
+
+    const name = document.createElement('span');
+    name.className = 'vt-name';
+    name.textContent = entry.agent.toUpperCase().replace('_COMM', '');
+
+    const play = document.createElement('button');
+    play.className = 'vt-btn';
+    play.textContent = '▶';
+    play.title = 'Preview this voice';
+    play.addEventListener('click', async () => {
+      play.disabled = true;
+      const original = play.textContent;
+      play.textContent = '…';
+      try {
+        const res = await fetch('/api/voices/preview?agent=' + encodeURIComponent(entry.agent));
+        if (!res.ok) throw new Error('preview failed');
+        const url = URL.createObjectURL(await res.blob());
+        const audio = new Audio(url);
+        await new Promise((r) => { audio.onended = r; audio.onerror = r; audio.play().catch(r); });
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        play.textContent = '✕';
+        setTimeout(() => { play.textContent = original; }, 1500);
+        play.disabled = false;
+        return;
+      }
+      play.textContent = original;
+      play.disabled = false;
+    });
+
+    const idInput = document.createElement('input');
+    idInput.className = 'vt-id';
+    idInput.value = entry.voice_id || '';
+    idInput.placeholder = 'voice id';
+    idInput.spellcheck = false;
+
+    const save = document.createElement('button');
+    save.className = 'vt-btn';
+    save.textContent = 'Save';
+    save.style.display = 'none';
+    idInput.addEventListener('input', () => {
+      const changed = idInput.value.trim() !== (entry.voice_id || '');
+      idInput.classList.toggle('dirty', changed);
+      save.style.display = changed ? '' : 'none';
+    });
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        const res = await fetch('/api/voices/set', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent: entry.agent, voice_id: idInput.value.trim() }),
+        });
+        if (!res.ok) throw new Error('save failed');
+        entry.voice_id = idInput.value.trim();
+        idInput.classList.remove('dirty');
+        save.style.display = 'none';
+        save.textContent = 'Save';
+      } catch (e) {
+        save.textContent = 'Failed';
+        setTimeout(() => { save.textContent = 'Save'; }, 1800);
+      }
+      save.disabled = false;
+    });
+
+    row.appendChild(name);
+    row.appendChild(play);
+    row.appendChild(idInput);
+    row.appendChild(save);
+    list.appendChild(row);
+  }
+}
+
+const _rcBtn = document.getElementById('voice-rollcall-btn');
+if (_rcBtn) _rcBtn.addEventListener('click', async () => {
+  try {
+    const seq = await (await fetch('/api/rollcall')).json();
+    settingsPanel.classList.remove('open');
+    playRollCall(seq);
+  } catch (e) { /* offline */ }
+});
+
+const _diagBtn = document.getElementById('voice-diag-btn');
+if (_diagBtn) _diagBtn.addEventListener('click', async () => {
+  const out = document.getElementById('voice-diag-out');
+  out.textContent = 'Checking…';
+  try {
+    const d = await (await fetch('/api/voices/diagnose')).json();
+    out.textContent = d.summary || '';
+    if (d.problems && d.problems.length) out.textContent += ' — ' + d.problems[0];
+  } catch (e) {
+    out.textContent = 'Diagnostics unavailable.';
+  }
+});
+
+// Built on the first Settings click, so it costs nothing until wanted.
+// Deliberately NOT conditioned on the panel already being open -- that
+// depended on this listener firing after the one that toggles the class,
+// which is fragile ordering for no benefit.
+let voicePanelBuilt = false;
+settingsBtn.addEventListener('click', () => {
+  if (voicePanelBuilt) return;
+  voicePanelBuilt = true;
+  buildVoiceTestPanel();
+});
+
+// --- Knowledge Galaxy -------------------------------------------------
+// Draws the REAL vault graph from /api/galaxy. Built once per open with
+// plain SVG: no physics loop, no per-frame work, so an open galaxy costs
+// nothing after the initial render.
+let galaxyData = null;
+async function openGalaxy() {
+  document.getElementById('galaxy-overlay').classList.add('open');
+  const svg = document.getElementById('galaxy-svg');
+  svg.innerHTML = '';
+  try {
+    galaxyData = await (await fetch('/api/galaxy')).json();
+  } catch (e) {
+    document.getElementById('galaxy-info').textContent = 'Could not load the graph.';
+    return;
+  }
+  document.getElementById('galaxy-count').textContent =
+    `${galaxyData.counts.nodes} nodes · ${galaxyData.counts.edges} edges`;
+  if (!galaxyData.nodes.length) {
+    document.getElementById('galaxy-info').textContent =
+      'The vault has no notes yet, so there is nothing to map.';
+    return;
+  }
+
+  const pos = {};
+  galaxyData.nodes.forEach(n => { pos[n.id] = n; });
+  const NS = 'http://www.w3.org/2000/svg';
+
+  // Edges first so nodes sit on top.
+  for (const e of galaxyData.edges) {
+    const a = pos[e.src], b = pos[e.dst];
+    if (!a || !b) continue;
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('x1', a.x * 1000); line.setAttribute('y1', a.y * 1000);
+    line.setAttribute('x2', b.x * 1000); line.setAttribute('y2', b.y * 1000);
+    line.setAttribute('class', 'gx-edge ' + e.kind);
+    line.dataset.src = e.src; line.dataset.dst = e.dst;
+    svg.appendChild(line);
+  }
+  for (const n of galaxyData.nodes) {
+    const c = document.createElementNS(NS, 'circle');
+    const r = Math.min(13, 3.5 + n.degree * 1.1);
+    c.setAttribute('cx', n.x * 1000); c.setAttribute('cy', n.y * 1000);
+    c.setAttribute('r', r);
+    c.setAttribute('class', n.kind);
+    c.dataset.id = n.id;
+    c.addEventListener('click', () => focusGalaxyNode(n.id));
+    svg.appendChild(c);
+    if (n.degree >= 2 || n.kind === 'folder') {
+      const t = document.createElementNS(NS, 'text');
+      t.setAttribute('x', n.x * 1000 + r + 3);
+      t.setAttribute('y', n.y * 1000 + 3);
+      t.textContent = n.label.slice(0, 22);
+      t.dataset.id = n.id;
+      svg.appendChild(t);
+    }
+  }
+  document.getElementById('galaxy-info').textContent =
+    'Click a star to see what it connects to. Blue = notes, gold = tags, green = folders.';
+}
+
+function focusGalaxyNode(id) {
+  if (!galaxyData) return;
+  const svg = document.getElementById('galaxy-svg');
+  const neighbours = new Set([id]);
+  const rels = [];
+  for (const e of galaxyData.edges) {
+    if (e.src === id) { neighbours.add(e.dst); rels.push([e.dst, e.kind]); }
+    else if (e.dst === id) { neighbours.add(e.src); rels.push([e.src, e.kind]); }
+  }
+  svg.querySelectorAll('circle').forEach(c =>
+    c.classList.toggle('dim', !neighbours.has(c.dataset.id)));
+  svg.querySelectorAll('text').forEach(t =>
+    t.classList.toggle('dim', !neighbours.has(t.dataset.id)));
+  svg.querySelectorAll('line').forEach(l =>
+    l.classList.toggle('hl', l.dataset.src === id || l.dataset.dst === id));
+
+  const label = (nid) => {
+    const n = galaxyData.nodes.find(x => x.id === nid);
+    return n ? n.label : nid;
+  };
+  const info = document.getElementById('galaxy-info');
+  info.innerHTML = '';
+  const head = document.createElement('div');
+  head.style.color = 'var(--text)';
+  head.textContent = label(id) + (rels.length ? ` — ${rels.length} connection(s):` : ' — nothing links to this yet.');
+  info.appendChild(head);
+  if (rels.length) {
+    const list = document.createElement('div');
+    list.textContent = rels.slice(0, 24).map(([nid, kind]) => `${label(nid)} (${kind})`).join(' · ');
+    info.appendChild(list);
+  }
+}
+
+document.getElementById('galaxy-close').addEventListener('click',
+  () => document.getElementById('galaxy-overlay').classList.remove('open'));
+document.getElementById('galaxy-search').addEventListener('input', (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const svg = document.getElementById('galaxy-svg');
+  if (!galaxyData) return;
+  if (!q) {
+    svg.querySelectorAll('circle,text').forEach(el => el.classList.remove('dim'));
+    svg.querySelectorAll('line').forEach(l => l.classList.remove('hl'));
+    return;
+  }
+  const hit = new Set(galaxyData.nodes.filter(n => n.label.toLowerCase().includes(q)).map(n => n.id));
+  svg.querySelectorAll('circle').forEach(c => c.classList.toggle('dim', !hit.has(c.dataset.id)));
+  svg.querySelectorAll('text').forEach(t => t.classList.toggle('dim', !hit.has(t.dataset.id)));
+});
+window.zenoGalaxy = { open: openGalaxy, focus: focusGalaxyNode };
+
+// --- Situation Room ---------------------------------------------------
+// Renders /api/situation, which composes live subsystem state. Unknown
+// values render as a dash -- a command view that invents numbers is worse
+// than one that admits a gap. Polls only while open.
+let sitClockTimer = null;
+function sitRows(pairs) {
+  return pairs.map(([k, v, cls]) =>
+    `<div class="sit-row"><span>${escapeHtml(k)}</span><b class="${cls || ''}">${escapeHtml(String(v))}</b></div>`
+  ).join('');
+}
+async function refreshSituation() {
+  let d;
+  try {
+    d = await (await fetch('/api/situation')).json();
+  } catch (e) {
+    document.querySelector('#sit-agents .sit-content').textContent = 'Unreachable.';
+    return;
+  }
+  document.getElementById('sit-clock').textContent = new Date().toLocaleTimeString();
+
+  const a = d.agents;
+  const agentCls = a.all_online ? 'sit-ok' : (a.healthy > 0 ? 'sit-warn' : 'sit-bad');
+  document.querySelector('#sit-agents .sit-content').innerHTML =
+    `<div class="sit-big ${agentCls}">${a.alive}/${a.total}<small>alive · ${a.healthy} healthy</small></div>` +
+    sitRows([
+      ['Supervisor', a.supervisor ? 'up' : 'DOWN', a.supervisor ? 'sit-ok' : 'sit-bad'],
+      ['Working now', a.working.length ? a.working.join(', ') : 'idle'],
+      ['Queued tasks', a.queued],
+      ['Runtime uptime', Math.floor(a.uptime_s / 60) + 'm ' + (a.uptime_s % 60) + 's'],
+    ]);
+
+  const s = d.system;
+  const ramHot = s.ram >= 85;
+  document.querySelector('#sit-system .sit-content').innerHTML =
+    sitRows([['CPU', s.cpu + '%', s.cpu >= 85 ? 'sit-bad' : '']]) +
+    `<div class="sit-bar"><i class="${s.cpu >= 85 ? 'hot' : ''}" style="width:${Math.min(100, s.cpu)}%"></i></div>` +
+    sitRows([['RAM', `${s.ram}% (${s.ram_used_gb}/${s.ram_total_gb} GB)`, ramHot ? 'sit-bad' : '']]) +
+    `<div class="sit-bar"><i class="${ramHot ? 'hot' : ''}" style="width:${Math.min(100, s.ram)}%"></i></div>` +
+    sitRows([['Pending approvals', d.pending_approvals, d.pending_approvals ? 'sit-warn' : ''],
+             ['Notices', d.notices]]);
+
+  const m = d.missions;
+  document.querySelector('#sit-missions .sit-content').innerHTML =
+    `<div class="sit-big">${m.open}<small>open mission${m.open === 1 ? '' : 's'}</small></div>` +
+    (m.top.length
+      ? m.top.map(x => `<div class="sit-row"><span>${escapeHtml(x.name.slice(0, 26))}</span><b>${x.progress}% · ${escapeHtml(x.status)}</b></div>`).join('')
+      : '<div class="sit-row"><span>Nothing active</span><b>—</b></div>') +
+    sitRows([['Campaigns active', d.campaigns.active + ' of ' + d.campaigns.total]]);
+
+  const meas = d.model.measured || {};
+  const provider = d.model.provider;
+  const pm = meas[provider];
+  document.querySelector('#sit-model .sit-content').innerHTML =
+    sitRows([
+      ['Provider', provider],
+      ['Calls this run', pm ? pm.calls : '—'],
+      ['Avg latency', pm ? pm.avg_latency_s + 's' : '—'],
+      ['Last latency', pm ? pm.last_latency_s + 's' : '—'],
+      ['Failures', pm ? pm.failures : '—', pm && pm.failures ? 'sit-warn' : ''],
+      ['Health', pm ? (pm.healthy ? 'healthy' : 'degraded') : 'no calls yet',
+        pm ? (pm.healthy ? 'sit-ok' : 'sit-bad') : ''],
+    ]);
+
+  const ev = d.events;
+  const top = Object.entries(ev.by_type || {}).slice(0, 4);
+  document.querySelector('#sit-events .sit-content').innerHTML =
+    `<div class="sit-big">${ev.total}<small>events recorded</small></div>` +
+    (top.length ? top.map(([k, v]) => `<div class="sit-row"><span>${escapeHtml(k)}</span><b>${v}</b></div>`).join('')
+                : '<div class="sit-row"><span>No events yet</span><b>—</b></div>');
+
+  document.querySelector('#sit-session .sit-content').innerHTML =
+    sitRows([['Permission profile', d.permissions.profile]]) +
+    `<div class="sit-row" style="display:block;"><span>Session</span><div style="margin-top:4px;color:var(--text);">${escapeHtml(d.session)}</div></div>`;
+}
+function openSituation() {
+  document.getElementById('situation-overlay').classList.add('open');
+  refreshSituation();
+  clearInterval(sitClockTimer);
+  sitClockTimer = setInterval(() => {
+    if (document.getElementById('situation-overlay').classList.contains('open')) {
+      document.getElementById('sit-clock').textContent = new Date().toLocaleTimeString();
+    }
+  }, 1000);
+}
+function closeSituation() {
+  document.getElementById('situation-overlay').classList.remove('open');
+  clearInterval(sitClockTimer);
+  sitClockTimer = null;
+}
+document.getElementById('situation-close').addEventListener('click', closeSituation);
+window.zenoSituation = { open: openSituation, close: closeSituation, refresh: refreshSituation };
+
+// --- Agent Monitor ----------------------------------------------------
+// Live view of the Agent Runtime (reyes_agent/agent_runtime.py). Polls
+// ONLY while the panel is open -- a closed dashboard costs nothing, which
+// matters on a machine that has been fighting for headroom all session.
+async function refreshAgentMonitor() {
+  const body = document.getElementById('agents-body');
+  let d;
+  try {
+    d = await (await fetch('/api/agents')).json();
+  } catch (e) {
+    body.innerHTML = '<div class="empty-note" style="padding:20px;">Runtime unreachable.</div>';
+    return;
+  }
+  document.getElementById('agents-summary').textContent =
+    `${d.agents_alive}/${d.agents_total} alive · ${d.agents_healthy} healthy · ` +
+    `supervisor ${d.supervisor_alive ? 'up' : 'DOWN'} · up ${Math.floor(d.uptime_s / 60)}m`;
+
+  body.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'ag-row head';
+  head.innerHTML = '<span>Agent</span><span>State</span><span>Heartbeat</span><span>Queue</span><span>Done</span><span>Current / last task</span><span></span>';
+  body.appendChild(head);
+
+  for (const a of d.agents) {
+    const row = document.createElement('div');
+    row.className = 'ag-row';
+
+    const name = document.createElement('span');
+    name.className = 'ag-name';
+    name.textContent = a.agent.toUpperCase().replace('_COMM', '');
+    const role = document.createElement('span');
+    role.className = 'ag-role';
+    role.textContent = a.role || '';
+    name.appendChild(role);
+
+    const state = document.createElement('span');
+    state.className = 'ag-state ' + a.state;
+    state.textContent = a.alive ? a.state : 'dead';
+
+    const hb = document.createElement('span');
+    hb.className = 'ag-hb' + (a.healthy ? '' : ' stale');
+    hb.textContent = a.heartbeat_age_s == null ? '—' : a.heartbeat_age_s + 's';
+
+    const q = document.createElement('span');
+    q.className = 'ag-hb';
+    q.textContent = String(a.queue_depth);
+
+    const done = document.createElement('span');
+    done.className = 'ag-hb';
+    done.textContent = a.tasks_completed + (a.tasks_failed ? ' / ' + a.tasks_failed + '✕' : '');
+    done.title = `success ${a.success_rate}% · avg ${a.avg_duration_s}s · restarts ${a.restarts}`;
+
+    const task = document.createElement('span');
+    task.className = 'ag-task';
+    task.textContent = a.current_task || a.last_task || '—';
+
+    const btn = document.createElement('button');
+    btn.className = 'ag-restart';
+    btn.textContent = 'Restart';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = '…';
+      try { await fetch('/api/agents/' + a.agent + '/restart', { method: 'POST' }); } catch (e) {}
+      setTimeout(() => { refreshAgentMonitor(); }, 900);
+    });
+
+    row.append(name, state, hb, q, done, task, btn);
+    body.appendChild(row);
+  }
+}
+function openAgentMonitor() {
+  document.getElementById('agents-overlay').classList.add('open');
+  refreshAgentMonitor();
+}
+function closeAgentMonitor() {
+  document.getElementById('agents-overlay').classList.remove('open');
+}
+document.getElementById('agents-close').addEventListener('click', closeAgentMonitor);
+window.zenoAgents = { open: openAgentMonitor, close: closeAgentMonitor, refresh: refreshAgentMonitor };
+
+// --- Timeline: replayable history from the Event Bus ------------------
+// Reads GET /api/events (reyes_agent/event_bus.py). Fetched on open and
+// on filter change only -- history doesn't need polling, and a panel
+// that isn't open should cost nothing.
+function describeEvent(ev) {
+  const p = ev.payload || {};
+  if (ev.type === 'tool.completed') {
+    const [ico, label] = friendlyTool(p.tool, p.input || {});
+    return { icon: ico, main: label, detail: (p.result || '').slice(0, 120), ms: p.duration_ms };
+  }
+  if (ev.type === 'ui.workspace_code') return { icon: '📁', main: 'Wrote ' + (p.file || 'a file'), detail: 'Project: ' + (p.project || '') };
+  if (ev.type === 'ui.workspace_news') return { icon: '📰', main: 'Pulled headlines', detail: p.topic || '' };
+  if (ev.type === 'ui.show_map') return { icon: '🗺️', main: 'Showed a map', detail: p.location || '' };
+  if (ev.type === 'ui.notification') return { icon: '🔔', main: 'Desktop notification', detail: p.app || '' };
+  return { icon: '•', main: ev.type, detail: '' };
+}
+
+async function loadTimeline() {
+  const body = document.getElementById('timeline-body');
+  const filter = document.getElementById('timeline-filter').value;
+  body.innerHTML = '<div class="empty-note" style="padding:24px 18px;">Loading…</div>';
+  let events = [];
+  try {
+    const qs = '?limit=200' + (filter ? '&event_type=' + encodeURIComponent(filter) : '');
+    const res = await fetch('/api/events' + qs);
+    events = await res.json();
+  } catch (e) {
+    body.innerHTML = '<div class="empty-note" style="padding:24px 18px;">Could not load the timeline.</div>';
+    return;
+  }
+  if (!events.length) {
+    body.innerHTML = '<div class="empty-note" style="padding:24px 18px;">Nothing recorded yet.</div>';
+    return;
+  }
+  body.innerHTML = '';
+  let lastDay = null;
+  for (const ev of events) {
+    const dt = new Date(ev.ts * 1000);
+    const day = dt.toDateString();
+    if (day !== lastDay) {
+      lastDay = day;
+      const h = document.createElement('div');
+      h.className = 'tl-day';
+      const today = new Date().toDateString();
+      h.textContent = day === today ? 'Today' : day;
+      body.appendChild(h);
+    }
+    const d = describeEvent(ev);
+    const row = document.createElement('div');
+    row.className = 'tl-row';
+    const time = document.createElement('span');
+    time.className = 'tl-time';
+    time.textContent = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const what = document.createElement('span');
+    what.className = 'tl-what';
+    what.textContent = d.icon + ' ' + d.main;
+    if (d.detail) {
+      const det = document.createElement('span');
+      det.className = 'tl-detail';
+      det.textContent = d.detail;
+      what.appendChild(det);
+    }
+    row.appendChild(time);
+    row.appendChild(what);
+    if (d.ms != null) {
+      const ms = document.createElement('span');
+      ms.className = 'tl-ms';
+      ms.textContent = d.ms + 'ms';
+      row.appendChild(ms);
+    }
+    body.appendChild(row);
+  }
+}
+function openTimeline() {
+  document.getElementById('timeline-overlay').classList.add('open');
+  loadTimeline();
+}
+window.zenoTimeline = { open: openTimeline, reload: loadTimeline };
+
+// --- Desktop Companion Mode -------------------------------------------
+// In mini mode the window is a small, chromeless floating orb. Since it
+// has no title bar, dragging is done here: the page tracks the pointer
+// and asks the native layer (desktop_app.py::_DesktopApi) to move the OS
+// window to match, then snaps to the nearest edge on release and stores
+// the resting position so it comes back to the same place next time.
+// No-ops harmlessly in a plain browser, where window.pywebview is absent.
+(function initCompanionDrag() {
+  const canvasEl = document.getElementById('orb-canvas');
+  const dragTarget = document.body;
+  let dragging = false, startX = 0, startY = 0, winX = 0, winY = 0, moved = false;
+
+  function api() {
+    return (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+  }
+
+  dragTarget.addEventListener('mousedown', (e) => {
+    if (!document.body.classList.contains('mini')) return;
+    const a = api();
+    if (!a || !a.move_window) return;
+    dragging = true; moved = false;
+    startX = e.screenX; startY = e.screenY;
+    const saved = JSON.parse(localStorage.getItem('zeno_orb_pos') || 'null');
+    winX = saved ? saved.x : 0;
+    winY = saved ? saved.y : 0;
+    document.body.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const dx = e.screenX - startX, dy = e.screenY - startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+    const a = api();
+    if (a && a.move_window) a.move_window(winX + dx, winY + dy);
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('dragging');
+    const a = api();
+    if (!a || !a.snap_orb) return;
+    // Snap to the nearest edge and remember where it ended up.
+    Promise.resolve(a.snap_orb(210, 30)).then((res) => {
+      if (res && res.ok) localStorage.setItem('zeno_orb_pos', JSON.stringify({ x: res.x, y: res.y }));
+    }).catch(() => {});
+  });
+
+  // --- hover card: live status without opening the dashboard ----------
+  // Polls only while hovering in mini mode. At rest this costs nothing,
+  // which is the whole point of a companion that sits there all day.
+  let hoverTimer = null;
+  async function refreshMiniCard() {
+    const active = Array.from(document.querySelectorAll('.agent-dot.active'))
+      .map((d) => d.title);
+    document.getElementById('mc-agent').textContent = active.length ? active.join(', ') : 'idle';
+    document.getElementById('mc-state').textContent = 'ZENO — ' + (turnActive ? 'working' : (listeningMode ? 'listening' : 'idle'));
+    document.getElementById('mc-tasks').textContent = String(active.length);
+    try {
+      const s = await (await fetch('/api/sysstats')).json();
+      document.getElementById('mc-cpu').textContent = s.cpu + '%';
+      document.getElementById('mc-ram').textContent = s.ram + '%';
+      document.getElementById('mc-pending').textContent = String(s.pending);
+    } catch (e) { /* transient */ }
+    try {
+      const ms = await (await fetch('/api/missions')).json();
+      document.getElementById('mc-mission').textContent =
+        ms.length ? `${ms[0].name} (${ms[0].progress}%)` : 'none active';
+    } catch (e) { /* transient */ }
+  }
+
+  document.body.addEventListener('mouseenter', () => {
+    if (!document.body.classList.contains('mini')) return;
+    document.body.classList.add('hovering');
+    refreshMiniCard();
+    clearInterval(hoverTimer);
+    hoverTimer = setInterval(refreshMiniCard, 2500);
+  });
+  document.body.addEventListener('mouseleave', () => {
+    document.body.classList.remove('hovering');
+    clearInterval(hoverTimer);
+    hoverTimer = null;
+  });
+
+  // Middle click -> toggle standby. Double click -> full dashboard.
+  dragTarget.addEventListener('auxclick', (e) => {
+    if (!document.body.classList.contains('mini') || e.button !== 1) return;
+    if (typeof window.zenoVoice !== 'undefined') {
+      const wasListening = window.zenoVoice.listening;
+      handleHeard(wasListening ? 'zeno standby' : 'zeno');
+    }
+  });
+  dragTarget.addEventListener('dblclick', () => {
+    if (document.body.classList.contains('mini')) setMini(false);
+  });
+
+  // Restore the last resting position whenever mini mode is entered.
+  window.zenoCompanion = {
+    restore() {
+      const a = api();
+      const saved = JSON.parse(localStorage.getItem('zeno_orb_pos') || 'null');
+      if (a && saved && a.restore_orb_position) a.restore_orb_position(saved.x, saved.y);
+    },
+    wasDragged() { return moved; },
+    setWorking(on) { document.body.classList.toggle('working', !!on); },
+    refresh: refreshMiniCard,
+  };
+})();
+document.getElementById('timeline-close').addEventListener('click',
+  () => document.getElementById('timeline-overlay').classList.remove('open'));
+document.getElementById('timeline-filter').addEventListener('change', loadTimeline);
+
+// Fullscreen: prefer the NATIVE window toggle when running inside the
+// pywebview desktop app (window.pywebview.api) -- more reliable in WebView2
+// than the browser Fullscreen API -- and fall back to the standard
+// Fullscreen API in a plain browser. Button in the header + F11.
+function toggleFullscreen() {
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.toggle_fullscreen) {
+    window.pywebview.api.toggle_fullscreen();
+    return;
+  }
+  if (!document.fullscreenElement) {
+    (document.documentElement.requestFullscreen || (()=>{})).call(document.documentElement).catch(()=>{});
+  } else {
+    (document.exitFullscreen || (()=>{})).call(document).catch(()=>{});
+  }
+}
+const _fsBtn = document.getElementById('fullscreen-btn');
+if (_fsBtn) _fsBtn.addEventListener('click', toggleFullscreen);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'F11') { e.preventDefault(); toggleFullscreen(); }
+});
+
+// Mini mode: REYES auto-shrinks to a small corner orb while it's doing
+// real work (a tool ran), then pops back with the answer. Native window
+// resize happens in the desktop app; the CSS collapse happens everywhere.
+let miniActive = false;
+function setMini(on) {
+  if (on === miniActive) return;
+  miniActive = on;
+  document.body.classList.toggle('mini', on);
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.set_mini) {
+    try { window.pywebview.api.set_mini(on); } catch (e) {}
+  }
+  // Entering companion mode -> put the orb back where it was last left.
+  if (on && window.zenoCompanion) {
+    setTimeout(() => { try { window.zenoCompanion.restore(); } catch (e) {} }, 120);
+  }
+}
+// Click the orb while mini -> restore. Ignores the click that ends a drag,
+// otherwise moving the companion orb would also reopen the full window.
+const _orbCanvas = document.getElementById('orb-canvas');
+if (_orbCanvas) _orbCanvas.addEventListener('click', () => {
+  if (miniActive && !(window.zenoCompanion && window.zenoCompanion.wasDragged())) setMini(false);
+});
+
+let pendingSignature = '';
+function renderPending(actions) {
+  const signature = JSON.stringify(actions);
+  if (signature === pendingSignature) return;
+  pendingSignature = signature;
+  const pendingOnly = actions.filter(a => a.status === 'pending');
+  pendingBadgeEl.style.display = pendingOnly.length ? 'inline-block' : 'none';
+  pendingBadgeEl.textContent = pendingOnly.length + ' pending';
+
+  if (actions.length === 0) {
+    pendingPanelEl.innerHTML = '<div class="empty-note">Nothing waiting right now.</div>';
+    return;
+  }
+  pendingPanelEl.innerHTML = '';
+  for (const a of actions) {
+    const card = document.createElement('div');
+    card.className = 'action-card';
+    let html = `<div class="name">#${a.id} ${escapeHtml(a.tool_name)}</div>
+                <div class="desc">${escapeHtml(a.description)}</div>`;
+    if (a.status === 'pending') {
+      html += `<div class="row">
+                 <button class="btn-approve" data-id="${a.id}" data-act="approve">Approve</button>
+                 <button class="btn-deny" data-id="${a.id}" data-act="deny">Deny</button>
+               </div>`;
+    } else {
+      html += `<span class="status-tag status-${a.status}">${a.status}</span>`;
+      if (a.result) html += `<div class="result-text">${escapeHtml(a.result)}</div>`;
+    }
+    card.innerHTML = html;
+    pendingPanelEl.appendChild(card);
+  }
+  for (const btn of pendingPanelEl.querySelectorAll('button[data-act]')) {
+    btn.addEventListener('click', () => decide(btn.dataset.id, btn.dataset.act));
+  }
+}
+
+async function decide(id, act) {
+  await fetch(`/api/pending/${id}/${act}`, { method: 'POST' });
+  refreshPending();
+}
+
+async function refreshPending() {
+  try {
+    const res = await fetch('/api/pending');
+    renderPending(await res.json());
+  } catch (e) { /* transient -- next poll retries */ }
+}
+
+const noticesPanelEl = document.getElementById('notices-panel');
+
+let noticesSignature = '';
+function renderNotices(items) {
+  const signature = JSON.stringify(items);
+  if (signature === noticesSignature) return;
+  noticesSignature = signature;
+  if (items.length === 0) {
+    noticesPanelEl.innerHTML = '<div class="empty-note">Nothing noteworthy right now.</div>';
+    return;
+  }
+  noticesPanelEl.innerHTML = '';
+  for (const n of items) {
+    const card = document.createElement('div');
+    card.className = 'action-card';
+    card.innerHTML = `<div class="name">${escapeHtml(n.check_name)}</div>
+                <div class="desc">${escapeHtml(n.message)}</div>
+                <div class="row">
+                  <button class="btn-approve" data-id="${n.id}">Dismiss</button>
+                </div>`;
+    noticesPanelEl.appendChild(card);
+  }
+  for (const btn of noticesPanelEl.querySelectorAll('button[data-id]')) {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/notices/${btn.dataset.id}/dismiss`, { method: 'POST' });
+      refreshNotices();
+    });
+  }
+}
+
+async function refreshNotices() {
+  try {
+    const res = await fetch('/api/notices');
+    renderNotices(await res.json());
+  } catch (e) { /* transient -- next poll retries */ }
+}
+
+// Missions panel -- real data from tools/missions.py via GET /api/missions,
+// read-only here (creating/updating a mission goes through conversation,
+// e.g. "create a mission to..." or "mark mission 3 as building" -- this
+// panel is a live status view, not a second way to edit them).
+const missionsPanelEl = document.getElementById('missions-panel');
+let missionsSignature = '';
+function renderMissions(items) {
+  const signature = JSON.stringify(items);
+  if (signature === missionsSignature) return;
+  missionsSignature = signature;
+  if (items.length === 0) {
+    missionsPanelEl.innerHTML = '<div class="empty-note">No active missions right now.</div>';
+    return;
+  }
+  missionsPanelEl.innerHTML = '';
+  for (const m of items) {
+    const card = document.createElement('div');
+    card.className = 'action-card';
+    card.innerHTML = `<div class="name">${escapeHtml(m.name)}</div>
+                <div class="mission-bar-track"><div class="mission-bar-fill" style="width:${Math.max(0, Math.min(100, m.progress))}%"></div></div>
+                <div class="mission-meta"><span>${escapeHtml(m.status)} · ${escapeHtml(m.priority)}</span><span>${m.progress}%${m.deadline ? ' · due ' + escapeHtml(m.deadline) : ''}</span></div>`;
+    missionsPanelEl.appendChild(card);
+  }
+}
+async function refreshMissions() {
+  try {
+    const res = await fetch('/api/missions');
+    renderMissions(await res.json());
+  } catch (e) { /* transient -- next poll retries */ }
+}
+
+async function refreshStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    const nextStatusMeta = `${data.provider} · voice: ${data.tts_provider}`;
+    if (!lastStatus || statusMetaEl.textContent !== nextStatusMeta) statusMetaEl.textContent = nextStatusMeta;
+    lastStatus = data;
+  } catch (e) {
+    statusMetaEl.textContent = 'offline';
+  }
+}
+
+// --- developer overlay: FPS + live state, only costs anything when visible ---
+let lastStatus = null;
+let frames = 0;
+let fps = 0;
+let fpsWindowStart = performance.now();
+let performanceSnapshot = null;
+let nextPerformanceFetch = 0;
+
+// Runs ONLY while developer mode is on. It used to rAF forever and merely
+// skip the DOM write when dev mode was off -- a permanent 60fps wakeup
+// that stopped the page ever going idle, for no visible benefit. Now the
+// loop genuinely stops (and restarts) with the toggle.
+let devRaf = null;
+function devLoop() {
+  if (!devMode) { devRaf = null; return; }
+  devRaf = requestAnimationFrame(devLoop);
+  frames++;
+  const now = performance.now();
+  if (now - fpsWindowStart >= 500) {
+    fps = Math.round((frames * 1000) / (now - fpsWindowStart));
+    frames = 0;
+    fpsWindowStart = now;
+    const provider = lastStatus ? lastStatus.provider : '?';
+    const evtLine = lastEvent ? JSON.stringify(lastEvent).slice(0, 80) : 'none yet';
+    if (now >= nextPerformanceFetch) {
+      nextPerformanceFetch = now + 2000;
+      fetch('/api/performance').then((r) => r.ok ? r.json() : null)
+        .then((data) => { if (data) performanceSnapshot = data; })
+        .catch(() => {});
+    }
+    const worker = performanceSnapshot && performanceSnapshot.workers || {};
+    const events = performanceSnapshot && performanceSnapshot.events || {};
+    const memory = performanceSnapshot && performanceSnapshot.memory_trend || {};
+    const latency = performanceSnapshot && performanceSnapshot.latencies && performanceSnapshot.latencies.ai_turn || {};
+    const browserLatency = performanceSnapshot && performanceSnapshot.latencies && performanceSnapshot.latencies.browser || {};
+    const voiceLatency = performanceSnapshot && performanceSnapshot.latencies && performanceSnapshot.latencies.voice_stt || {};
+    const httpLatency = performanceSnapshot && performanceSnapshot.latencies && performanceSnapshot.latencies.http || {};
+    const agents = performanceSnapshot && performanceSnapshot.agents || {};
+    const gpu = performanceSnapshot && performanceSnapshot.gpu || {};
+    devOverlay.innerHTML =
+      `fps: ${fps}<br>provider: ${provider}<br>perf mode: ${perfMode}<br>` +
+      `cpu: ${performanceSnapshot ? performanceSnapshot.cpu_percent : '?'}% · ram: ${performanceSnapshot ? performanceSnapshot.rss_mb : '?'}MB · gpu: ${gpu.available ? gpu.percent + '%' : 'n/a'}<br>` +
+      `threads: ${performanceSnapshot ? performanceSnapshot.threads : '?'} · agents: ${agents.agents_alive || 0}/${agents.agents_total || 0}<br>` +
+      `turn active: ${turnActive}<br>workers: ${worker.active || 0}/${worker.workers || '?'} · queue: ${worker.queue_depth || 0}<br>` +
+      `events/min: ${events.rate_per_minute || 0} · API/AI: ${httpLatency.p95_ms || 0}/${latency.p95_ms || 0}ms<br>` +
+      `browser/voice p95: ${browserLatency.p95_ms || 0}/${voiceLatency.p95_ms || 0}ms<br>` +
+      `rss: ${performanceSnapshot ? performanceSnapshot.rss_mb : '?'}MB · memory trend: ${memory.growth_mb_per_hour || 0}MB/h<br>` +
+      `last event: ${escapeHtml(evtLine)}`;
+  }
+}
+function startDevLoop() {
+  if (devMode && devRaf === null) {
+    fpsWindowStart = performance.now();
+    frames = 0;
+    devLoop();
+  }
+}
+startDevLoop();
+
+// The renderer is the only place that can directly observe a frozen WebView.
+// This watchdog is intentionally tiny (one 100 ms timer), pauses while the
+// document is hidden, and reports only stalls over the Phase 21 200 ms limit.
+let rendererExpected = performance.now() + 100;
+let rendererWatchdog = null;
+function rendererWatch() {
+  const now = performance.now();
+  const lag = now - rendererExpected;
+  rendererExpected = now + 100;
+  if (lag >= 200) {
+    fetch('/api/performance/freeze', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({duration_ms: Math.round(lag), fps, details: {visibility: document.visibilityState}}),
+    }).catch(() => {});
+  }
+  rendererWatchdog = setTimeout(rendererWatch, 100);
+}
+function setRendererWatchdog(active) {
+  if (!active) {
+    if (rendererWatchdog !== null) clearTimeout(rendererWatchdog);
+    rendererWatchdog = null;
+    return;
+  }
+  if (rendererWatchdog === null) {
+    rendererExpected = performance.now() + 100;
+    rendererWatchdog = setTimeout(rendererWatch, 100);
+  }
+}
+document.addEventListener('visibilitychange', () => setRendererWatchdog(!document.hidden));
+setRendererWatchdog(!document.hidden);
+
+refreshStatus();
+refreshPending();
+refreshNotices();
+refreshMissions();
+refreshKillSwitch();
+// Event Bus is the source of truth for state transitions.  The persistent
+// dashboard fetches initial state once, then refreshes only affected areas.
+if (window.EventSource) {
+  const dashboardEvents = new EventSource('/api/events/stream');
+  dashboardEvents.onmessage = (event) => {
+    let update;
+    try { update = JSON.parse(event.data); } catch (e) { return; }
+    lastEvent = update;
+    const type = update.type || '';
+    if (type.startsWith('mission.')) refreshMissions();
+    if (type.startsWith('confirmation.') || type.startsWith('tool.')) refreshPending();
+    if (type.startsWith('heartbeat.') || type.startsWith('notification.')) refreshNotices();
+    if (document.getElementById('agents-overlay').classList.contains('open') && type.startsWith('agent.')) refreshAgentMonitor();
+    if (document.getElementById('situation-overlay').classList.contains('open')) refreshSituation();
+    if (document.getElementById('timeline-overlay').classList.contains('open')) loadTimeline();
+  };
+}
+// Provider/connection state is cheap, and only the small text node is
+// touched when it actually changes.  CPU/RAM remain on their 2s snapshot
+// cadence in the visible Situation Room/developer diagnostic views.
+setInterval(() => { if (!document.hidden) refreshStatus(); }, 2000);
+orb.setState('idle');
+inputEl.focus();
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZENO Mini Orb</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#dcecff;font:11px system-ui,sans-serif}
+  #orb-canvas{position:fixed;inset:0;width:100%;height:100%} #stage{position:fixed;left:8px;right:8px;bottom:8px;text-align:center;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#b7d7ff;text-shadow:0 1px 8px #000;pointer-events:none}
+  #open{position:fixed;right:6px;top:6px;border:0;border-radius:999px;background:#102342;color:#dcecff;padding:4px 7px;cursor:pointer;font-size:10px}
+</style></head><body><canvas id="orb-canvas"></canvas><button id="open" title="Open ZENO">Open</button><div id="stage">ZENO · idle</div>
+<script type="module">
+import { initOrb } from '/static/orb.js';
+const orb=initOrb(document.getElementById('orb-canvas'));
+const stage=document.getElementById('stage'); let signature='';
+function api(){return window.pywebview&&window.pywebview.api;}
+document.getElementById('open').onclick=()=>{const a=api(); if(a&&a.show_dashboard)a.show_dashboard(); else location.href='/';};
+async function refresh(){
+  try { const data=await (await fetch('/api/status')).json();
+    const kernel=data.kernel||{}, workers=kernel.workers||{}, active=workers.active_tasks||[];
+    const task=active[0]||{}, text=task.name?`${task.name} · ${task.progress&&task.progress.stage||'working'}`:'ZENO · idle';
+    if(text!==signature){signature=text;stage.textContent=text;orb.setState(task.name?'processing':'idle');}
+  } catch(e){ if(signature!=='offline'){signature='offline';stage.textContent='ZENO · offline';orb.setState('error');} }
+}
+refresh(); setInterval(()=>{if(!document.hidden)refresh();},2000);
+document.addEventListener('dblclick',()=>document.getElementById('open').click());
+</script></body></html>

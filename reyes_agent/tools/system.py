@@ -1,0 +1,602 @@
+"""Desktop control tools -- REYES's hands on the actual machine.
+
+Read-only / low-risk tools (list, read, open an app or folder) run
+immediately. Anything matching the "confirm before acting" list from
+AGENT.md -- deleting, moving files, running arbitrary commands -- is
+registered with requires_confirmation=True and goes through the Tier 6
+gate in reyes_agent/confirmation.py instead of running on the spot.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+
+import psutil
+
+from reyes_agent.tools import register
+
+_MAX_LIST = 200
+_MAX_READ_CHARS = 6000
+
+
+@register(
+    name="list_dir",
+    description="List files/folders in a directory. Read-only.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Folder path to list."},
+        },
+        "required": ["path"],
+    },
+)
+def list_dir(path: str) -> str:
+    path = os.path.expanduser(path)
+    if not os.path.isdir(path):
+        return f"'{path}' is not a folder (or doesn't exist)."
+    entries = sorted(os.listdir(path))[:_MAX_LIST]
+    if not entries:
+        return f"'{path}' is empty."
+    lines = []
+    for name in entries:
+        full = os.path.join(path, name)
+        lines.append(f"{'[dir] ' if os.path.isdir(full) else ''}{name}")
+    return "\n".join(lines)
+
+
+@register(
+    name="read_file",
+    description="Read a text file's contents. Read-only.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "File path to read."},
+        },
+        "required": ["path"],
+    },
+)
+def read_file(path: str) -> str:
+    path = os.path.expanduser(path)
+    if not os.path.isfile(path):
+        return f"'{path}' is not a file (or doesn't exist)."
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read(_MAX_READ_CHARS + 1)
+    except OSError as exc:
+        return f"Couldn't read '{path}': {exc}"
+    if len(text) > _MAX_READ_CHARS:
+        return text[:_MAX_READ_CHARS] + f"\n... [truncated, file is longer]"
+    return text
+
+
+def _resolve_start_app(name: str) -> tuple[str, str] | None:
+    """Look the name up in the Start Menu app list (Get-StartApps) and
+    return (display_name, AppID) of the best match -- this is what makes
+    Store/UWP apps like WhatsApp, Spotify, and Phone Link launchable by
+    name, since those have no plain .exe that os.startfile can find.
+    Exact-ish match preferred, else first app whose name contains it.
+    """
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-StartApps | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, timeout=15,
+        ).stdout
+        import json as _json
+
+        apps = _json.loads(out) if out.strip() else []
+        if isinstance(apps, dict):
+            apps = [apps]
+    except Exception:  # noqa: BLE001
+        return None
+
+    want = name.strip().lower()
+    exact = [a for a in apps if a.get("Name", "").lower() == want]
+    starts = [a for a in apps if a.get("Name", "").lower().startswith(want)]
+    contains = [a for a in apps if want in a.get("Name", "").lower()]
+    for bucket in (exact, starts, contains):
+        if bucket:
+            return bucket[0].get("Name"), bucket[0].get("AppID")
+    return None
+
+
+@register(
+    name="open_app",
+    description=(
+        "Launch an application by name (e.g. 'notepad', 'chrome', "
+        "'whatsapp', 'spotify') or full path. Resolves Store/UWP apps via "
+        "the Start Menu too, so it isn't limited to classic .exe programs. "
+        "ONLY use when the user explicitly asks to open/launch/start that "
+        "app -- never as a side effect of answering an unrelated question."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name_or_path": {
+                "type": "string",
+                "description": "Application name (resolved via Windows/Start Menu) or a full path.",
+            },
+        },
+        "required": ["name_or_path"],
+    },
+    light=True,
+)
+def open_app(name_or_path: str) -> str:
+    # Direct launch first -- fastest for classic apps and full paths.
+    try:
+        os.startfile(name_or_path)  # noqa: S606 -- Windows app launch, not shell exec
+        return f"Opened '{name_or_path}'."
+    except OSError:
+        pass
+
+    # Fall back to Start Menu resolution for Store/UWP apps that have no
+    # plain executable name (WhatsApp, Spotify, Phone Link, etc.).
+    resolved = _resolve_start_app(name_or_path)
+    if not resolved:
+        return f"Couldn't find an app matching '{name_or_path}'."
+    display, app_id = resolved
+    try:
+        os.startfile(f"shell:AppsFolder\\{app_id}")  # noqa: S606
+        return f"Opened '{display}'."
+    except OSError as exc:
+        return f"Found '{display}' but couldn't launch it: {exc}"
+
+
+@register(
+    name="open_path",
+    description="Open a file/folder in Explorer. Only when the user asks to see/open it.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "File or folder path to open."},
+        },
+        "required": ["path"],
+    },
+)
+def open_path(path: str) -> str:
+    path = os.path.expanduser(path)
+    if not os.path.exists(path):
+        return f"'{path}' doesn't exist."
+    try:
+        os.startfile(path)  # noqa: S606
+        return f"Opened '{path}'."
+    except OSError as exc:
+        return f"Couldn't open '{path}': {exc}"
+
+
+@register(
+    name="list_processes",
+    description="List running process names. Read-only.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "description": "Max processes to return. Default 30."},
+        },
+    },
+)
+def list_processes(limit: int = 30) -> str:
+    try:
+        limit = int(limit) if limit is not None else 30
+    except (TypeError, ValueError):
+        limit = 30
+    names = sorted({p.info["name"] for p in psutil.process_iter(["name"]) if p.info["name"]})
+    return "\n".join(names[:limit])
+
+
+@register(
+    name="delete_file",
+    description="Permanently delete a file. Requires user approval first.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "File path to delete."},
+        },
+        "required": ["path"],
+    },
+    requires_confirmation=True,
+)
+def delete_file(path: str) -> str:
+    path = os.path.expanduser(path)
+    if not os.path.isfile(path):
+        return f"'{path}' is not a file (or doesn't exist) -- nothing deleted."
+    try:
+        os.remove(path)
+        return f"Deleted '{path}'."
+    except OSError as exc:
+        return f"Couldn't delete '{path}': {exc}"
+
+
+@register(
+    name="move_file",
+    description="Move/rename a file. Requires user approval first.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "src": {"type": "string", "description": "Current file path."},
+            "dst": {"type": "string", "description": "Destination path."},
+        },
+        "required": ["src", "dst"],
+    },
+    requires_confirmation=True,
+)
+def move_file(src: str, dst: str) -> str:
+    import shutil
+
+    src = os.path.expanduser(src)
+    dst = os.path.expanduser(dst)
+    if not os.path.isfile(src):
+        return f"'{src}' is not a file (or doesn't exist) -- nothing moved."
+    try:
+        shutil.move(src, dst)
+        return f"Moved '{src}' -> '{dst}'."
+    except OSError as exc:
+        return f"Couldn't move '{src}' to '{dst}': {exc}"
+
+
+@register(
+    name="run_command",
+    description=(
+        "Run a shell command. ONLY use when the user explicitly asks for a "
+        "command/admin action. Requires user approval first."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "The command to run."},
+        },
+        "required": ["command"],
+    },
+    requires_confirmation=True,
+)
+def run_command(command: str) -> str:
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        return f"Command timed out after 30s: {command}"
+    output = (result.stdout or "") + (result.stderr or "")
+    output = output.strip()[:_MAX_READ_CHARS]
+    return f"Exit code {result.returncode}.\n{output}" if output else f"Exit code {result.returncode}. No output."
+
+
+@register(
+    name="media_control",
+    description=(
+        "Control music/media playback system-wide -- Spotify or whatever "
+        "app currently holds media focus, same as a keyboard's hardware "
+        "media keys. Use for play/pause, skip, previous, volume, and mute. "
+        "To start a specific player like Spotify first, use open_app."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "play_pause",
+                    "next",
+                    "previous",
+                    "volume_up",
+                    "volume_down",
+                    "mute",
+                ],
+                "description": "The media action to perform.",
+            },
+        },
+        "required": ["action"],
+    },
+    light=True,
+)
+def media_control(action: str) -> str:
+    try:
+        import pyautogui
+    except ImportError as exc:
+        return f"pyautogui isn't available: {exc}"
+
+    key_map = {
+        "play_pause": "playpause",
+        "next": "nexttrack",
+        "previous": "prevtrack",
+        "volume_up": "volumeup",
+        "volume_down": "volumedown",
+        "mute": "volumemute",
+    }
+    key = key_map.get(action)
+    if not key:
+        return f"Unknown media action '{action}'. Valid: {', '.join(key_map)}."
+    pyautogui.press(key)
+    return f"Sent '{action}' -- goes to whichever app currently holds media focus (Spotify, a browser tab, etc), same as a physical media key."
+
+
+@register(
+    name="send_slack_message",
+    description=(
+        "Send a message to a person or channel using the Slack desktop app "
+        "already installed and logged in on this computer. Opens Slack, "
+        "uses its Ctrl+K quick switcher to jump to the target, types the "
+        "message, and sends it. Always requires the user's explicit "
+        "confirmation first, same as any other message REYES sends on "
+        "the user's behalf."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "Person or channel to message, e.g. 'John Smith' or '#general'.",
+            },
+            "message": {"type": "string", "description": "The message text to send."},
+        },
+        "required": ["target", "message"],
+    },
+    requires_confirmation=True,
+)
+def send_slack_message(target: str, message: str) -> str:
+    import time
+
+    try:
+        import pyautogui
+    except ImportError as exc:
+        return f"pyautogui isn't available: {exc}"
+
+    try:
+        os.startfile("slack")
+    except OSError as exc:
+        return f"Couldn't open Slack: {exc}"
+
+    time.sleep(2.5)  # let the app come to the foreground
+    pyautogui.hotkey("ctrl", "k")  # Slack's built-in "Jump to" quick switcher
+    time.sleep(0.6)
+    pyautogui.typewrite(target, interval=0.02)
+    time.sleep(1.0)
+    pyautogui.press("enter")  # select the top match in the switcher
+    time.sleep(1.0)
+    pyautogui.typewrite(message, interval=0.01)
+    pyautogui.press("enter")  # send
+
+    return (
+        f"Sent to '{target}' via the Slack desktop app: {message!r}. "
+        "This used keyboard automation, not Slack's API -- it can't "
+        "confirm the quick switcher actually landed on the right person "
+        "or channel, so it's worth a glance at Slack to make sure it went "
+        "where intended."
+    )
+
+
+# Only browsers actually found here get offered by name -- no point
+# claiming "Firefox" works when it isn't installed on this machine.
+_BROWSER_CANDIDATES = {
+    "chrome": [
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+    ],
+    "edge": [
+        os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+    ],
+    "firefox": [
+        os.path.expandvars(r"%ProgramFiles%\Mozilla Firefox\firefox.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe"),
+    ],
+    "brave": [
+        os.path.expandvars(r"%LocalAppData%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+    ],
+}
+
+
+def _installed_browsers() -> dict[str, str]:
+    found = {}
+    for name, paths in _BROWSER_CANDIDATES.items():
+        path = next((p for p in paths if os.path.isfile(p)), None)
+        if path:
+            found[name] = path
+    return found
+
+
+@register(
+    name="web_search",
+    description=(
+        "Search the web for something by opening it in a browser. Defaults "
+        "to Chrome; pass 'browser' to use a specific one (edge, firefox, "
+        "brave) if the user names one and it's actually installed. This "
+        "opens a real search results page for the user to read -- it does "
+        "NOT fetch or read results back into the conversation, REYES has "
+        "no browsing/scraping tool for that. Use when the user asks to "
+        "search/look something up online."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "What to search for."},
+            "browser": {
+                "type": "string",
+                "description": "Which browser to use, e.g. 'chrome', 'edge', 'firefox'. Default: chrome.",
+            },
+        },
+        "required": ["query"],
+    },
+    light=True,
+)
+def web_search(query: str, browser: str = "chrome") -> str:
+    import urllib.parse
+
+    url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
+    installed = _installed_browsers()
+    requested = (browser or "chrome").strip().lower()
+
+    path = installed.get(requested)
+    used = requested if path else None
+    if not path and installed:
+        # Asked-for browser isn't installed -- fall back to whatever is,
+        # preferring chrome, rather than failing outright.
+        used = "chrome" if "chrome" in installed else next(iter(installed))
+        path = installed[used]
+
+    try:
+        if path:
+            subprocess.Popen([path, url])
+        else:
+            os.startfile(url)  # noqa: S606 -- last resort: OS-registered default browser
+    except OSError as exc:
+        return f"Couldn't open the browser: {exc}"
+
+    note = ""
+    if requested != "chrome" and used != requested:
+        note = f" ({browser} isn't installed here, used {used or 'the system default'} instead)"
+    label = used or "the default browser"
+    return (
+        f"Opened a search for {query!r} in {label}.{note} REYES can't read "
+        "the results itself -- no browsing tool for that yet -- so take a "
+        "look at the page directly."
+    )
+
+
+@register(
+    name="show_map",
+    description=(
+        "Open Google Maps to a place, address, or 'A to B' directions in "
+        "the browser. Use when the user asks to see a map, find a location, "
+        "or get directions somewhere."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "location": {"type": "string", "description": "Place/address, or 'from X to Y' for directions."},
+        },
+        "required": ["location"],
+    },
+    light=True,
+)
+def show_map(location: str) -> str:
+    import urllib.parse
+
+    loc = location.strip()
+    low = loc.lower()
+    # Google's keyless embed endpoint (maps.google.com/maps?...&output=embed)
+    # renders straight inside REYES's own panel via an iframe -- no browser
+    # tab, no API key.
+    if " to " in low and (low.startswith("from ") or "directions" in low):
+        cleaned = loc[5:] if low.startswith("from ") else loc
+        parts = cleaned.split(" to ", 1)
+        embed = (
+            "https://maps.google.com/maps?"
+            f"saddr={urllib.parse.quote(parts[0].strip())}"
+            f"&daddr={urllib.parse.quote(parts[1].strip())}&output=embed"
+        )
+    else:
+        embed = f"https://maps.google.com/maps?q={urllib.parse.quote(loc)}&output=embed"
+
+    try:
+        from reyes_agent import notification_bus
+
+        notification_bus.publish({"type": "show_map", "location": loc, "embed_url": embed})
+    except Exception as exc:  # noqa: BLE001
+        return f"Couldn't display the map: {exc}"
+    return f"Showing a map of '{loc}' in the REYES panel."
+
+
+@register(
+    name="get_news",
+    description=(
+        "Fetch current news headlines -- top stories, or about a specific "
+        "topic/place if given -- and read them back. Unlike web_search this "
+        "actually returns the headlines into the conversation. Use when the "
+        "user asks what's happening, for the news, or news about something."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "topic": {"type": "string", "description": "Optional topic/place, e.g. 'football', 'Nigeria'. Blank = top headlines."},
+            "limit": {"type": "integer", "description": "How many headlines. Default 6."},
+        },
+    },
+    light=True,
+)
+def get_news(topic: str = "", limit: int = 6) -> str:
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+
+    import requests
+
+    try:
+        limit = max(1, min(15, int(limit)))
+    except (TypeError, ValueError):
+        limit = 6
+    if topic.strip():
+        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(topic.strip())}&hl=en-US&gl=US&ceid=US:en"
+    else:
+        url = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+    except Exception as exc:  # noqa: BLE001
+        return f"Couldn't fetch the news: {exc}"
+    items = root.findall(".//item")[:limit]
+    if not items:
+        return "No headlines came back."
+    lines = []
+    headlines = []
+    for it in items:
+        title = (it.findtext("title") or "").strip()
+        link = (it.findtext("link") or "").strip()
+        source = (it.findtext("source") or "").strip()
+        if title:
+            lines.append(f"- {title}")
+            headlines.append({"title": title, "link": link, "source": source})
+    label = f"Top headlines about '{topic.strip()}'" if topic.strip() else "Top headlines"
+
+    # News workspace overlay -- same notification_bus -> SSE -> panel
+    # pattern as show_map, so headlines get a real readable panel in the
+    # REYES UI instead of only a spoken/captioned list.
+    try:
+        from reyes_agent import notification_bus
+
+        notification_bus.publish({"type": "workspace_news", "topic": label, "headlines": headlines})
+    except Exception:  # noqa: BLE001
+        pass
+
+    return f"{label}:\n" + "\n".join(lines)
+
+
+@register(
+    name="send_telegram_message",
+    description=(
+        "Send a message to the user's own Telegram, via REYES's bot "
+        "(@Reyes3_boss_bot). Only sends to the one chat already set up "
+        "for this user -- not a general Telegram messaging tool for "
+        "other people or chats. Always requires the user's explicit "
+        "confirmation first, same as any other message REYES sends on "
+        "the user's behalf."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "message": {"type": "string", "description": "The message text to send."},
+        },
+        "required": ["message"],
+    },
+    requires_confirmation=True,
+)
+def send_telegram_message(message: str) -> str:
+    from reyes_agent import config
+
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_NOTIFY_CHAT_ID:
+        return "Telegram isn't configured -- missing TELEGRAM_BOT_TOKEN or TELEGRAM_NOTIFY_CHAT_ID in .env."
+
+    import requests
+
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": config.TELEGRAM_NOTIFY_CHAT_ID, "text": message},
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        return f"Couldn't send the Telegram message: {exc}"
+
+    return f"Sent to your Telegram: {message!r}."

@@ -1,0 +1,48 @@
+# ============================================================
+# Dependencies for reyes_agent (the real, current REYES app --
+# NOT the legacy scaffold files at the project root, which use
+# the unrelated requirements.txt next to this file).
+#
+# Generated from the actual imports in reyes_agent/**/*.py,
+# pinned to the versions verified working in this build.
+# Install with: pip install -r reyes_requirements.txt
+# ============================================================
+
+# --- Model providers ---
+anthropic==0.117.1
+openai==2.46.0          # also used for xAI/Ollama (OpenAI-compatible endpoints)
+deepgram-sdk==7.5.0      # speech-to-text
+
+# --- Web server / desktop app ---
+fastapi==0.139.2
+uvicorn==0.51.0
+python-multipart==0.0.32  # required for FastAPI file-upload routes (voice-turn)
+pydantic==2.13.4
+pywebview==6.2.1
+python-dotenv==1.2.2
+
+# --- Voice ---
+SpeechRecognition==3.17.0
+sounddevice==0.5.5
+numpy==2.5.1
+keyboard==0.13.5          # push-to-talk key detection
+
+# --- Vision / desktop control ---
+opencv-python-headless==5.0.0.93
+pyautogui==0.9.54
+psutil==7.2.2
+requests==2.34.2
+pyperclip==1.11.0        # clipboard read/write
+pycaw==20251023 ; sys_platform == "win32"      # set system volume to a level
+comtypes==1.4.16 ; sys_platform == "win32"     # pycaw dependency
+
+# --- Windows-only ---
+pywin32==312 ; sys_platform == "win32"        # SAPI text-to-speech
+pip_system_certs==5.3 ; sys_platform == "win32"  # fixes SSL cert-store mismatches
+winsdk==1.0.0b10 ; sys_platform == "win32"    # real-time notification listener
+
+# --- Slack front door (reyes_agent/slack_bridge.py imports this directly) ---
+slack_bolt==1.30.0
+
+# --- Optional, only needed if you turn these on in .env ---
+# elevenlabs==2.58.0      # only if TTS_PROVIDER=elevenlabs

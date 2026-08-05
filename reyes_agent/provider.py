@@ -1,0 +1,556 @@
+"""The thin seam between the agent core and whatever model provider is behind it.
+
+Everything else in the harness calls `run_turn()` and never touches a
+provider SDK directly. Swapping providers is a one-line edit to
+`MODEL_PROVIDER` in `.env` -- never a code change elsewhere. Adding a new
+provider means writing one `_run_<name>` function and one entry in
+`_RUNNERS` below.
+
+History is kept in a provider-neutral shape so the agent core and the tool
+loop never need to know which provider is behind the seam:
+  {"role": "user", "content": "..."}
+  {"role": "assistant", "content": "...", "tool_calls": [{"id","name","input","extra"}]}
+  {"role": "tool_result", "tool_call_id": "...", "name": "...", "content": "..."}
+`extra` on a tool call is optional, provider-specific metadata (see
+`ToolCall.extra`) that must round-trip back to whichever provider produced
+it. Each provider function translates this to its own wire format and
+translates the response back into a plain `AgentTurn`.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from reyes_agent import config, personality
+
+if TYPE_CHECKING:
+    import anthropic
+    import openai
+
+_MAX_RETRY_ATTEMPTS = 3
+_RETRY_BASE_DELAY_S = 2.0
+
+# CPU-bound local models pay for every token of context on every turn --
+# an unbounded history quietly makes each reply slower than the last.
+# Cloud providers don't have this problem as acutely, but the cap costs
+# them nothing either, so it applies everywhere.
+_MAX_HISTORY_TURNS = 8
+
+
+def _windowed(history: list[dict]) -> list[dict]:
+    user_indices = [i for i, turn in enumerate(history) if turn["role"] == "user"]
+    if len(user_indices) <= _MAX_HISTORY_TURNS:
+        return history
+    return history[user_indices[-_MAX_HISTORY_TURNS] :]
+
+
+class ProviderError(Exception):
+    """Raised when the model can't be reached or refuses the request.
+
+    Callers should catch this, show the message, and keep the conversation
+    loop alive -- a network hiccup should never crash the assistant.
+    """
+
+    def __init__(self, message: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        # Set on rate limits and connection hiccups -- run_turn() retries
+        # these with backoff automatically, on failed connections/auth/bad
+        # input it isn't, since retrying those just fails the same way again.
+        self.retryable = retryable
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    input: dict[str, Any]
+    # Provider-specific metadata that must be echoed back verbatim on the
+    # next call, or that provider rejects the turn. Gemini's OpenAI-compat
+    # endpoint requires its `thought_signature` be replayed on tool_calls
+    # or it 400s on the very next message -- discovered 2026-07-22. Other
+    # providers just leave this None.
+    extra: dict[str, Any] | None = None
+
+
+@dataclass
+class AgentTurn:
+    text: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+    @property
+    def wants_tool(self) -> bool:
+        return bool(self.tool_calls)
+
+
+OnText = Callable[[str], None]
+
+_anthropic_client: Any = None
+_xai_client: Any = None
+_gemini_client: Any = None
+_ollama_client: Any = None
+_anthropic_sdk: Any = None
+_openai_sdk: Any = None
+
+
+def _anthropic_module() -> Any:
+    global _anthropic_sdk
+    if _anthropic_sdk is None:
+        import anthropic
+
+        _anthropic_sdk = anthropic
+    return _anthropic_sdk
+
+
+def _openai_module() -> Any:
+    global _openai_sdk
+    if _openai_sdk is None:
+        import openai
+
+        _openai_sdk = openai
+    return _openai_sdk
+
+
+def _get_anthropic_client() -> Any:
+    global _anthropic_client
+    if _anthropic_client is None:
+        if not config.ANTHROPIC_API_KEY:
+            raise ProviderError(
+                "No ANTHROPIC_API_KEY set. Add one to .env, then restart."
+            )
+        _anthropic_client = _anthropic_module().Anthropic(
+            api_key=config.ANTHROPIC_API_KEY,
+            timeout=float(config.AI_REQUEST_TIMEOUT_S),
+            max_retries=0,
+        )
+    return _anthropic_client
+
+
+def _get_xai_client() -> Any:
+    global _xai_client
+    if _xai_client is None:
+        if not config.XAI_API_KEY:
+            raise ProviderError("No XAI_API_KEY set. Add one to .env, then restart.")
+        _xai_client = _openai_module().OpenAI(
+            api_key=config.XAI_API_KEY, base_url="https://api.x.ai/v1",
+            timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+        )
+    return _xai_client
+
+
+def _get_gemini_client() -> Any:
+    global _gemini_client
+    if _gemini_client is None:
+        if not config.GEMINI_API_KEY:
+            raise ProviderError("No GEMINI_API_KEY set. Add one to .env, then restart.")
+        _gemini_client = _openai_module().OpenAI(
+            api_key=config.GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+        )
+    return _gemini_client
+
+
+def _get_ollama_client() -> Any:
+    global _ollama_client
+    if _ollama_client is None:
+        # Ollama's OpenAI-compatible endpoint ignores the key -- any string works.
+        _ollama_client = _openai_module().OpenAI(
+            api_key="ollama", base_url=config.OLLAMA_BASE_URL,
+            timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+        )
+    return _ollama_client
+
+
+# --- Anthropic ---------------------------------------------------------
+
+
+def _to_anthropic_messages(history: list[dict]) -> list[dict]:
+    messages: list[dict] = []
+    pending_results: list[dict] = []
+
+    def flush() -> None:
+        nonlocal pending_results
+        if pending_results:
+            messages.append({"role": "user", "content": pending_results})
+            pending_results = []
+
+    for turn in history:
+        if turn["role"] == "tool_result":
+            pending_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": turn["tool_call_id"],
+                    "content": turn["content"],
+                }
+            )
+            continue
+        flush()
+        if turn["role"] == "user":
+            messages.append({"role": "user", "content": turn["content"]})
+        elif turn["role"] == "assistant":
+            blocks: list[dict] = []
+            if turn.get("content"):
+                blocks.append({"type": "text", "text": turn["content"]})
+            for tc in turn.get("tool_calls", []):
+                blocks.append(
+                    {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]}
+                )
+            messages.append({"role": "assistant", "content": blocks})
+    flush()
+    return messages
+
+
+def _run_anthropic(
+    history: list[dict], system: str, tools: list[dict], on_text: OnText | None
+) -> AgentTurn:
+    sdk = _anthropic_module()
+    client = _get_anthropic_client()
+    kwargs: dict[str, Any] = dict(
+        model=config.ANTHROPIC_MODEL,
+        max_tokens=1024,
+        # Cached block (personality, rarely changes) + uncached block (the
+        # tonal checkpoint, reinforced fresh every turn) -- see personality.py.
+        system=[
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": personality.TONAL_CHECKPOINT},
+        ],
+        messages=_to_anthropic_messages(history),
+    )
+    if tools:
+        kwargs["tools"] = [
+            {"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]}
+            for t in tools
+        ]
+    try:
+        text_parts: list[str] = []
+        with client.messages.stream(**kwargs) as stream:
+            for delta in stream.text_stream:
+                text_parts.append(delta)
+                if on_text:
+                    on_text(delta)
+            final = stream.get_final_message()
+        tool_calls = [
+            ToolCall(id=b.id, name=b.name, input=b.input)
+            for b in final.content
+            if b.type == "tool_use"
+        ]
+        return AgentTurn(text="".join(text_parts), tool_calls=tool_calls)
+    except sdk.AuthenticationError as exc:
+        raise ProviderError(
+            "That ANTHROPIC_API_KEY was rejected. Check it in .env."
+        ) from exc
+    except sdk.RateLimitError as exc:
+        raise ProviderError("Rate limited -- give it a moment and try again.", retryable=True) from exc
+    except sdk.APIConnectionError as exc:
+        raise ProviderError(
+            "Couldn't reach the model provider. Check your connection.", retryable=True
+        ) from exc
+    except sdk.APIStatusError as exc:
+        raise ProviderError(f"Model provider returned an error: {exc.message}") from exc
+
+
+# --- OpenAI-compatible (xAI, Gemini) ------------------------------------
+
+
+def _to_openai_messages(history: list[dict], system: str) -> list[dict]:
+    # No cache_control equivalent in this wire format -- both blocks just
+    # get concatenated every call.
+    messages: list[dict] = [
+        {"role": "system", "content": f"{system}\n{personality.TONAL_CHECKPOINT}"}
+    ]
+    for turn in history:
+        if turn["role"] == "user":
+            messages.append({"role": "user", "content": turn["content"]})
+        elif turn["role"] == "assistant":
+            msg: dict[str, Any] = {"role": "assistant", "content": turn.get("content") or None}
+            if turn.get("tool_calls"):
+                msg["tool_calls"] = []
+                for tc in turn["tool_calls"]:
+                    call = {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": json.dumps(tc["input"])},
+                    }
+                    if tc.get("extra"):
+                        # Must round-trip verbatim -- e.g. Gemini's
+                        # thought_signature, or the next call gets rejected.
+                        call["extra_content"] = tc["extra"]
+                    msg["tool_calls"].append(call)
+            messages.append(msg)
+        elif turn["role"] == "tool_result":
+            messages.append(
+                {"role": "tool", "tool_call_id": turn["tool_call_id"], "content": turn["content"]}
+            )
+    return messages
+
+
+def _to_openai_tools(tools: list[dict]) -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"],
+            },
+        }
+        for t in tools
+    ]
+
+
+def _run_openai_compatible(
+    client: Any,
+    model: str,
+    history: list[dict],
+    system: str,
+    tools: list[dict],
+    on_text: OnText | None,
+) -> AgentTurn:
+    kwargs: dict[str, Any] = dict(
+        model=model,
+        messages=_to_openai_messages(history, system),
+        stream=True,
+        max_tokens=600,  # bounds worst-case generation time -- replies are meant to be short anyway
+    )
+    if tools:
+        kwargs["tools"] = _to_openai_tools(tools)
+
+    text_parts: list[str] = []
+    tool_accum: dict[int, dict] = {}
+    _current_key = 0  # slot cursor for providers that send index=None (Gemini)
+    stream = client.chat.completions.create(**kwargs)
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta.content:
+            text_parts.append(delta.content)
+            if on_text:
+                on_text(delta.content)
+        if delta.tool_calls:
+            for tc_delta in delta.tool_calls:
+                # Gemini sends index=None on EVERY delta (xAI/OpenAI number
+                # them 0, 1, 2...). The old fallback of always using slot 0
+                # merged every simultaneous call into one: two delegate
+                # calls concatenated their JSON arguments into
+                # '{...}{...}', which fails to parse and collapsed to an
+                # empty {} -- i.e. parallel delegation silently never
+                # worked on Gemini. Root-caused 2026-08-04 after repeatedly
+                # seeing `delegate` fire with empty input.
+                #
+                # Fix: with no index to trust, a delta carrying a NEW id
+                # (or a different function name) marks the start of the
+                # next call rather than more of the current one.
+                if tc_delta.index is not None:
+                    key = tc_delta.index
+                else:
+                    key = _current_key
+                    cur = tool_accum.get(key)
+                    new_id = tc_delta.id and cur and cur["id"] and cur["id"] != tc_delta.id
+                    new_name = (
+                        tc_delta.function
+                        and tc_delta.function.name
+                        and cur
+                        and cur["name"]
+                        and cur["name"] != tc_delta.function.name
+                    )
+                    if new_id or new_name:
+                        _current_key += 1
+                        key = _current_key
+                slot = tool_accum.setdefault(
+                    key, {"id": None, "name": None, "arguments": "", "extra": None}
+                )
+                if tc_delta.id:
+                    slot["id"] = tc_delta.id
+                if tc_delta.function and tc_delta.function.name:
+                    slot["name"] = tc_delta.function.name
+                if tc_delta.function and tc_delta.function.arguments:
+                    slot["arguments"] += tc_delta.function.arguments
+                extra = getattr(tc_delta, "extra_content", None)
+                if extra:
+                    slot["extra"] = extra
+
+    tool_calls = []
+    for i, slot in sorted(tool_accum.items()):
+        try:
+            tool_input = json.loads(slot["arguments"] or "{}")
+        except json.JSONDecodeError:
+            tool_input = {}
+        tool_calls.append(
+            ToolCall(
+                id=slot["id"] or f"call_{i}",
+                name=slot["name"],
+                input=tool_input,
+                extra=slot["extra"],
+            )
+        )
+
+    return AgentTurn(text="".join(text_parts), tool_calls=tool_calls)
+
+
+def _run_xai(
+    history: list[dict], system: str, tools: list[dict], on_text: OnText | None
+) -> AgentTurn:
+    sdk = _openai_module()
+    try:
+        return _run_openai_compatible(
+            _get_xai_client(), config.XAI_MODEL, history, system, tools, on_text
+        )
+    except sdk.AuthenticationError as exc:
+        raise ProviderError(
+            "That XAI_API_KEY was rejected by api.x.ai. Check it in .env -- "
+            "it may be a key for a different provider."
+        ) from exc
+    except sdk.RateLimitError as exc:
+        raise ProviderError("Rate limited -- give it a moment and try again.", retryable=True) from exc
+    except sdk.APIConnectionError as exc:
+        raise ProviderError(
+            "Couldn't reach the model provider. Check your connection.", retryable=True
+        ) from exc
+    except sdk.NotFoundError as exc:
+        raise ProviderError(
+            f"Model '{config.XAI_MODEL}' not found. Check XAI_MODEL in .env."
+        ) from exc
+    except sdk.APIStatusError as exc:
+        raise ProviderError(f"Model provider returned an error: {exc.message}") from exc
+
+
+def _run_gemini(
+    history: list[dict], system: str, tools: list[dict], on_text: OnText | None
+) -> AgentTurn:
+    sdk = _openai_module()
+    try:
+        return _run_openai_compatible(
+            _get_gemini_client(), config.GEMINI_MODEL, history, system, tools, on_text
+        )
+    except sdk.AuthenticationError as exc:
+        raise ProviderError(
+            "That GEMINI_API_KEY was rejected. Check it in .env."
+        ) from exc
+    except sdk.RateLimitError as exc:
+        raise ProviderError("Rate limited -- give it a moment and try again.", retryable=True) from exc
+    except sdk.APIConnectionError as exc:
+        raise ProviderError(
+            "Couldn't reach the model provider. Check your connection.", retryable=True
+        ) from exc
+    except sdk.NotFoundError as exc:
+        raise ProviderError(
+            f"Model '{config.GEMINI_MODEL}' not found. Check GEMINI_MODEL in .env."
+        ) from exc
+    except sdk.APIStatusError as exc:
+        raise ProviderError(f"Model provider returned an error: {exc.message}") from exc
+
+
+def _run_ollama(
+    history: list[dict], system: str, tools: list[dict], on_text: OnText | None
+) -> AgentTurn:
+    sdk = _openai_module()
+    try:
+        return _run_openai_compatible(
+            _get_ollama_client(), config.OLLAMA_MODEL, history, system, tools, on_text
+        )
+    except sdk.APIConnectionError as exc:
+        raise ProviderError(
+            "Couldn't reach Ollama. Is it running? (`ollama serve`)", retryable=True
+        ) from exc
+    except sdk.NotFoundError as exc:
+        raise ProviderError(
+            f"Model '{config.OLLAMA_MODEL}' not found locally. "
+            f"Run `ollama pull {config.OLLAMA_MODEL}` first."
+        ) from exc
+    except sdk.APIStatusError as exc:
+        raise ProviderError(f"Ollama returned an error: {exc.message}") from exc
+
+
+_RUNNERS = {
+    "anthropic": _run_anthropic,
+    "xai": _run_xai,
+    "gemini": _run_gemini,
+    "ollama": _run_ollama,
+}
+
+
+def run_turn(
+    history: list[dict],
+    system: str = config.SYSTEM_PROMPT,
+    tools: list[dict] | None = None,
+    on_text: OnText | None = None,
+    cancel_check: Callable[[], None] | None = None,
+) -> AgentTurn:
+    """Send the conversation (+ optional tool definitions), get back one turn.
+
+    Streams text through `on_text` as it's generated. If the model asks to
+    use a tool, `AgentTurn.tool_calls` is populated and `.text` may be
+    empty -- the caller (the agent core) decides what happens next.
+
+    "Serious mode" reliability, per the user's 2026-07-23 ask (see
+    AGENT.md): retries automatically, with backoff, on rate limits and
+    connection hiccups (`ProviderError.retryable`) -- up to
+    `_MAX_RETRY_ATTEMPTS` -- rather than surfacing the first transient
+    blip as a failure. Only retries before any text has actually reached
+    the caller, though: once a token has streamed to `on_text`, a retry
+    would duplicate output, so a failure past that point still raises
+    immediately. Non-retryable errors (bad key, bad input, unknown
+    provider) raise on the first attempt, same as before -- retrying those
+    would just fail the same way three times instead of once.
+    """
+    runner = _RUNNERS.get(config.MODEL_PROVIDER)
+    if runner is None:
+        raise ProviderError(
+            f"Unknown MODEL_PROVIDER '{config.MODEL_PROVIDER}'. "
+            f"Valid options: {', '.join(_RUNNERS)}."
+        )
+    # API-bound copy only -- neither the windowing nor the voice cue ever
+    # touch stored history, so nothing here is lossy for the caller.
+    api_history = personality.append_voice_cue(_windowed(history))
+
+    last_exc: ProviderError | None = None
+    for attempt in range(_MAX_RETRY_ATTEMPTS):
+        if cancel_check:
+            cancel_check()
+        emitted = False
+
+        def _tracking_on_text(chunk: str) -> None:
+            nonlocal emitted
+            if cancel_check:
+                cancel_check()
+            emitted = True
+            if on_text:
+                on_text(chunk)
+
+        _t0 = time.time()
+        try:
+            _result = runner(api_history, system, tools or [], _tracking_on_text)
+            # Real measured latency feeds the Model Router's health/metrics.
+            # Never estimated -- see model_router.py.
+            try:
+                from reyes_agent import model_router
+
+                model_router.record(config.MODEL_PROVIDER, time.time() - _t0, ok=True)
+            except Exception:  # noqa: BLE001 -- telemetry must not break a turn
+                pass
+            return _result
+        except ProviderError as exc:
+            try:
+                from reyes_agent import model_router
+
+                model_router.record(config.MODEL_PROVIDER, time.time() - _t0, ok=False, error=str(exc))
+            except Exception:  # noqa: BLE001
+                pass
+            last_exc = exc
+            if emitted or not exc.retryable or attempt == _MAX_RETRY_ATTEMPTS - 1:
+                raise
+            delay = _RETRY_BASE_DELAY_S * (2**attempt)
+            # Backoff must not keep a cancelled request alive. Use short waits
+            # only here (not a polling worker loop) so cancellation is prompt.
+            while delay > 0:
+                if cancel_check:
+                    cancel_check()
+                slice_s = min(0.1, delay)
+                time.sleep(slice_s)
+                delay -= slice_s
+    raise last_exc  # unreachable -- loop always returns or raises

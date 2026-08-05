@@ -1,0 +1,6 @@
+Your two Kokoro voice files were left OUT of this zip (huge + unchanged). Put
+them back here:
+    models/audio/kokoro-v1.0.onnx
+    models/audio/voices-v1.0.bin
+If you extract this zip ON TOP of your existing REYES folder, they're already
+here. Only the HUD's text-to-speech needs them; python run.py works without them.

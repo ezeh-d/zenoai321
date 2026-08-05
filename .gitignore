@@ -1,0 +1,82 @@
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# Python
+__pycache__/
+**pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# JavaScript
+node_modules/
+dist/
+build/
+.next/
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Runtime files
+/data/
+/logs/
+reyes_agent/state/
+logs/
+*.log
+cache/
+tmp/
+temp/
+runtime/
+sessions/
+
+# Generated voice and media
+generated_audio/
+audio_cache/
+screenshots/
+recordings/
+captures/
+
+# Browser profiles and Playwright data
+playwright/.cache/
+browser_profiles/
+user_data/
+chrome_profile/
+
+# Local databases and indexes that should not be committed
+*.sqlite-journal
+*.db-journal
+
+# Local model binaries
+models/audio/*.onnx
+models/audio/*.bin
+
+# Legacy local conversation history
+gui old/data/
+
+# Crash and profiling files
+*.dump
+*.dmp
+*.prof
+
+# Personal vault and the runtime artefacts kept inside it.
+REYES/
+REYES (4)/
