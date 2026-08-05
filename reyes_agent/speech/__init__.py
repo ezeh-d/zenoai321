@@ -215,7 +215,15 @@ def capabilities() -> dict:
         "wake_word": {"engine": _wake.name, "implemented": getattr(_wake, "real", False),
                       "phrases": list(_wake.phrases)},
         "recognition": {"engine": _recognizer.name, "implemented": getattr(_recognizer, "real", False),
-                        "runs_in": getattr(_recognizer, "runs_in", "unknown")},
+                        "runs_in": getattr(_recognizer, "runs_in", "unknown"),
+                        # The browser recogniser runs with this locale. en-NG
+                        # materially improves Nigerian English and much Pidgin
+                        # lexis over en-US; set zeno_speech_lang in the panel's
+                        # localStorage to change it.
+                        "locale": "en-NG (default; browser-side setting)",
+                        "streaming": True,
+                        "confidence_gate": "actions are held for confirmation below 0.55 "
+                                           "when the engine reports confidence"},
         "vad": {"engine": _vad.name, "implemented": getattr(_vad, "real", False),
                 "note": "No real VAD in this build; every frame is treated as speech."
                         if not getattr(_vad, "real", False) else ""},

@@ -1792,6 +1792,24 @@ function noteSpeechFragment(chunk) {
 // open across as many commands as the user wants, and only an explicit
 // standby phrase closes it.
 let listeningMode = false;
+
+// --- speech recognition inputs, preserved raw -------------------------
+// Nigerian English by default: this user speaks Nigerian English/Pidgin,
+// and en-US was mis-transcribing ordinary commands. Stored so it can be
+// changed without editing code.
+const SPEECH_LANG = localStorage.getItem('zeno_speech_lang') || 'en-NG';
+let lastSpeechRaw = '';            // exactly what the engine returned
+let lastSpeechConfidence = null;   // engine confidence, or null if not given
+let lastSpeechAlternatives = [];   // up to 3 alternates, for disambiguation
+
+// Below this, a transcript is treated as "heard, but not clearly enough to
+// act on". ZENO asks instead of guessing -- the requirement is that it
+// never performs an action the user did not clearly request. Chrome does
+// not always populate confidence; null means "unknown", which is NOT
+// treated as low (that would make ZENO unusable), so the gate applies only
+// when the engine actually told us it was unsure.
+const SPEECH_CONFIDENCE_FLOOR = 0.55;
+
 const STANDBY_PHRASES = [
   'zeno standby', 'standby zeno', 'standby', 'go to sleep', 'sleep now',
   'stop listening', 'goodbye zeno', 'goodbye',
@@ -1852,6 +1870,20 @@ async function handleHeard(transcript) {
   if (awaitingCommand || listeningMode) {
     awaitingCommand = false;
     listeningMode = true;
+    // Safety check BEFORE anything runs: if the engine itself reported low
+    // confidence, read the transcript back and wait rather than acting on a
+    // guess. Mishearing "delete the file" is not recoverable by apologising
+    // afterwards. Only fires when confidence was actually reported.
+    if (lastSpeechConfidence !== null && lastSpeechConfidence < SPEECH_CONFIDENCE_FLOOR) {
+      const alt = lastSpeechAlternatives.find(a => a && a !== transcript);
+      const ask = alt
+        ? `I heard "${transcript}" — or did you mean "${alt}"?`
+        : `I think I heard "${transcript}", but not clearly. Say it again?`;
+      showCaption(ask, '');
+      speakInBrowser(ask);
+      setListeningUi('listening');
+      return;
+    }
     await runTurn(transcript);
     setListeningUi('listening');
     return;
@@ -1877,12 +1909,36 @@ function startAmbientListening() {
   }
   recognition = new SpeechRecognitionCtor();
   recognition.continuous = true;
-  recognition.interimResults = false;
-  recognition.lang = 'en-US';
+  // Streaming: interim results give a live caption AND let the settle
+  // buffer see a correction ("open chrome — no, edge") before the final
+  // transcript lands. Raw text is preserved untouched; nothing acts on an
+  // interim result.
+  recognition.interimResults = true;
+  // en-NG, not en-US. The engine's acoustic + language model for Nigerian
+  // English handles this user's accent, Nigerian place/name vocabulary and
+  // much Pidgin lexis far better than the US model, which was mis-hearing
+  // ordinary commands. Overridable if the user wants a different locale.
+  recognition.lang = SPEECH_LANG;
+  // Alternatives give a real confidence signal to gate on -- see
+  // lastSpeechConfidence and the safety check in handleHeard.
+  recognition.maxAlternatives = 3;
 
   recognition.onresult = (event) => {
     const last = event.results[event.results.length - 1];
-    if (last.isFinal) noteSpeechFragment(last[0].transcript);
+    const alt = last[0];
+    if (!last.isFinal) {
+      // Live caption only. An interim transcript NEVER triggers an action.
+      if (listeningMode || awaitingCommand) showCaption(alt.transcript, 'user-line');
+      return;
+    }
+    // Preserve the raw transcript and the engine's own confidence exactly
+    // as given, before any correction/normalisation happens downstream.
+    lastSpeechRaw = alt.transcript;
+    lastSpeechConfidence = (typeof alt.confidence === 'number' && alt.confidence > 0)
+      ? alt.confidence : null;
+    lastSpeechAlternatives = [];
+    for (let i = 0; i < last.length && i < 3; i++) lastSpeechAlternatives.push(last[i].transcript);
+    noteSpeechFragment(alt.transcript);
   };
   recognition.onerror = (e) => {
     if (e.error === 'not-allowed' || e.error === 'permission-denied') {
