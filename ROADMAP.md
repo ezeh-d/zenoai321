@@ -159,6 +159,18 @@ Done: WebGL removed; webcam inference made opt-in; dev loop stops when
 off; transform-based ring; voice caching; background threads for campaigns
 and agent work.
 
+**Owner-taught workflow replay:** explicit Teach Mode records a bounded,
+reviewable sequence of application changes, pointer actions, safe navigation
+hotkeys, and ZENO browser-tool events. The owner must review and name a
+workflow before it is saved. Replays use the existing managed workers,
+permission engine, browser runtime, Event Bus, and Mini Orb state rather than
+parallel runtimes. Typed text, clipboard contents, passwords, cookies, and
+URL query strings are never stored; replay stops for those inputs. Manual
+desktop clicks are normalized and foreground-app guarded, so an unexpected
+window produces a resumable prompt rather than a blind click. **Named limit:**
+manually demonstrated websites replay as guarded desktop actions; only actions
+originally run through ZENO's browser tools retain Playwright-level selectors.
+
 **Biggest win, and it was not the GUI.** After three GUI-side fixes the
 user still reported lag, so it was measured: 93 tools → 5.35s/turn vs 5
 tools → 1.50s. Tool COUNT dominated latency; every turn shipped ~13,900

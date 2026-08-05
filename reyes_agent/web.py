@@ -158,6 +158,11 @@ async def _on_startup() -> None:
         "browser-runtime", stage=STAGE_LAZY,
         start=lambda: __import__("reyes_agent.browser_runtime", fromlist=["get_browser_runtime"]).get_browser_runtime(),
     )
+    kernel.register_service(
+        "workflow-engine", stage=STAGE_LAZY,
+        start=lambda: __import__("reyes_agent.workflow_engine", fromlist=["get_workflow_engine"]).get_workflow_engine(),
+        stop=lambda: __import__("reyes_agent.workflow_engine", fromlist=["get_workflow_engine"]).get_workflow_engine().shutdown(),
+    )
     # Give the HTTP shell one clean scheduling window before creating the
     # specialist threads/restoring session state. The desktop splash hands the
     # user to this shell immediately; core work then starts in the background.
@@ -357,6 +362,11 @@ class MouseRequest(BaseModel):
     x: float           # 0..1 normalized across screen width
     y: float           # 0..1 normalized across screen height
     click: bool = False
+
+
+class WorkflowControlRequest(BaseModel):
+    action: str
+    name: str = ""
 
 
 @app.post("/api/mouse")
@@ -1015,12 +1025,74 @@ def mini_status() -> dict[str, Any]:
             agents = list(runtime.health().get("working_now", []))
         except Exception:  # noqa: BLE001 -- companion status is best effort
             pass
+    try:
+        from reyes_agent.workflow_engine import get_workflow_engine
+
+        workflow = get_workflow_engine().status()
+    except Exception:  # noqa: BLE001 -- Mini Orb status remains best effort
+        workflow = {"mode": "NORMAL"}
     return {
         "task": task,
         "queue_depth": workers.get("queue_depth", 0),
         "active_count": len(active),
         "agents": agents,
+        "workflow": workflow,
     }
+
+
+@app.get("/api/workflows")
+def workflows_list() -> dict[str, Any]:
+    """Saved owner-approved workflows and the one live workflow state."""
+    from reyes_agent.workflow_engine import get_workflow_engine
+
+    engine = get_workflow_engine()
+    return {"workflows": engine.list_workflows(), "runtime": engine.status()}
+
+
+@app.post("/api/workflows/teach")
+def workflows_teach(req: WorkflowControlRequest) -> dict[str, Any]:
+    from reyes_agent.workflow_engine import get_workflow_engine
+
+    engine = get_workflow_engine()
+    action = req.action.strip().lower()
+    handlers = {
+        "start": engine.start_teaching, "pause": engine.pause_teaching,
+        "resume": engine.resume_teaching, "stop": engine.stop_teaching,
+        "review": engine.review, "discard": engine.discard_teaching,
+    }
+    if action == "save":
+        message = engine.save(req.name)
+    elif action in handlers:
+        message = handlers[action]()
+    else:
+        raise HTTPException(400, "Unknown workflow teaching action.")
+    return {"message": message, "runtime": engine.status()}
+
+
+@app.post("/api/workflows/run")
+def workflows_run(req: WorkflowControlRequest) -> dict[str, Any]:
+    from reyes_agent.workflow_engine import get_workflow_engine
+
+    engine = get_workflow_engine()
+    action = req.action.strip().lower()
+    if action == "start":
+        message = engine.start_run(req.name)
+    elif action == "confirm":
+        # Keep local UI confirmations on the same Permission Engine path as
+        # voice/agent calls; this endpoint must not become a bypass for a
+        # cautious profile.
+        from reyes_agent.tools import run_tool
+
+        message = run_tool("workflow_confirm", {"name": req.name})
+    elif action == "resume":
+        message = engine.resume_run(req.name)
+    elif action == "pause":
+        message = engine.pause_run()
+    elif action == "cancel":
+        message = engine.cancel_run()
+    else:
+        raise HTTPException(400, "Unknown workflow run action.")
+    return {"message": message, "runtime": engine.status()}
 
 
 @app.get("/api/events/stats")

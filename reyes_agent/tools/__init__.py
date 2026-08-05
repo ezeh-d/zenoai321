@@ -247,7 +247,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, investing, knowledge_tools, memory, missions, notes, obsidian, profile_tools, projects, rag, subagents, system, utility, vision, work  # noqa: E402,F401
+from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, investing, knowledge_tools, memory, missions, notes, obsidian, profile_tools, projects, rag, subagents, system, utility, vision, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

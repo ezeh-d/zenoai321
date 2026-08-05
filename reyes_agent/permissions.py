@@ -148,6 +148,9 @@ TOOL_CAPABILITY: dict[str, str] = {
     "browser_extract": "browser_automation",
     "browser_read": "browser_automation",
     "browser_screenshot": "browser_automation",
+    # The engine also checks each recorded step. This mapping protects the
+    # explicit confirmation action itself in cautious installations.
+    "workflow_confirm": "desktop_automation",
     # Reserved names: no such tool exists, and if one is ever added it
     # lands in a BLOCKED capability by default rather than an open one.
     "place_trade": "financial",

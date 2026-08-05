@@ -12,11 +12,15 @@ const orb=initOrb(document.getElementById('orb-canvas'));
 function api(){return window.pywebview&&window.pywebview.api;}
 function openDashboard(){stopWakeListener();const a=api();if(a&&a.show_dashboard)a.show_dashboard();else location.href='/';}
 async function refresh(){
-  try{const data=await(await fetch('/api/mini-status')).json(),task=data.task||{},progress=task.progress||{};
+  try{const data=await(await fetch('/api/mini-status')).json(),task=data.task||{},progress=task.progress||{},workflow=data.workflow||{},mode=workflow.mode||'NORMAL';
     const elapsed=task.run_ms?` · ${Math.floor(task.run_ms/1000)}s`:'';
     const agent=data.agents&&data.agents[0]?` · ${data.agents[0]}`:'';
     const text=task.name?`${task.name} · ${progress.stage||'working'}${elapsed}${agent}`:'ZENO · idle';
-    orb.setState(task.name?'processing':'idle');
+    document.title=text;
+    if(task.name||mode==='WORKFLOW_RUNNING')orb.setState('processing');
+    else if(mode.startsWith('TEACH_MODE_'))orb.setState('listening');
+    else if(mode==='WORKFLOW_FAILED')orb.setState('error');
+    else orb.setState('idle');
   }catch(e){orb.setState('error');}
 }
 refresh();setInterval(()=>{if(!document.hidden)refresh();},2000);
