@@ -63,7 +63,7 @@ which does batching with a preview + single approval instead.
 App control, window/media/volume, clipboard, keyboard/mouse, file
 operations, shell commands. Governed by the Permission Engine.
 
-## Phase 9 — Voice System · DONE (one named gap)
+## Phase 9 — Voice System · DONE (one browser-reported limit)
 **Done:** ElevenLabs TTS; Voice Manager with 13 per-agent profiles; **all
 13 agents now have their own distinct voice** (owner supplied 12 ids
 2026-08-04 — verified genuinely distinct, not just configured: same
@@ -75,11 +75,19 @@ roll call button, diagnose button); **Agent Roll Call** — each specialist
 introduces itself in its own voice, played sequentially in the browser
 with the mic paused; once-per-session first-activation introductions on
 delegation. Persistent listening with standby + self-echo rejection.
-**Gap:** no real VAD, AEC, or noise suppression — the browser API doesn't
-expose them. `speech/` defines the seam so a native pipeline can be
-dropped in without touching the rest of ZENO. Account-side id validation
-needs an ElevenLabs key with `voices_read`; this install's key lacks that
-scope, which affects validation only, not speech.
+**Listening:** one browser-owned `getUserMedia` stream now requests noise
+suppression, echo cancellation and auto gain; a real adaptive energy VAD
+(rolling noise floor, hysteresis, 700 ms hangover) records only bounded
+speech clips from that exact processed stream. Clips are transcribed in
+the bounded Deepgram voice worker, so neither the Mini Orb nor dashboard
+opens a second Web Speech microphone stream. The UI reads the live track
+settings back and reports what the browser actually applied.
+**Named browser limit:** energy VAD reduces silence and ordinary background
+noise but cannot reliably distinguish the user from a TV or another person
+speaking, and audio drivers/WebView2 may decline a requested processing
+constraint. Account-side id validation needs an ElevenLabs key with
+`voices_read`; this install's key lacks that scope, which affects
+validation only, not speech.
 
 ## Phase 10 — Vision System · PARTIAL
 **Done:** screenshots, webcam capture, screen understanding, OpenCV

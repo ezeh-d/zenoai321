@@ -3,12 +3,12 @@ actually does listening.
 
 WHY THIS EXISTS
 ---------------
-Today recognition happens in the browser (Web Speech API), wake-word
-matching is string comparison in index.html, and there is no real VAD --
-the browser doesn't expose one. Those are reasonable choices now and bad
-ones later: the moment a native pipeline (Whisper/faster-whisper, Silero
-VAD, openWakeWord, RNNoise) is wired in, none of the rest of ZENO should
-have to change.
+The browser owns one processed microphone stream. Its adaptive VAD gates
+recording, and those bounded clips go to Deepgram through the server-side
+STT seam. Wake-word matching remains string comparison in index.html.
+Those choices are contained here so a native pipeline (Whisper/
+faster-whisper, Silero VAD, openWakeWord, RNNoise) can replace them
+without changing the rest of ZENO.
 
 So the CONTRACTS live here, and the current browser behaviour is
 registered as one implementation of them. Swapping engines becomes
@@ -22,15 +22,11 @@ Implemented and in use today:
     mention heuristic, standby phrases, self-echo rejection). These are
     genuine, tested rules lifted into one testable place rather than a
     stub.
-Declared but NOT implemented (deliberately, no fakes):
-  * VoiceActivityDetector -- no real VAD exists in this build. The base
-    class raises NotImplementedError; `NullVAD` is an explicit, honest
-    "always treat audio as speech" that says so in its own docstring
-    rather than pretending to gate anything.
-  * SpeechRecognizer -- the browser implementation lives in JS, so the
-    Python side registers `BrowserSpeechRecognizer` as a marker that
-    reports where recognition actually happens, instead of a Python
-    class that silently does nothing.
+  * BrowserEnergyVAD -- a real adaptive RMS detector with a rolling noise
+    floor, hysteresis and hangover, running against that same processed
+    browser stream. It is energy-based, not a neural speech classifier.
+  * DeepgramRecognizer -- clips are transcribed in bounded voice workers;
+    the VAD does not invoke an agent turn itself.
 
 Nothing here fabricates capability. `capabilities()` reports exactly
 which parts are real, and the GUI/diagnostics read from it.
@@ -72,6 +68,25 @@ class NullVAD:
 
     def is_speech(self, frame: bytes, sample_rate: int) -> bool:  # noqa: ARG002
         return True
+
+
+class BrowserEnergyVAD:
+    """Marker for the real browser VAD used by the persistent listener.
+
+    Analysis is intentionally kept beside ``getUserMedia`` in JavaScript:
+    moving raw microphone frames through the WebView bridge would add
+    latency and risk blocking the desktop host. The browser exposes its
+    measured noise floor and applied WebRTC settings to the UI diagnostics.
+    """
+
+    name = "browser-energy-adaptive"
+    real = True
+    runs_in = "browser"
+
+    def is_speech(self, frame: bytes, sample_rate: int) -> bool:  # noqa: ARG002
+        raise NotImplementedError(
+            "VAD runs on ZENO's processed browser MediaStream, not Python frames."
+        )
 
 
 class SpeechRecognizer(Protocol):
@@ -177,8 +192,8 @@ class PhraseWakeWord:
 
 
 # --- active registry ---------------------------------------------------
-_vad: object = NullVAD()
-_recognizer: object = BrowserSpeechRecognizer()
+_vad: object = BrowserEnergyVAD()
+_recognizer: object = DeepgramRecognizer()
 _wake: PhraseWakeWord = PhraseWakeWord()
 
 
@@ -216,20 +231,18 @@ def capabilities() -> dict:
                       "phrases": list(_wake.phrases)},
         "recognition": {"engine": _recognizer.name, "implemented": getattr(_recognizer, "real", False),
                         "runs_in": getattr(_recognizer, "runs_in", "unknown"),
-                        # The browser recogniser runs with this locale. en-NG
-                        # materially improves Nigerian English and much Pidgin
-                        # lexis over en-US; set zeno_speech_lang in the panel's
-                        # localStorage to change it.
-                        "locale": "en-NG (default; browser-side setting)",
-                        "streaming": True,
-                        "confidence_gate": "actions are held for confirmation below 0.55 "
-                                           "when the engine reports confidence"},
+                        "streaming": False,
+                        "note": "VAD-bounded browser clips are transcribed in a bounded "
+                                "voice worker before wake-word or command handling."},
         "vad": {"engine": _vad.name, "implemented": getattr(_vad, "real", False),
-                "note": "No real VAD in this build; every frame is treated as speech."
-                        if not getattr(_vad, "real", False) else ""},
-        "echo_cancellation": {"implemented": False,
-                              "note": "Mitigated by self-echo rejection, not true AEC."},
-        "noise_suppression": {"implemented": False,
-                              "note": "Relies on the OS/browser audio stack."},
+                "runs_in": getattr(_vad, "runs_in", "unknown"),
+                "note": "Adaptive energy floor, hysteresis and hangover. It cannot "
+                        "reliably distinguish a person from TV speech."},
+        "echo_cancellation": {"implemented": True,
+                              "note": "Requested on ZENO's browser MediaStream. The UI "
+                                      "reports the browser's actual applied setting."},
+        "noise_suppression": {"implemented": True,
+                              "note": "Requested on ZENO's browser MediaStream. The UI "
+                                      "reports the browser's actual applied setting."},
         "upgrade_path": "register_vad() / register_recognizer() / register_wake_word()",
     }

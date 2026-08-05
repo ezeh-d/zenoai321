@@ -7,9 +7,10 @@
 </style></head><body><canvas id="orb-canvas"></canvas>
 <script type="module">
 import { initOrb } from '/static/orb.js';
+import * as voiceVAD from '/static/vad.js?v=1';
 const orb=initOrb(document.getElementById('orb-canvas'));
 function api(){return window.pywebview&&window.pywebview.api;}
-function openDashboard(){const a=api();if(a&&a.show_dashboard)a.show_dashboard();else location.href='/';}
+function openDashboard(){stopWakeListener();const a=api();if(a&&a.show_dashboard)a.show_dashboard();else location.href='/';}
 async function refresh(){
   try{const data=await(await fetch('/api/mini-status')).json(),task=data.task||{},progress=task.progress||{};
     const elapsed=task.run_ms?` · ${Math.floor(task.run_ms/1000)}s`:'';
@@ -36,17 +37,21 @@ window.addEventListener('pywebviewready',()=>{const saved=JSON.parse(localStorag
 // into the Python host. It is never tied to animation frames and cannot
 // accumulate bridge calls while the host is delayed.
 setInterval(async()=>{const a=api();if(!document.hidden&&a&&a.host_heartbeat){try{await a.host_heartbeat(Date.now()/1000);}catch(_e){}}},250);
-// The compact companion keeps the same wake behavior as the dashboard but
-// does only one thing with it: wake ZENO by opening the full interface.
-// Microphone permission is shared by this local origin, so an earlier grant
-// carries over. A first-ever grant is still controlled by WebView2/Windows.
-const WakeRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-if(WakeRecognition){
-  const wake=new WakeRecognition();wake.continuous=true;wake.interimResults=false;wake.lang='en-US';
-  let shouldListen=true;
-  wake.onresult=e=>{const result=e.results[e.results.length-1];if(result&&result.isFinal&&/\b(?:wake up zeno|hey zeno|zeno)\b/i.test(result[0].transcript))openDashboard();};
-  wake.onend=()=>{if(shouldListen)try{wake.start();}catch(_e){}};
-  wake.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed')shouldListen=false;};
-  try{wake.start();}catch(_e){}
-}
+// The compact companion uses the same *processed* microphone stream as the
+// dashboard. A second Web Speech capture here would bypass VAD/noise
+// suppression and produce a second permission/session inside one WebView.
+let wakeRecorder=null,wakeChunks=[],wakeTimer=null,wakeActive=false,wakeBusy=false,wakeDiscard=false;
+const WAKE_MAX_CLIP_MS=12_000,WAKE_MIN_CLIP_BYTES=1_200;
+function recorderOptions(){const types=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'];const mimeType=types.find(t=>MediaRecorder.isTypeSupported(t));return mimeType?{mimeType}:undefined;}
+function finishWakeClip(discard=false){if(!wakeRecorder)return;wakeDiscard=wakeDiscard||discard;if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}if(wakeRecorder.state!=='inactive')wakeRecorder.stop();}
+async function transcribeWakeClip(blob){if(!wakeActive||wakeBusy||blob.size<WAKE_MIN_CLIP_BYTES)return;wakeBusy=true;orb.setState('processing');try{const form=new FormData();form.append('audio',blob,'zeno-wake.webm');const res=await fetch('/api/transcribe',{method:'POST',body:form});const data=await res.json().catch(()=>({}));if(res.ok&&/\b(?:wake up zeno|hey zeno|zeno)\b/i.test(String(data.transcript||'')))openDashboard();}catch(_e){}finally{wakeBusy=false;if(wakeActive)orb.setState('idle');}}
+function startWakeClip(){if(!wakeActive||wakeBusy||wakeRecorder)return;const stream=voiceVAD.mediaStream();if(!stream)return;wakeChunks=[];wakeDiscard=false;try{const recorder=new MediaRecorder(stream,recorderOptions());wakeRecorder=recorder;recorder.ondataavailable=e=>{if(e.data&&e.data.size)wakeChunks.push(e.data);};recorder.onstop=()=>{if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}const chunks=wakeChunks,discard=wakeDiscard;wakeChunks=[];wakeDiscard=false;if(wakeRecorder===recorder)wakeRecorder=null;if(!discard)void transcribeWakeClip(new Blob(chunks,{type:recorder.mimeType||'audio/webm'}));};recorder.start(250);wakeTimer=setTimeout(()=>finishWakeClip(false),WAKE_MAX_CLIP_MS);orb.setState('listening');}catch(_e){wakeRecorder=null;}}
+function stopWakeListener(){wakeActive=false;finishWakeClip(true);voiceVAD.stop();}
+voiceVAD.onSpeechStart(startWakeClip);voiceVAD.onSpeechEnd(()=>finishWakeClip(false));
+async function startWakeListener(){if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)return;wakeActive=true;await voiceVAD.start();if(!voiceVAD.mediaStream()){wakeActive=false;return;}orb.setState('idle');}
+// A saved WebView2 grant starts automatically. A brand-new profile requires
+// the one security approval governed by Windows/WebView2; no prompt is made
+// merely because the Mini Orb starts.
+(async()=>{try{if(!navigator.permissions?.query)return;const status=await navigator.permissions.query({name:'microphone'});if(status.state==='granted')await startWakeListener();}catch(_e){}})();
+window.addEventListener('beforeunload',stopWakeListener);
 </script></body></html>

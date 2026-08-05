@@ -499,11 +499,14 @@ def _background_result(handle, timeout: float) -> Any:
     except Exception as exc:  # noqa: BLE001 -- convert runtime/provider failures to HTTP responses
         from reyes_agent.provider import ProviderError
         from reyes_agent.worker_pool import TaskCancelled, TaskDeadlineExceeded
+        from reyes_agent.voice.stt import STTError
         from reyes_agent.voice.tts import TTSError
 
         if isinstance(exc, ProviderError):
             raise HTTPException(502, str(exc)) from exc
         if isinstance(exc, TTSError):
+            raise HTTPException(502, str(exc)) from exc
+        if isinstance(exc, STTError):
             raise HTTPException(502, str(exc)) from exc
         if isinstance(exc, (TaskCancelled, TaskDeadlineExceeded, TimeoutError)):
             raise HTTPException(504, str(exc)) from exc
@@ -648,6 +651,43 @@ def notification_events() -> StreamingResponse:
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+def _read_audio_upload(audio: UploadFile) -> bytes:
+    """Read one bounded microphone clip before it enters the worker pool."""
+    max_bytes = 25 * 1024 * 1024
+    audio_bytes = audio.file.read(max_bytes + 1)
+    if len(audio_bytes) > max_bytes:
+        raise HTTPException(413, "Voice clip is larger than 25 MiB.")
+    return audio_bytes
+
+
+@app.post("/api/transcribe")
+def transcribe_audio(audio: UploadFile = File(...)) -> dict[str, str]:
+    """Transcribe one VAD-bounded browser clip without starting an agent turn.
+
+    The desktop UI calls this from its single processed microphone stream.
+    Keeping transcription separate from ``/api/voice-turn`` is important:
+    normal room noise and wake-word listening must never execute an agent
+    request merely because a clip was captured.
+    """
+    audio_bytes = _read_audio_upload(audio)
+
+    def transcribe_job(context) -> dict[str, str]:
+        from reyes_agent.voice.stt import transcribe
+        from reyes_agent.performance_monitor import measure
+
+        context.progress("transcribing")
+        with measure("voice_stt"):
+            return {"transcript": transcribe(audio_bytes).strip()}
+
+    from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
+
+    handle = get_worker_pool().submit(
+        transcribe_job, name="voice-transcribe", priority=PRIORITY_VOICE,
+        timeout=90, with_context=True,
+    )
+    return _background_result(handle, 95)
+
+
 @app.post("/api/voice-turn")
 def voice_turn(audio: UploadFile = File(...)) -> dict[str, Any]:
     """The browser's voice front door -- record in the page (mic button or
@@ -658,10 +698,7 @@ def voice_turn(audio: UploadFile = File(...)) -> dict[str, Any]:
     ElevenLabs audio plays on *this* machine's speakers, not the remote
     browser's. The browser speaks the reply itself (Web Speech API).
     """
-    max_bytes = 25 * 1024 * 1024
-    audio_bytes = audio.file.read(max_bytes + 1)
-    if len(audio_bytes) > max_bytes:
-        raise HTTPException(413, "Voice clip is larger than 25 MiB.")
+    audio_bytes = _read_audio_upload(audio)
 
     def voice_job(context) -> dict[str, Any]:
         from reyes_agent.voice.stt import STTError, transcribe

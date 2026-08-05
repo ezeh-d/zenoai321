@@ -832,6 +832,7 @@ body.focus #agent-team-overview { opacity: 0; }
 
 <script type="module">
 import { initOrb } from "/static/orb.js?v=7";
+import * as voiceVAD from "/static/vad.js?v=1";
 
 const orb = initOrb(document.getElementById("orb-canvas"));
 // Exposed for the dev overlay and for testing orb state/expressions
@@ -1603,14 +1604,13 @@ sendEl.addEventListener('click', sendMessage);
 inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
 
 // --- voice: always listening for a wake word, no button per turn --------
-// Uses the browser's own continuous speech recognition (Web Speech API) --
-// not a click-to-record loop, and not our Deepgram endpoint -- so REYES
-// can listen at zero marginal cost per phrase and react the instant a
-// wake word is heard, matching wake_cli.py's desktop behavior but inside
-// the browser tab. TTS is also IN THE BROWSER (Web Speech API), not on
-// the server: this panel might be open from a phone on the LAN, and
-// server-side SAPI/ElevenLabs audio plays on the server's own speakers,
-// not the remote browser's.
+// One browser-owned getUserMedia stream requests WebRTC noise suppression,
+// echo cancellation and auto gain. The VAD watches that exact stream and
+// records only bounded speech clips; Deepgram transcribes each clip in a
+// managed server-side voice worker. This avoids a second hidden browser
+// microphone stream and keeps all provider work outside the window host.
+// TTS is fetched from the server and played in this browser so audio reaches
+// the active ZENO device rather than the server's speakers.
 //
 // No button: mic permission grants persist per-origin once given, so on
 // every visit after the first, this checks the Permissions API and
@@ -1622,24 +1622,26 @@ inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(
 // in that specific case, then disappears back into being just a status
 // light.
 //
-// Honest limitation: recognition is paused while REYES is speaking (to
-// avoid hearing itself) and resumes right after -- so unlike push-to-talk
-// mode, you can't interrupt REYES mid-sentence by voice here. Browser
-// speech-recognition support also varies (solid in Chrome/Edge/the
-// desktop app's WebView2, patchy or absent in some mobile browsers); if
-// it's unsupported, the status will say so plainly rather than silently
-// doing nothing.
+// Listening is paused while REYES is speaking (to avoid hearing itself)
+// and resumes right after. The microphone is captured once through a
+// processed getUserMedia stream; VAD-bounded clips go to server-side STT.
 const micIndicator = document.getElementById('mic-indicator');
 const micStatusEl = document.getElementById('mic-status');
 // Longest phrase first -- "hello bro" must be tried before "bro" alone,
 // or "bro" matches inside it first and strands "hello" in the remainder.
 const WAKE_WORDS = ['wake up zeno', 'zeno', 'hey zeno', 'bro'].sort((a, b) => b.length - a.length);
 
-const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
 let ambientEnabled = false;
 let awaitingCommand = false;
 let recognitionShouldRun = false;
+let vadRecorder = null;
+let vadChunks = [];
+let vadMaxClipTimer = null;
+let discardVADClip = false;
+let transcriptionActive = false;
+let vadHandlersBound = false;
+const VAD_MAX_CLIP_MS = 15_000;
+const VAD_MIN_CLIP_BYTES = 1_200;
 
 // Chrome/Edge/WebView2 expose the OS's higher-quality "Online (Natural)"
 // neural voices alongside the flat default ones, but only via this list
@@ -1667,10 +1669,10 @@ const _ttsAudioEl = new Audio();
 async function speakInBrowser(text) {
   if (!text) return;
   // Remembered so the persistent-listening loop can discard its own voice
-  // coming back through the mic (see looksLikeSelfEcho). recognition.stop()
-  // below already helps, but speakers keep playing after it restarts.
+  // coming back through the mic (see looksLikeSelfEcho). Pause the one
+  // processed microphone stream before playback, then resume it below.
   lastSpokenText = text;
-  if (recognition) recognition.stop(); // don't let REYES hear itself talk
+  if (ambientEnabled) voiceVAD.pauseDetection();
   window.speechSynthesis.cancel();
   _ttsAudioEl.pause();
 
@@ -1705,9 +1707,7 @@ async function speakInBrowser(text) {
     // Network hiccup: stay silent rather than switching voice mid-sentence.
   }
   if (!turnActive) orb.setState('idle');
-  if (recognitionShouldRun && recognition) {
-    try { recognition.start(); } catch (e) { /* already running */ }
-  }
+  if (recognitionShouldRun && ambientEnabled) voiceVAD.resumeDetection();
 }
 
 // Heuristic, not real NLU: distinguishes "Zeno, open Chrome" (addressing
@@ -1793,11 +1793,10 @@ function noteSpeechFragment(chunk) {
 // standby phrase closes it.
 let listeningMode = false;
 
-// --- speech recognition inputs, preserved raw -------------------------
-// Nigerian English by default: this user speaks Nigerian English/Pidgin,
-// and en-US was mis-transcribing ordinary commands. Stored so it can be
-// changed without editing code.
-const SPEECH_LANG = localStorage.getItem('zeno_speech_lang') || 'en-NG';
+// --- speech inputs, preserved raw -------------------------------------
+// Deepgram returns final clips, so confidence and alternatives are unknown
+// unless a future STT provider supplies them. The existing safety gate then
+// does not pretend it has a confidence signal it never received.
 let lastSpeechRaw = '';            // exactly what the engine returned
 let lastSpeechConfidence = null;   // engine confidence, or null if not given
 let lastSpeechAlternatives = [];   // up to 3 alternates, for disambiguation
@@ -1902,7 +1901,10 @@ async function handleHeard(transcript) {
   setListeningUi('listening');
 }
 
-function startAmbientListening() {
+/* Legacy Web Speech path removed from the active listener. Kept here only
+   temporarily as commented migration context; no browser microphone or
+   recognition object is created from it. */
+/*
   if (!SpeechRecognitionCtor) {
     micStatusEl.textContent = 'This browser doesn\'t support always-on voice -- try Chrome or Edge.';
     return;
@@ -1964,25 +1966,145 @@ function startAmbientListening() {
   micStatusEl.textContent = 'Always listening -- say "Zeno"...';
   orb.setState('idle');
 }
+*/
+
+function chooseRecorderOptions() {
+  const preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+  const mimeType = preferred.find((item) => MediaRecorder.isTypeSupported(item));
+  return mimeType ? { mimeType } : undefined;
+}
+
+function finishVADRecording(discard = false) {
+  if (!vadRecorder) return;
+  discardVADClip = discardVADClip || discard;
+  if (vadMaxClipTimer) { clearTimeout(vadMaxClipTimer); vadMaxClipTimer = null; }
+  if (vadRecorder.state !== 'inactive') vadRecorder.stop();
+}
+
+async function transcribeVADClip(blob) {
+  if (transcriptionActive || !ambientEnabled || blob.size < VAD_MIN_CLIP_BYTES) return;
+  transcriptionActive = true;
+  if (!turnActive) micStatusEl.textContent = 'Transcribing...';
+  try {
+    const form = new FormData();
+    form.append('audio', blob, 'zeno-command.webm');
+    const response = await fetch('/api/transcribe', { method: 'POST', body: form });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      // A failed provider stays isolated from the listener and never starts
+      // a turn. The status makes the real fault visible instead of silently
+      // acting on an invented transcript.
+      micStatusEl.textContent = result.detail || 'Could not transcribe that. Listening continues.';
+      return;
+    }
+    const transcript = String(result.transcript || '').trim();
+    if (!transcript || !ambientEnabled) return;
+    // Deepgram returns one final transcript for the VAD-bounded clip. It
+    // does not attach alternatives/confidence in this integration, so the
+    // existing safety gate correctly treats confidence as unknown.
+    lastSpeechRaw = transcript;
+    lastSpeechConfidence = null;
+    lastSpeechAlternatives = [];
+    noteSpeechFragment(transcript);
+  } catch (error) {
+    if (ambientEnabled) micStatusEl.textContent = 'Microphone connection interrupted. Listening continues.';
+  } finally {
+    transcriptionActive = false;
+    if (ambientEnabled && !turnActive && !settleTimer) {
+      micStatusEl.textContent = listeningMode ? 'Listening -- just talk, no wake word needed' : 'Always listening -- say "Zeno"...';
+    }
+  }
+}
+
+function startVADRecording() {
+  if (!ambientEnabled || turnActive || transcriptionActive || vadRecorder) return;
+  const stream = voiceVAD.mediaStream();
+  if (!stream || !window.MediaRecorder) return;
+  vadChunks = [];
+  discardVADClip = false;
+  try {
+    const recorder = new MediaRecorder(stream, chooseRecorderOptions());
+    vadRecorder = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size) vadChunks.push(event.data);
+    };
+    recorder.onstop = () => {
+      if (vadMaxClipTimer) { clearTimeout(vadMaxClipTimer); vadMaxClipTimer = null; }
+      const chunks = vadChunks;
+      const discard = discardVADClip;
+      vadChunks = [];
+      discardVADClip = false;
+      if (vadRecorder === recorder) vadRecorder = null;
+      if (!discard) void transcribeVADClip(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+    };
+    recorder.start(250); // bounded chunks; avoids retaining a long audio buffer
+    vadMaxClipTimer = setTimeout(() => finishVADRecording(false), VAD_MAX_CLIP_MS);
+  } catch (error) {
+    vadRecorder = null;
+    micStatusEl.textContent = 'This browser cannot record the processed microphone stream.';
+  }
+}
+
+function bindVADHandlers() {
+  if (vadHandlersBound) return;
+  vadHandlersBound = true;
+  voiceVAD.onSpeechStart(startVADRecording);
+  voiceVAD.onSpeechEnd(() => finishVADRecording(false));
+}
+
+function microphoneAvailable() {
+  return Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+}
+
+async function startAmbientListening() {
+  if (!microphoneAvailable()) {
+    micStatusEl.textContent = 'This browser cannot capture microphone audio for always-on voice.';
+    return;
+  }
+  recognitionShouldRun = true;
+  ambientEnabled = true;
+  const capabilities = await voiceVAD.start();
+  if (!voiceVAD.mediaStream()) {
+    recognitionShouldRun = false;
+    ambientEnabled = false;
+    micIndicator.classList.remove('listening');
+    micIndicator.classList.add('needs-permission');
+    micStatusEl.textContent = capabilities.error === 'NotAllowedError'
+      ? 'Microphone permission is blocked in Windows or this ZENO profile.'
+      : 'Microphone unavailable: ' + (capabilities.error || 'unknown error');
+    return;
+  }
+  bindVADHandlers();
+  ambientEnabled = true;
+  micIndicator.classList.remove('needs-permission');
+  micIndicator.classList.add('listening');
+  micStatusEl.textContent = capabilities.noise_suppression
+    ? 'Always listening -- say "Zeno"...'
+    : 'Always listening -- system noise suppression unavailable';
+  orb.setState('idle');
+}
 
 function stopAmbientListening() {
   recognitionShouldRun = false;
-  if (recognition) recognition.stop();
   ambientEnabled = false;
+  if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
+  listenBuffer = '';
+  finishVADRecording(true);
+  voiceVAD.stop();
   micIndicator.classList.remove('listening');
   micStatusEl.textContent = 'Muted -- click the dot to listen again';
 }
 
 micIndicator.addEventListener('click', () => {
   if (ambientEnabled) stopAmbientListening();
-  else startAmbientListening();
+  else void startAmbientListening();
 });
 
 // Auto-start the moment permission already exists (every visit after the
 // first) -- no click, no button, matches "open the browser and just talk."
 (async function initVoice() {
-  if (!SpeechRecognitionCtor) {
-    micStatusEl.textContent = 'This browser doesn\'t support always-on voice -- try Chrome or Edge.';
+  if (!microphoneAvailable()) {
+    micStatusEl.textContent = 'This browser cannot capture microphone audio for always-on voice.';
     return;
   }
   if (!navigator.permissions || !navigator.permissions.query) {
@@ -1995,7 +2117,7 @@ micIndicator.addEventListener('click', () => {
   try {
     const status = await navigator.permissions.query({ name: 'microphone' });
     if (status.state === 'granted') {
-      startAmbientListening();
+      await startAmbientListening();
     } else {
       micIndicator.classList.add('needs-permission');
       micStatusEl.textContent = 'Click the dot once to enable "Zeno" / "Wake up Zeno" / "Bro"';
@@ -2133,7 +2255,7 @@ async function playRollCall(sequence) {
   if (rollCallActive || !Array.isArray(sequence) || !sequence.length) return;
   rollCallActive = true;
   const wasListening = recognitionShouldRun;
-  try { if (recognition) recognition.stop(); } catch (e) {}
+  if (wasListening) voiceVAD.pauseDetection();
   try {
     for (const step of sequence) {
       if (!rollCallActive) break;  // cancelled
@@ -2165,7 +2287,7 @@ async function playRollCall(sequence) {
   } finally {
     rollCallActive = false;
     orb.setState('idle');
-    if (wasListening && recognition) { try { recognition.start(); } catch (e) {} }
+    if (wasListening && ambientEnabled) voiceVAD.resumeDetection();
   }
 }
 window.zenoRollCall = { play: playRollCall, stop() { rollCallActive = false; } };
