@@ -48,8 +48,10 @@ function injectStyles() {
     #orb-simple .orb-halo {
       position: absolute; inset: -34px; border-radius: 50%;
       background: radial-gradient(circle, hsl(var(--orb-hue) 90% 60% / 0.28), transparent 70%);
-      filter: blur(8px);
-      transition: background-color .6s ease;
+      /* No blur filter: a radial gradient to transparent is already soft,
+         and filter:blur forces an offscreen raster pass every time this
+         layer is invalidated. Same look, no per-frame filter cost. */
+      transition: background .6s ease;
     }
     #orb-simple .orb-particles {
       position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
@@ -61,16 +63,30 @@ function injectStyles() {
       animation: orb-spin var(--orb-spin, 20s) linear infinite;
     }
     #orb-simple.lite .orb-ring { animation: none; }
+    /* The glow lives on its OWN static layer, separate from the element
+       that breathes. box-shadow is PAINTED, not composited: when it sat on
+       .orb-core, every frame of the scale animation forced the compositor
+       to re-rasterize an 80px-blur shadow. Measured 2026-08-05 as sustained
+       GPU-process load at idle in WebView2. Split like this the shadow is
+       rasterized once and merely composited, and the glow looks identical. */
+    #orb-simple .orb-glow {
+      position: absolute; inset: 22px; border-radius: 50%;
+      box-shadow: 0 0 34px hsl(var(--orb-hue) 90% 58% / 0.55), 0 0 80px hsl(var(--orb-hue) 90% 55% / 0.30);
+      transition: box-shadow .6s ease;
+      pointer-events: none;
+    }
+    #orb-simple.energy-on .orb-glow {
+      box-shadow: 0 0 46px hsl(var(--orb-hue) 95% 62% / 0.75), 0 0 110px hsl(var(--orb-hue) 90% 58% / 0.45);
+    }
     #orb-simple .orb-core {
       position: absolute; inset: 22px; border-radius: 50%;
       background:
         radial-gradient(circle at 34% 28%, hsl(var(--orb-hue) 95% 80%), hsl(var(--orb-hue) 85% 56%) 45%, hsl(var(--orb-hue) 70% 28%) 78%, transparent 100%);
-      box-shadow: 0 0 34px hsl(var(--orb-hue) 90% 58% / 0.55), 0 0 80px hsl(var(--orb-hue) 90% 55% / 0.30);
       animation: orb-breathe 3.6s ease-in-out infinite;
-      transition: background .6s ease, box-shadow .6s ease;
-    }
-    #orb-simple .orb-core.energy {
-      box-shadow: 0 0 46px hsl(var(--orb-hue) 95% 62% / 0.75), 0 0 110px hsl(var(--orb-hue) 90% 58% / 0.45);
+      /* Own compositing layer so the breathe animation is a GPU transform
+         rather than a repaint of the gradient beneath it. */
+      will-change: transform;
+      transition: background .6s ease;
     }
     #orb-simple .orb-core.pulse-burst { animation: orb-breathe 3.6s ease-in-out infinite, orb-pulse-burst .5s ease-out; }
     @keyframes orb-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
@@ -131,7 +147,7 @@ export function initOrb(canvas) {
 
   const root = document.createElement("div");
   root.id = "orb-simple";
-  root.innerHTML = `<div class="orb-halo"></div><canvas class="orb-particles" width="220" height="220"></canvas><div class="orb-ring"></div>`
+  root.innerHTML = `<div class="orb-halo"></div><canvas class="orb-particles" width="220" height="220"></canvas><div class="orb-ring"></div><div class="orb-glow"></div>`
     + `<div class="orb-core"><div class="orb-eyes">`
     + `<div class="orb-eye"></div><div class="orb-eye"></div></div></div>`;
   (canvas && canvas.parentNode ? canvas.parentNode : document.body).appendChild(root);
@@ -171,11 +187,25 @@ export function initOrb(canvas) {
     speed: 0.00022 + (i % 5) * 0.000035, size: 0.8 + (i % 3) * 0.45,
   }));
   let particleCount = 16;
-  let particleTimer = null;
+  let particleTimer = null;      // rAF handle (kept as the audit's liveness flag)
   let particleActive = true;
+  let lastParticleDraw = 0;
+  // Driven by requestAnimationFrame, NOT setTimeout. This is the fix for
+  // WebView2 lag while minimised (2026-08-05): `visibilitychange` does not
+  // reliably fire for a minimised WebView2 desktop window the way it does
+  // for a background browser tab, so a setTimeout loop kept repainting this
+  // canvas at 30-40fps behind a hidden window. rAF is issued by the
+  // compositor, so it stops on its own the moment nothing is being
+  // composited -- minimised, occluded or hidden -- and resumes instantly.
+  // The frame-rate cap below is preserved, so the visual result is
+  // unchanged; only the wasted off-screen work goes away.
   function drawParticles(now) {
     particleTimer = null;
     if (!particleActive || document.visibilityState !== "visible") return;
+    // Keep the original cadence (40fps busy / 30fps idle) rather than
+    // drawing on every vsync -- particles don't need 60fps and this is a
+    // 2-core machine.
+    lastParticleDraw = now;
     particleContext.clearRect(0, 0, 220, 220);
     particleContext.fillStyle = `hsl(${currentHue} 92% 78%)`;
     for (let i = 0; i < particleCount; i++) {
@@ -189,20 +219,50 @@ export function initOrb(canvas) {
       particleContext.fill();
     }
     particleContext.globalAlpha = 1;
-    particleTimer = setTimeout(() => drawParticles(performance.now()), particleCount > 20 ? 25 : 33);
+    scheduleParticleFrame();
+  }
+  // setTimeout picks the CADENCE (30/40fps -- particles don't need 60), then
+  // one rAF aligns the actual draw to vsync. The rAF is what makes this
+  // self-suspending: a minimised WebView2 window is never composited, so the
+  // frame callback never fires and no canvas work happens. Scheduling the
+  // draw directly on rAF would instead wake 60x/sec just to skip most frames.
+  function scheduleParticleFrame() {
+    if (!particleActive) { particleTimer = null; return; }
+    const gap = particleCount > 20 ? 25 : 33;
+    particleTimer = setTimeout(() => {
+      particleTimer = requestAnimationFrame(drawParticles);
+    }, gap);
+  }
+  function startParticles() {
+    if (!particleActive) return;
+    // ALWAYS clear first rather than bailing when a handle exists. When the
+    // window is hidden the loop parks on a requestAnimationFrame that the
+    // compositor never fires, so the handle stays non-null for ever; a
+    // "already running" early-return then left particles permanently dead
+    // after the first minimise. Caught in testing 2026-08-05.
+    stopParticleLoop();
+    scheduleParticleFrame();
+  }
+  function stopParticleLoop() {
+    if (particleTimer === null) return;
+    // The handle is either a timeout id or a rAF id depending on which half
+    // of the cycle we're in; clearing both is cheap and unambiguous.
+    clearTimeout(particleTimer);
+    cancelAnimationFrame(particleTimer);
+    particleTimer = null;
   }
   function setParticleCount(count) {
     particleCount = Math.max(0, Math.min(particles.length, count));
-    if (particleActive && particleTimer === null) drawParticles(performance.now());
+    startParticles();
   }
   function setParticlesActive(on) {
     particleActive = !!on;
     if (!particleActive) {
-      clearTimeout(particleTimer); particleTimer = null;
+      stopParticleLoop();
       particleContext.clearRect(0, 0, 220, 220);
-    } else if (particleTimer === null) drawParticles(performance.now());
+    } else startParticles();
   }
-  drawParticles(performance.now());
+  startParticles();
 
   // Blink on a random human-ish cadence (3-8s). setTimeout, not rAF: this
   // is two class toggles a few times a minute, so it costs nothing at rest
@@ -231,7 +291,13 @@ export function initOrb(canvas) {
   scheduleBlink();
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") { scheduleBlink(); setParticlesActive(true); }
-    else { clearTimeout(blinkTimer); setParticlesActive(false); }
+    else {
+      // Blink still needs an explicit stop: setTimeout keeps firing behind a
+      // hidden window, unlike the rAF-driven particle loop which the
+      // compositor suspends on its own.
+      clearTimeout(blinkTimer); blinkTimer = null;
+      setParticlesActive(false);
+    }
   });
 
   function pulse() {
@@ -248,10 +314,12 @@ export function initOrb(canvas) {
   }
 
   let agentEnergy = 0;
-  function dispatchAgent(_id) { pulse(); agentEnergy = 1; core.classList.add("energy"); }
+  // Energy now toggles on the ROOT so the static .orb-glow layer changes,
+  // not the breathing core -- keeps the glow off the animated element.
+  function dispatchAgent(_id) { pulse(); agentEnergy = 1; root.classList.add("energy-on"); }
   function setAgentWorking(_id, working) {
     agentEnergy = working ? 1 : 0;
-    core.classList.toggle("energy", agentEnergy > 0);
+    root.classList.toggle("energy-on", agentEnergy > 0);
   }
   function getAgentScreenPositions() { return []; }
 
