@@ -213,6 +213,26 @@ _SPECIALISTS: dict[str, dict] = {
 _MAX_SUBAGENT_TOOL_ROUNDS = 4
 
 
+def _publish_agent_visual_state(agent_id: str, state: str, **details: str) -> None:
+    """Publish only a real specialist transition for the visual adapters.
+
+    This helper deliberately has no timers, state machine, or UI dependency:
+    it is called immediately before the provider or a real tool is invoked.
+    If publishing fails, delegation must continue normally.
+    """
+    try:
+        from reyes_agent import event_bus
+
+        emotion = {"thinking": "thinking", "working": "serious", "speaking": "neutral"}.get(state, "neutral")
+        event_bus.publish(
+            f"agent.{state}",
+            {"agent": agent_id, "visual_state": state, "emotion": emotion, **details},
+            source="subagents",
+        )
+    except Exception:  # noqa: BLE001 -- telemetry must not break an agent task
+        pass
+
+
 @register(
     name="delegate",
     description=(
@@ -271,6 +291,8 @@ def delegate(specialist: str, task: str) -> str:
 def _run_specialist(specialist: str, spec: dict, task: str) -> str:
     from reyes_agent.provider import ProviderError, run_turn
 
+    _publish_agent_visual_state(specialist, "thinking", task=task[:200])
+
     # First time this specialist is used in the session, let it introduce
     # itself in its own voice. Fire-and-forget to the panel -- it must
     # never delay or break the actual delegated work.
@@ -294,6 +316,7 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
 
     try:
         for _ in range(_MAX_SUBAGENT_TOOL_ROUNDS):
+            _publish_agent_visual_state(specialist, "thinking", task=task[:200])
             turn = run_turn(history, system=system, tools=allowed_tools)
             if not turn.wants_tool:
                 return turn.text
@@ -311,6 +334,16 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
             for tc in turn.tool_calls:
                 # Same gated entry point as the main loop -- a sub-agent
                 # doesn't get to skip the Tier 6 confirmation gate.
+                _publish_agent_visual_state(specialist, "working", tool=tc.name)
+                if tc.name == "write_project_file" and tc.input.get("project_name"):
+                    # A project view reports the specialist that is actually
+                    # about to write, rather than guessing from its role.
+                    try:
+                        from reyes_agent import project_activity
+
+                        project_activity.note_agent(str(tc.input["project_name"]), specialist, "CODING")
+                    except Exception:  # noqa: BLE001 -- activity cannot break a tool
+                        pass
                 result = run_tool(tc.name, tc.input)
                 history.append(
                     {"role": "tool_result", "tool_call_id": tc.id, "name": tc.name, "content": result}

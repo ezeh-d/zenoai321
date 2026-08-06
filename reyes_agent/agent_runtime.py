@@ -195,7 +195,15 @@ class AgentWorker:
         self.state = WORKING
         self.current_task = task.description[:120]
         started = time.time()
-        _publish("agent.task_started", {"agent": self.agent_id, "task": task.description[:200]})
+        _publish("agent.task_started", {
+            "agent": self.agent_id,
+            "task_id": task.id,
+            "task": task.description[:200],
+            # The first actual specialist operation is its model/reasoning
+            # turn.  The UI maps this evidence-backed state to THINKING.
+            "visual_state": "thinking",
+            "emotion": "thinking",
+        })
         try:
             task.result = task.fn()
             self.metrics.tasks_completed += 1
@@ -217,7 +225,11 @@ class AgentWorker:
                     if self._pending_by_key.get(task.dedupe_key) is task:
                         self._pending_by_key.pop(task.dedupe_key, None)
             _publish("agent.task_finished", {
-                "agent": self.agent_id, "ok": task.error is None,
+                "agent": self.agent_id,
+                "task_id": task.id,
+                "ok": task.error is None,
+                "visual_state": "success" if task.error is None else "error",
+                "emotion": "proud" if task.error is None else "concerned",
                 "duration_ms": int(dur * 1000),
             })
 
@@ -253,6 +265,13 @@ class AgentWorker:
             )
             self._pending_by_key[key] = task
             self.queue.put(task)
+            _publish("agent.task_queued", {
+                "agent": self.agent_id,
+                "task_id": task.id,
+                "task": description[:200],
+                "visual_state": "waiting",
+                "emotion": "curious",
+            })
             return task
 
     def snapshot(self) -> dict[str, Any]:
@@ -387,7 +406,7 @@ def ensure_worker(agent_id: str) -> AgentWorker | None:
             _workers[agent_id] = worker
         if not worker.is_alive():
             worker.start()
-    _publish("agent.activated", {"agent": agent_id, "reason": "delegated work"})
+    _publish("agent.activated", {"agent": agent_id, "reason": "delegated work", "emotion": "curious"})
     return worker
 
 
@@ -402,7 +421,7 @@ def restart(agent_id: str, reason: str = "manual") -> str:
     with w._restart_lock:
         old_thread = w._thread
         w.state = RESTARTING
-        _publish("agent.restarting", {"agent": agent_id, "reason": reason})
+        _publish("agent.restarting", {"agent": agent_id, "reason": reason, "emotion": "warning"})
         # Signal and join the *existing* thread before replacing its control
         # events. Replacing `_stop` first made the old loop observe a fresh,
         # unset event and left duplicate agent threads alive.
@@ -413,7 +432,7 @@ def restart(agent_id: str, reason: str = "manual") -> str:
             if old_thread is not threading.current_thread():
                 old_thread.join(timeout=2.0)
         if old_thread is not None and old_thread.is_alive():
-            _publish("agent.restart_deferred", {"agent": agent_id, "reason": reason})
+            _publish("agent.restart_deferred", {"agent": agent_id, "reason": reason, "emotion": "warning"})
             return f"{agent_id.upper().replace('_COMM','')} restart is waiting for its active task to finish."
 
         # Queue contents after the stop sentinel deliberately survive for the
@@ -444,7 +463,8 @@ def restart(agent_id: str, reason: str = "manual") -> str:
         while time.time() < deadline and not w.is_alive():
             time.sleep(0.01)
         ok = w.is_alive()
-    _publish("agent.restarted", {"agent": agent_id, "ok": ok, "reason": reason})
+    _publish("agent.restarted", {"agent": agent_id, "ok": ok, "reason": reason,
+                                  "emotion": "success" if ok else "concerned"})
     return (f"{agent_id.upper().replace('_COMM','')} recovered successfully ({reason})."
             if ok else f"{agent_id} FAILED to restart.")
 

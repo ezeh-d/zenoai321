@@ -86,6 +86,16 @@ speech clips from that exact processed stream. Clips are transcribed in
 the bounded Deepgram voice worker, so neither the Mini Orb nor dashboard
 opens a second Web Speech microphone stream. The UI reads the live track
 settings back and reports what the browser actually applied.
+**Persistent Mini Orb handoff:** the Mini Orb and lazy dashboard now have a
+single explicit microphone-owner handoff. Opening the dashboard releases the
+Mini stream; hiding/minimizing it releases its stream and, after a short
+release delay, restores the Mini listener automatically. The WebView2
+profile remains `%LOCALAPPDATA%\\ZENO\\WebView2\\UserData`, so a saved grant
+persists across restart. If WebView2 cannot report saved permissions through
+the Permissions API, the Mini Orb performs the normal one-time capture attempt
+instead of silently disabling wake-word listening. VAD now genuinely retries
+only an unsupported optional `channelCount` constraint; denied/busy device
+errors remain visible and are never masked by retries.
 **Named browser limit:** energy VAD reduces silence and ordinary background
 noise but cannot reliably distinguish the user from a TV or another person
 speaking, and audio drivers/WebView2 may decline a requested processing
@@ -109,10 +119,45 @@ Voice-first HUD, activity ticker, stage indicator, workspaces (coding,
 news, map), Timeline, command palette, focus mode, explainability panel,
 missions panel, phone companion page.
 
+**Live Project Activity View (Task 16):** a project write is now observable
+from destination selection through real file completion. New projects do not
+silently choose a folder: `write_project_file` returns a destination request
+and the Activity View offers Desktop, Documents, ZENO Projects, or an explicit
+full path. It then shows actual state, active agent when known, tools, files,
+errors/warnings, bounded code/HTML preview and completed-step counts over the
+Event Bus. It does not expose private reasoning or manufacture a percentage
+when no finite plan exists. Existing vault projects remain editable at their
+current paths. Selecting a destination in the visible view is an explicit
+owner action and continues through the normal conversation/permission path;
+it is not an autonomous retry.
+
 ## Phase 13 — Orb System · DONE
-CSS orb (WebGL removed — it was the lag), 11 states, 13-agent ring with
-per-agent colour/icon, live activation from real delegation events,
-click-through dashboards.
+CSS orb (WebGL removed — it was the lag), 11 states and on-demand
+specialist presence with per-agent colour/identity, live activation from real
+delegation events, click-through dashboards.
+
+**Council faces and emotional presence (Tasks 13 & 15):** `agent_faces.js`
+is one shared CSS face primitive, lazily loaded for Council/Situation/Mini
+presentations. Each registered specialist has distinct hue, eye geometry,
+accent, name and role. Real lifecycle emits map to waiting, thinking, working,
+speaking, success and error. Expression is separately event-backed:
+neutral/happy/excited/curious/thinking/confused/surprised/concerned/serious/
+skeptical/frustrated/proud/sad/warning/success can react while an agent stays
+silent. Silent faces use static poses, CSS transitions and bounded
+deterministic blinks; only thinking, working and real audio-speaking states
+animate. Closing Council destroys face DOM/timers, and hidden views pause all
+animation.
+
+**On-demand specialist presence (Task 14):** ZENO is the only persistent
+Mini Orb. Specialist orbs/faces are created only from real `agent.*` Event
+Bus lifecycle events: queued → waiting, task/provider → thinking, tool
+execution → working, real audio playback → speaking, then success/error
+and release. The Mini Orb consumes the same Event Bus feed and shows only
+called participants around ZENO; the dashboard keeps no permanent 13-agent
+ring. The explicitly opened Council room may show the roster as static faces,
+but only real lifecycle/audio activity animates a face. CSS animation is
+gated to the active state and is paused while hidden; terminal dashboard
+cards fade out and their DOM/timers are released.
 
 ## Phase 14 — Executive Dashboard · PARTIAL
 **Done:** **Agent Monitor** (live worker state, heartbeat age, queue

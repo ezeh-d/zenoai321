@@ -8,9 +8,20 @@
 <script type="module">
 import { initOrb } from '/static/orb.js';
 import * as voiceVAD from '/static/vad.js?v=1';
+import { createAgentPresence } from '/static/agent_presence.js';
 const orb=initOrb(document.getElementById('orb-canvas'));
+// This is still ONE native Mini Orb window. Specialist faces are small DOM
+// children created only for real Event Bus lifecycle events; they are never
+// separate floating windows and disappear after the real terminal event.
+const agentPresence=createAgentPresence({container:document.body,mode:'mini'});
 function api(){return window.pywebview&&window.pywebview.api;}
-function openDashboard(){stopWakeListener();const a=api();if(a&&a.show_dashboard)a.show_dashboard();else location.href='/';}
+function openDashboard(){
+  // There must be one capture owner at a time.  The native host publishes a
+  // matching lifecycle event, and restores this listener after the dashboard
+  // is hidden again.
+  stopWakeListener();
+  const a=api();if(a&&a.show_dashboard)a.show_dashboard();else location.href='/';
+}
 async function refresh(){
   try{const data=await(await fetch('/api/mini-status')).json(),task=data.task||{},progress=task.progress||{},workflow=data.workflow||{},mode=workflow.mode||'NORMAL';
     const elapsed=task.run_ms?` · ${Math.floor(task.run_ms/1000)}s`:'';
@@ -30,9 +41,28 @@ async function refresh(){
     else if(/wait|queue/.test(stage)||(!task.name&&data.queue_depth))orb.setState('waiting');
     else if(task.name||data.active_count||data.agents?.length)orb.setState('acting');
     else orb.setState('idle');
+    // The endpoint is only a late-connection bootstrap. Live transitions
+    // below are driven by the Event Bus, not a polling animation.
+    agentPresence.bootstrap(data.agents);
   }catch(_e){/* Preserve the last honest state during a transient local request failure. */}
 }
 refresh();setInterval(()=>{if(!document.hidden)refresh();},2000);
+// A compact SSE subscription gives the Mini Orb the exact same real agent
+// lifecycle as the dashboard. It is one dormant socket, not a polling loop.
+let agentEventSource=null;
+if(window.EventSource){
+  agentEventSource=new EventSource('/api/events/stream');
+  agentEventSource.onmessage=(event)=>{try{
+    const update=JSON.parse(event.data);
+    agentPresence.consume(update);
+    // The dashboard's native close/minimize event is the handoff point for
+    // the single microphone stream.  Delay only the reacquire, so the hidden
+    // dashboard has time to release its track first; this never shows a new
+    // permission prompt for an already-granted persistent WebView2 profile.
+    if(update.type==='desktop.dashboard_opened')stopWakeListener();
+    if(update.type==='desktop.dashboard_hidden')setTimeout(()=>{if(!wakeActive)void startWakeListener();},700);
+  }catch(_e){}};
+}
 let dragging=false,moved=false,startX=0,startY=0,moveInFlight=false,queuedMove=null;
 function flushMove(){
   if(moveInFlight||!queuedMove)return;
@@ -47,25 +77,61 @@ document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX
 document.addEventListener('mouseup',()=>{if(!dragging)return;dragging=false;document.body.classList.remove('dragging');const a=api();if(a){const end=a.end_orb_drag||a.snap_orb;if(end)Promise.resolve(end.call(a)).catch(()=>{});}});
 document.addEventListener('click',()=>{if(!moved)openDashboard();});
 window.addEventListener('pywebviewready',()=>{const a=api();if(a&&a.restore_orb_position)a.restore_orb_position().catch(()=>{});});
-// One awaited heartbeat (max 4/s) proves that WebView messages are crossing
+// One awaited heartbeat per second proves that WebView messages are crossing
 // into the Python host. It is never tied to animation frames and cannot
 // accumulate bridge calls while the host is delayed.
 setInterval(async()=>{const a=api();if(!document.hidden&&a&&a.host_heartbeat){try{await a.host_heartbeat(Date.now()/1000);}catch(_e){}}},1000);
 // The compact companion uses the same *processed* microphone stream as the
 // dashboard. A second Web Speech capture here would bypass VAD/noise
 // suppression and produce a second permission/session inside one WebView.
-let wakeRecorder=null,wakeChunks=[],wakeTimer=null,wakeActive=false,wakeBusy=false,wakeDiscard=false;
+let wakeRecorder=null,wakeChunks=[],wakeTimer=null,wakeActive=false,wakeBusy=false,wakeDiscard=false,wakeRecoveryTimer=null,wakeRecoveryAttempts=0;
 const WAKE_MAX_CLIP_MS=12_000,WAKE_MIN_CLIP_BYTES=1_200;
 function recorderOptions(){const types=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'];const mimeType=types.find(t=>MediaRecorder.isTypeSupported(t));return mimeType?{mimeType}:undefined;}
 function finishWakeClip(discard=false){if(!wakeRecorder)return;wakeDiscard=wakeDiscard||discard;if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}if(wakeRecorder.state!=='inactive')wakeRecorder.stop();}
 async function transcribeWakeClip(blob){if(!wakeActive||wakeBusy||blob.size<WAKE_MIN_CLIP_BYTES)return;wakeBusy=true;orb.setState('processing');try{const form=new FormData();form.append('audio',blob,'zeno-wake.webm');const res=await fetch('/api/transcribe',{method:'POST',body:form});const data=await res.json().catch(()=>({}));if(res.ok&&/\b(?:wake up zeno|hey zeno|zeno)\b/i.test(String(data.transcript||'')))openDashboard();}catch(_e){}finally{wakeBusy=false;if(wakeActive)orb.setState('idle');}}
 function startWakeClip(){if(!wakeActive||wakeBusy||wakeRecorder)return;const stream=voiceVAD.mediaStream();if(!stream)return;wakeChunks=[];wakeDiscard=false;try{const recorder=new MediaRecorder(stream,recorderOptions());wakeRecorder=recorder;recorder.ondataavailable=e=>{if(e.data&&e.data.size)wakeChunks.push(e.data);};recorder.onstop=()=>{if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}const chunks=wakeChunks,discard=wakeDiscard;wakeChunks=[];wakeDiscard=false;if(wakeRecorder===recorder)wakeRecorder=null;if(!discard)void transcribeWakeClip(new Blob(chunks,{type:recorder.mimeType||'audio/webm'}));};recorder.start(250);wakeTimer=setTimeout(()=>finishWakeClip(false),WAKE_MAX_CLIP_MS);orb.setState('listening');}catch(_e){wakeRecorder=null;}}
-function stopWakeListener(){wakeActive=false;finishWakeClip(true);voiceVAD.stop();}
+function stopWakeListener(){wakeActive=false;wakeRecoveryAttempts=0;if(wakeRecoveryTimer){clearTimeout(wakeRecoveryTimer);wakeRecoveryTimer=null;}finishWakeClip(true);voiceVAD.stop();}
 voiceVAD.onSpeechStart(startWakeClip);voiceVAD.onSpeechEnd(()=>finishWakeClip(false));
-async function startWakeListener(){if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)return;wakeActive=true;await voiceVAD.start();if(!voiceVAD.mediaStream()){wakeActive=false;return;}orb.setState('idle');}
+async function startWakeListener(){
+  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)return false;
+  wakeActive=true;
+  const capabilities=await voiceVAD.start();
+  if(!voiceVAD.mediaStream()){
+    wakeActive=false;document.title='ZENO Mini Orb · microphone unavailable';
+    // A hidden dashboard releases the same capture device through its SSE
+    // lifecycle event. If this first handoff arrives slightly early, retry a
+    // busy device at most twice; denied and missing-device errors stay final.
+    if(capabilities.error==='NotReadableError'&&wakeRecoveryAttempts<2){
+      wakeRecoveryAttempts++;wakeRecoveryTimer=setTimeout(()=>{wakeRecoveryTimer=null;if(!wakeActive)void startWakeListener();},1200);
+    }
+    return false;
+  }
+  wakeRecoveryAttempts=0;
+  // The track settings are read by vad.js after opening the stream.  This
+  // title is intentionally compact: it is a diagnostic, not a second UI.
+  document.title=capabilities.noise_suppression?'ZENO Mini Orb · listening':'ZENO Mini Orb · listening (basic audio)';
+  orb.setState('idle');
+  return true;
+}
 // A saved WebView2 grant starts automatically. A brand-new profile requires
 // the one security approval governed by Windows/WebView2; no prompt is made
 // merely because the Mini Orb starts.
-(async()=>{try{if(!navigator.permissions?.query)return;const status=await navigator.permissions.query({name:'microphone'});if(status.state==='granted')await startWakeListener();}catch(_e){}})();
-window.addEventListener('beforeunload',stopWakeListener);
+(async()=>{
+  // A granted permission starts hands-free.  WebView2 builds that do not
+  // expose the Permissions API still retain the same profile grant, so make
+  // one normal getUserMedia attempt instead of silently disabling wake-word
+  // listening forever.  A brand-new profile may show the single browser
+  // security prompt; Windows privacy policy is never bypassed.
+  try{
+    if(navigator.permissions?.query){
+      const status=await navigator.permissions.query({name:'microphone'});
+      if(status.state==='denied')return;
+      await startWakeListener();
+      return;
+    }
+  }catch(_e){/* fall through: persisted WebView2 grants do not require query support */}
+  await startWakeListener();
+})();
+window.zenoMiniWake={start:startWakeListener,stop:stopWakeListener};
+window.addEventListener('beforeunload',()=>{if(agentEventSource)agentEventSource.close();agentPresence.dispose();stopWakeListener();});
 </script></body></html>

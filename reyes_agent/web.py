@@ -1165,6 +1165,39 @@ def missions_list() -> list[dict[str, Any]]:
     return list_missions_dicts()
 
 
+class ProjectDestinationRequest(BaseModel):
+    project_name: str
+    destination: str
+
+
+@app.get("/api/projects/activity")
+def projects_activity() -> dict[str, Any]:
+    """A bounded live projection of observable project work.
+
+    This is intentionally not a chain-of-thought endpoint. It exposes only
+    destination, steps, files, tools, agent and reported outcomes.
+    """
+    from reyes_agent import project_activity
+
+    return {"projects": project_activity.status()}
+
+
+@app.post("/api/projects/destination")
+def projects_destination(req: ProjectDestinationRequest) -> dict[str, Any]:
+    name = req.project_name.strip()
+    destination = req.destination.strip()
+    if not name or len(name) > 160:
+        raise HTTPException(400, "A valid project name is required.")
+    if not destination or len(destination) > 500:
+        raise HTTPException(400, "Choose Desktop, Documents, ZENO Projects, or a full folder path.")
+    from reyes_agent import project_activity
+
+    try:
+        return {"project": project_activity.select_destination(name, destination)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 class NotificationSettingsRequest(BaseModel):
     enabled: bool | None = None
     read_aloud: bool | None = None

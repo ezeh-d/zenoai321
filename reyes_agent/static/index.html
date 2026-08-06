@@ -128,7 +128,7 @@
   }
   /* Mini mode: REYES shrinks to just the orb (window is resized small by
      the desktop app). Hide all chrome so only the glowing orb shows. */
-  body.mini #ui, body.mini #map-overlay, body.mini #dev-overlay, body.mini #code-overlay, body.mini #news-overlay, body.mini #cmdk-overlay, body.mini #explain-btn, body.mini #explain-panel, body.mini #timeline-overlay, body.mini #agents-overlay, body.mini #situation-overlay, body.mini #galaxy-overlay { display: none !important; }
+  body.mini #ui, body.mini #map-overlay, body.mini #dev-overlay, body.mini #code-overlay, body.mini #news-overlay, body.mini #cmdk-overlay, body.mini #explain-btn, body.mini #explain-panel, body.mini #timeline-overlay, body.mini #agents-overlay, body.mini #situation-overlay, body.mini #galaxy-overlay, body.mini #council-overlay { display: none !important; }
   body.mini #orb-canvas { cursor: pointer; }
   /* Companion mode: the whole window IS the orb. Shrink the orb to fit the
      210px window and drop the desktop background so only the glow shows. */
@@ -365,6 +365,15 @@ header h1 {
   box-shadow: 0 0 22px var(--dot-color, #6ea8ff), 0 0 46px var(--dot-color, #6ea8ff);
   animation: reyes-pulse 1.1s ease-in-out infinite;
 }
+.agent-dot::after {
+  content: attr(data-agent-name); position: absolute; top: calc(100% + 4px); left: 50%;
+  transform: translateX(-50%); font: 700 9px system-ui, sans-serif; letter-spacing: .06em;
+  color: var(--dot-color, #6ea8ff); text-shadow: 0 1px 3px #000; white-space: nowrap;
+}
+.agent-dot.waiting { animation: none; opacity: .9; filter: saturate(.85); }
+.agent-dot.speaking { animation: reyes-pulse .55s ease-in-out infinite; }
+.agent-dot.success { border-color: #4ade80; box-shadow: 0 0 18px #4ade80; }
+.agent-dot.error { border-color: #fb7185; box-shadow: 0 0 18px #fb7185; }
 #agent-team-overview {
   position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 1;
   font: 11px system-ui, sans-serif; color: var(--text-dim); letter-spacing: 0.05em;
@@ -438,7 +447,7 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
    IDs/blocks rather than merged into map-overlay's, since each has its own
    trigger event and inner layout; the visual chrome is duplicated on
    purpose for that isolation, not because it needed rebuilding. */
-#code-overlay, #news-overlay, #timeline-overlay, #agents-overlay, #situation-overlay, #galaxy-overlay {
+#code-overlay, #news-overlay, #timeline-overlay, #agents-overlay, #situation-overlay, #galaxy-overlay, #council-overlay {
   display: none;
   position: fixed;
   top: 50%; left: 50%;
@@ -453,7 +462,20 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
   overflow: hidden;
   flex-direction: column;
 }
-#code-overlay.open, #news-overlay.open, #timeline-overlay.open, #agents-overlay.open, #situation-overlay.open, #galaxy-overlay.open { display: flex; }
+#code-overlay.open, #news-overlay.open, #timeline-overlay.open, #agents-overlay.open, #situation-overlay.open, #galaxy-overlay.open, #council-overlay.open { display: flex; }
+
+/* Council: the agent faces live HERE, not as floating desktop windows.
+   ZENO's orb stays the primary identity; these are the specialists. */
+#council-overlay { width: min(94vw, 1000px); height: min(84vh, 720px); }
+#council-body {
+  flex: 1; overflow-y: auto; padding: 18px 16px;
+  display: flex; flex-wrap: wrap; gap: 18px 10px; align-content: flex-start;
+  justify-content: center;
+}
+#council-note {
+  flex-shrink: 0; padding: 8px 16px; border-top: 1px solid rgba(120,170,255,0.12);
+  font: 11px system-ui, sans-serif; color: var(--text-dim);
+}
 
 /* Knowledge Galaxy: the REAL vault graph as SVG. Static layout computed
    server-side -- no physics loop, because a force simulation on this
@@ -503,6 +525,18 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
 .sit-bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; margin: 5px 0 2px; }
 .sit-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
 .sit-bar i.hot { background: var(--danger); }
+/* Created only for participating agents while Situation Room is open. */
+.sit-agent-presence { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.sit-agent-orb { min-width: 54px; display: grid; justify-items: center; gap: 2px; color: var(--agent-color); }
+.sit-agent-orb i { width: 28px; height: 28px; border-radius: 50%; display: block;
+  background: radial-gradient(circle at 35% 28%, color-mix(in srgb, var(--agent-color) 58%, white), var(--agent-color) 65%, #101827);
+  border: 1px solid var(--agent-color); box-shadow: 0 0 12px color-mix(in srgb, var(--agent-color) 65%, transparent); }
+.sit-agent-orb b { font: 700 8.5px system-ui, sans-serif; letter-spacing: .04em; }
+.sit-agent-orb small { font: 8px system-ui, sans-serif; color: var(--text-dim); text-transform: uppercase; }
+.sit-agent-orb.thinking i, .sit-agent-orb.working i, .sit-agent-orb.speaking i { animation: reyes-pulse 1s ease-in-out infinite; }
+.sit-agent-orb.waiting i { filter: saturate(.7); }
+.sit-agent-orb.success i { border-color: #4ade80; }
+.sit-agent-orb.error i { border-color: #fb7185; }
 
 /* Agent Monitor: one row per live worker. Every value here is observed
    from the runtime (thread liveness, heartbeat age, queue depth, real
@@ -618,6 +652,15 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
   </div>
   <div id="galaxy-body"><svg id="galaxy-svg" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet"></svg></div>
   <div id="galaxy-info">Click a star to see what it connects to.</div>
+</div>
+<div id="council-overlay">
+  <div class="ws-bar">
+    <span class="ws-title">Council</span>
+    <span id="council-summary" style="font:11px system-ui;color:var(--text-dim);"></span>
+    <button class="ws-close" id="council-close" title="Close">&times;</button>
+  </div>
+  <div id="council-body"></div>
+  <div id="council-note">Faces reflect each agent's real runtime state. Only active agents animate.</div>
 </div>
 <div id="situation-overlay">
   <div class="ws-bar">
@@ -890,6 +933,19 @@ const AGENTS = {
   helios:      { name: 'HELIOS', color: '#10b981', icon: '❤️', role: 'Wellbeing Intelligence' },
 };
 const AGENT_ORDER = Object.keys(AGENTS);
+const FALLBACK_AGENT_COLOURS = ['#38bdf8', '#c084fc', '#fb7185', '#fbbf24', '#34d399', '#60a5fa'];
+function ensureAgentIdentity(agentId, role = 'Specialist') {
+  const id = String(agentId || '').trim().toLowerCase();
+  if (!/^[a-z0-9_-]{1,64}$/.test(id)) return null;
+  if (!AGENTS[id]) {
+    let hash = 0; for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+    AGENTS[id] = {
+      name: id.toUpperCase().replace(/_/g, ' '), color: FALLBACK_AGENT_COLOURS[hash % FALLBACK_AGENT_COLOURS.length],
+      icon: '◉', role: role || 'Specialist',
+    };
+  } else if (role && !AGENTS[id].role) AGENTS[id].role = role;
+  return id;
+}
 
 const agentRing = (() => {
   const ringEl = document.getElementById('agent-ring');
@@ -898,8 +954,8 @@ const agentRing = (() => {
   const dash = document.getElementById('agent-dashboard');
   const dots = {};   // id -> element
   const beams = {};  // id -> <line>
+  // Deliberately empty at boot: only called specialists receive a DOM orb.
   const state = {};  // id -> { active: bool, activeCount, task, lastResult, uses }
-  AGENT_ORDER.forEach((id) => { state[id] = { active: false, activeCount: 0, task: '', lastResult: '', uses: 0 }; });
 
   // Idle agents drift slowly around the ring (per spec: "inactive agents
   // slowly orbit"). Driven in JS, not a CSS transform on the container,
@@ -910,8 +966,9 @@ const agentRing = (() => {
   function layout() {
     const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
     const r = Math.min(window.innerWidth, window.innerHeight) * 0.36;
-    AGENT_ORDER.forEach((id, i) => {
-      const angle = (i / AGENT_ORDER.length) * Math.PI * 2 - Math.PI / 2 + rotation;
+    const participants = Object.keys(state);
+    participants.forEach((id, i) => {
+      const angle = (i / Math.max(1, participants.length)) * Math.PI * 2 - Math.PI / 2 + rotation;
       const x = cx + r * Math.cos(angle), y = cy + r * Math.sin(angle);
       pos[id] = { x, y };
       // transform, NOT left/top: left/top writes force a layout pass on
@@ -937,11 +994,15 @@ const agentRing = (() => {
     beams[id].setAttribute('y2', String(cy));
   }
 
-  AGENT_ORDER.forEach((id) => {
+  function ensureVisual(id) {
+    id = ensureAgentIdentity(id);
+    if (!id || dots[id]) return;
     const a = AGENTS[id];
+    state[id] = { active: false, activeCount: 0, task: '', lastResult: '', uses: 0, visualState: 'waiting', removeTimer: null };
     const dot = document.createElement('div');
     dot.className = 'agent-dot';
     dot.style.setProperty('--dot-color', a.color);
+    dot.dataset.agentName = a.name;
     dot.textContent = a.icon;
     dot.title = a.name;
     dot.addEventListener('click', () => openDashboard(id));
@@ -955,7 +1016,8 @@ const agentRing = (() => {
     line.style.transition = 'stroke-opacity .35s';
     beamsEl.appendChild(line);
     beams[id] = line;
-  });
+    layout();
+  }
   layout();
   window.addEventListener('resize', layout);
   // The ring is static while no specialist is working.  Particle/glow motion
@@ -963,47 +1025,65 @@ const agentRing = (() => {
   // SVG beams all day.  Active work gets a slow 2fps orbit only.
   let orbitTimer = null;
   function updateOrbit() {
-    const anyActive = AGENT_ORDER.some((id) => state[id].active);
-    if (!anyActive) {
+    const anyActive = Object.values(state).some((entry) => entry.active);
+    if (!anyActive || document.visibilityState !== 'visible') {
       clearInterval(orbitTimer); orbitTimer = null;
       layout();
     } else if (orbitTimer === null) {
       orbitTimer = setInterval(() => { rotation += 0.00375; layout(); }, 500);
     }
   }
+  document.addEventListener('visibilitychange', updateOrbit);
 
   function updateOverview() {
-    const activeCount = AGENT_ORDER.filter((id) => state[id].active).length;
+    const activeCount = Object.values(state).filter((entry) => entry.active).length;
     overviewEl.textContent = activeCount > 0
-      ? `${activeCount} agent${activeCount > 1 ? 's' : ''} active · ${AGENT_ORDER.length - activeCount} idle`
+      ? `${activeCount} agent${activeCount > 1 ? 's' : ''} active · ${Math.max(0, Object.keys(AGENTS).length - activeCount)} idle`
       : '';
   }
 
-  function activate(id, task) {
+  function activate(id, task, visualState = 'thinking') {
+    ensureVisual(id);
     if (!state[id]) return;
-    state[id].activeCount++;
+    if (state[id].removeTimer) { clearTimeout(state[id].removeTimer); state[id].removeTimer = null; }
+    if (!state[id].active) state[id].activeCount++;
     state[id].active = true;
     state[id].task = task;
+    state[id].visualState = visualState;
     state[id].uses++;
     dots[id].classList.add('active');
+    dots[id].classList.remove('waiting', 'thinking', 'working', 'speaking', 'success', 'error');
+    dots[id].classList.add(visualState);
     drawBeam(id);  // draw immediately -- layout() only maintains active beams
     beams[id].setAttribute('stroke-opacity', '0.55');
     updateOverview();
     updateOrbit();
+    window.zenoSituation?.refreshAgentPresence();
     if (dash.classList.contains('open') && dash.dataset.agent === id) renderDashboard(id);
   }
 
-  function deactivate(id, result) {
+  function deactivate(id, result, visualState = 'success') {
     if (!state[id]) return;
     state[id].activeCount = Math.max(0, state[id].activeCount - 1);
     state[id].lastResult = result;
+    state[id].visualState = visualState;
     if (state[id].activeCount === 0) {
       state[id].active = false;
-      dots[id].classList.remove('active');
+      dots[id].classList.remove('waiting', 'thinking', 'working', 'speaking');
+      dots[id].classList.add('active', visualState);
       beams[id].setAttribute('stroke-opacity', '0');
+      // Keep a real success/error acknowledgement briefly, then release the
+      // node and SVG beam. Inactive specialists never remain in the DOM.
+      state[id].removeTimer = setTimeout(() => {
+        dots[id]?.remove(); beams[id]?.remove();
+        delete dots[id]; delete beams[id]; delete state[id]; delete pos[id];
+        updateOverview(); updateOrbit();
+        window.zenoSituation?.refreshAgentPresence();
+      }, 1450);
     }
     updateOverview();
     updateOrbit();
+    window.zenoSituation?.refreshAgentPresence();
     if (dash.classList.contains('open') && dash.dataset.agent === id) renderDashboard(id);
   }
 
@@ -1032,7 +1112,28 @@ const agentRing = (() => {
   }
   document.getElementById('agent-dashboard-close').addEventListener('click', () => dash.classList.remove('open'));
 
-  return { activate, deactivate };
+  // The dashboard EventSource calls this with the same durable agent events
+  // consumed by the Mini Orb. Tool-stream calls remain a fast visual hint,
+  // but lifecycle state is owned by the Event Bus.
+  function lifecycle(update) {
+    const p = update && update.payload || {};
+    const id = p.agent;
+    if (!ensureAgentIdentity(id, p.role || 'Specialist')) return;
+    const type = update.type || '';
+    if (type === 'agent.task_finished') return deactivate(id, '', p.visual_state || (p.ok === false ? 'error' : 'success'));
+    if (type === 'agent.task_queued') return activate(id, p.task || '', 'waiting');
+    if (type === 'agent.task_started' || type === 'agent.thinking' || type === 'agent.working') {
+      return activate(id, p.task || '', p.visual_state || (type === 'agent.working' ? 'working' : 'thinking'));
+    }
+    if (type === 'agent.activated' || type === 'agent.restarting') return activate(id, '', 'waiting');
+    if (type === 'agent.restarted') return p.ok === false ? deactivate(id, '', 'error') : activate(id, '', 'waiting');
+  }
+
+  function participants() {
+    return Object.entries(state).map(([agent, value]) => ({ agent, active: value.active, state: value.visualState }));
+  }
+
+  return { activate, deactivate, lifecycle, participants };
 })();
 window.agentRing = agentRing;
 
@@ -1183,6 +1284,7 @@ const COMMANDS = [
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map of real links and tags', run: () => openGalaxy() },
   { label: 'Evolution report', hint: 'What ZENO measured about its own performance', run: () => runTurn('Run an evolution report on yourself.') },
   { label: 'Agent Monitor', hint: 'Live worker state, heartbeats, queues, metrics', run: () => openAgentMonitor() },
+  { label: 'Council', hint: 'Every specialist’s face, live state from the event bus', run: () => openCouncil() },
   { label: 'Executive Meeting', hint: 'Every specialist reports status in its own voice', run: () => runTurn('Hold an executive meeting — every agent reports status.') },
   { label: 'New mission...', hint: 'Create a tracked long-term goal', run: () => cmdkAsk('Mission name and what success looks like:') },
   { label: 'List my missions', hint: '', run: () => runTurn('List my active missions.') },
@@ -1564,13 +1666,16 @@ async function runTurn(text) {
             orb.setAgentWorking(agentId, true);
             callIdToAgent.set(evt.id, agentId);
             if (window.agentRing) window.agentRing.activate(agentId, evt.input.task || '');
+            councilAgentActivity(agentId, 'working');
           }
         } else if (evt.type === 'tool_result') {
           finishActivityChip(openChips.get(evt.id), evt.name, evt.result);
           openChips.delete(evt.id);
           if (openChips.size === 0) orb.setState('processing');
           if (callIdToAgent.has(evt.id) && window.agentRing) {
-            window.agentRing.deactivate(callIdToAgent.get(evt.id), evt.result || '');
+            const doneAgent = callIdToAgent.get(evt.id);
+            window.agentRing.deactivate(doneAgent, evt.result || '');
+            councilAgentActivity(doneAgent, 'success');   // auto-expires to real state
             callIdToAgent.delete(evt.id);
           }
         } else if (evt.type === 'text') {
@@ -2304,7 +2409,10 @@ async function playRollCall(sequence) {
       if (!rollCallActive) break;  // cancelled
       showCaption((step.agent || 'zeno').toUpperCase().replace('_COMM', '') + ': ' + step.text, '');
       orb.setState(step.agent === 'zeno' ? 'speaking' : 'communicating');
-      if (window.agentRing && step.agent !== 'zeno') window.agentRing.activate(step.agent, 'introducing');
+      // The audio element below is the real speech source; use SPEAKING only
+      // while it is actually playing, never as a decorative loop.
+      if (window.agentRing && step.agent !== 'zeno') window.agentRing.activate(step.agent, 'introducing', 'speaking');
+      if (step.agent && step.agent !== 'zeno') councilSpeak(step.agent, true);
       try {
         const res = await fetch('/api/tts', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2325,7 +2433,8 @@ async function playRollCall(sequence) {
           await new Promise((r) => setTimeout(r, 200));
         }
       } catch (e) { /* skip this line, keep the roll call going */ }
-      if (window.agentRing && step.agent !== 'zeno') window.agentRing.deactivate(step.agent, 'introduced');
+      if (window.agentRing && step.agent !== 'zeno') window.agentRing.deactivate(step.agent, 'introduced', 'success');
+      if (step.agent && step.agent !== 'zeno') councilSpeak(step.agent, false);
     }
   } finally {
     rollCallActive = false;
@@ -2750,6 +2859,178 @@ document.getElementById('galaxy-close').addEventListener('click',
 document.getElementById('galaxy-search').addEventListener('input', (e) => renderGalaxy(e.target.value));
 window.zenoGalaxy = { open: openGalaxy, render: renderGalaxy };
 
+// --- Council: animated agent faces ------------------------------------
+// The face module is lazy-imported on first open (nothing loads until
+// then), and every visual state comes from a REAL source:
+//   * runtime state from /api/agents  (working / error / sleeping / idle)
+//   * live delegation from the SSE tool events already handled above
+//   * speaking from the roll-call player
+// Nothing here plays a random or decorative animation.
+let facesMod = null;
+let councilTimer = null;
+// The Council shows the WHOLE roster ("Open Council -> agent faces appear"),
+// but only agents actually doing something animate: idle/sleeping faces have
+// no keyframes at all, so a full roster costs the compositor nothing. This
+// is an overlay the user opened, not a set of floating desktop windows.
+//
+// councilVisualStates is the event-driven OVERRIDE layer. An entry means "a
+// real event said this", and it outranks the 4s /api/agents snapshot until
+// it expires -- otherwise a momentary success/error would be erased by the
+// next poll, or worse, latched forever.
+const councilVisualStates = new Map();
+const councilOverrideTimers = new Map();
+
+async function ensureFaces() {
+  if (!facesMod) facesMod = await import('/static/agent_faces.js?v=1');
+  return facesMod;
+}
+
+// Runtime state -> face state. Only mappings we can actually observe.
+function faceStateFor(a) {
+  if (!a.alive) return 'sleeping';
+  if (!a.healthy) return 'error';
+  if (a.state === 'error') return 'error';
+  if (a.state === 'working') return 'working';
+  if (a.state === 'sleeping' || a.state === 'standby') return 'sleeping';
+  if (a.state === 'restarting' || a.state === 'starting') return 'thinking';
+  if (a.queue_depth > 0) return 'waiting';    // real queue, not yet started
+  return 'idle';
+}
+
+function councilEmotionFor(state, supplied = '') {
+  const explicit = String(supplied || '').trim().toLowerCase();
+  if (explicit) return explicit;
+  return ({ waiting: 'curious', thinking: 'thinking', working: 'serious',
+            speaking: 'neutral', success: 'proud', warning: 'concerned',
+            error: 'concerned', idle: 'neutral', sleeping: 'neutral' })[state] || 'neutral';
+}
+
+function ensureCouncilFace(agentId, runtime = null) {
+  agentId = ensureAgentIdentity(agentId, runtime && runtime.role || 'Specialist');
+  if (!facesMod || !agentId) return null;
+  const body = document.getElementById('council-body');
+  let card = body.querySelector(`[data-agent="${agentId}"]`);
+  if (!card) {
+    const cfg = AGENTS[agentId];
+    card = facesMod.createFace(agentId, { ...cfg, role: (runtime && runtime.role) || cfg.role });
+    body.appendChild(card);
+  }
+  return card;
+}
+
+/** Momentary states (success / error / waiting after a restart) are
+ *  acknowledgements, not resting states. Latch one briefly, then hand the
+ *  face back to whatever the runtime actually reports. */
+function expireOverride(agentId, ms) {
+  clearTimeout(councilOverrideTimers.get(agentId));
+  councilOverrideTimers.set(agentId, setTimeout(() => {
+    councilOverrideTimers.delete(agentId);
+    councilVisualStates.delete(agentId);
+    refreshCouncil();               // fall back to real runtime state
+  }, ms));
+}
+
+async function refreshCouncil() {
+  const F = await ensureFaces();
+  let data;
+  try {
+    data = await (await fetch('/api/agents')).json();
+  } catch (e) { return; }
+  const body = document.getElementById('council-body');
+  for (const runtime of data.agents) {
+    ensureCouncilFace(runtime.agent, runtime);
+    // Speaking is an audio event and is more specific than a worker snapshot.
+    if (speakingAgents.has(runtime.agent)) continue;
+    const state = councilVisualStates.get(runtime.agent) || faceStateFor(runtime);
+    F.setState(runtime.agent, state);
+    F.setEmotion(runtime.agent, councilEmotionFor(state), { react: false });
+  }
+  document.getElementById('council-summary').textContent =
+    `${data.agents_alive}/${data.agents_total} online · ${F.animatingCount()} animating`;
+  void body;
+}
+
+const speakingAgents = new Set();
+
+async function councilSpeak(agentId, on) {
+  agentId = ensureAgentIdentity(agentId);
+  if (!agentId) return;
+  if (on) speakingAgents.add(agentId); else speakingAgents.delete(agentId);
+  if (on) {
+    councilVisualStates.set(agentId, 'speaking');
+    clearTimeout(councilOverrideTimers.get(agentId));
+    councilOverrideTimers.delete(agentId);
+  } else {
+    // "returns to idle afterward" -- drop the override and let the runtime
+    // snapshot decide (idle if the worker is up, sleeping if it isn't).
+    councilVisualStates.delete(agentId);
+  }
+  if (!facesMod) return;             // lazy: nothing rendered until first open
+  ensureCouncilFace(agentId);
+  if (on) {
+    facesMod.setState(agentId, 'speaking');
+    facesMod.setEmotion(agentId, 'neutral', { react: false });
+    for (const id of facesMod.known()) facesMod.setAttention(id, agentId);
+  } else {
+    for (const id of facesMod.known()) facesMod.setAttention(id, '');
+    refreshCouncil();
+  }
+}
+
+// Called from the SSE tool handler when a specialist is delegated to, and
+// from agent.task_* / agent.activated events, so faces track genuine work.
+async function councilAgentActivity(agentId, state, emotion = '') {
+  agentId = ensureAgentIdentity(agentId);
+  if (!agentId) return;
+  if (state === 'idle') {            // explicit release of the override
+    councilVisualStates.delete(agentId);
+    clearTimeout(councilOverrideTimers.get(agentId));
+    councilOverrideTimers.delete(agentId);
+    if (facesMod && !speakingAgents.has(agentId)) refreshCouncil();
+    return;
+  }
+  councilVisualStates.set(agentId, state);
+  if (state === 'success' || state === 'error' || state === 'warning') expireOverride(agentId, 1600);
+  if (!facesMod) return;
+  ensureCouncilFace(agentId);
+  if (speakingAgents.has(agentId)) return;
+  facesMod.setState(agentId, state);
+  facesMod.setEmotion(agentId, councilEmotionFor(state, emotion));
+}
+
+async function openCouncil() {
+  document.getElementById('council-overlay').classList.add('open');
+  await refreshCouncil();
+  facesMod.resumeBlinks();     // stopAll() cleared them on the previous close
+  clearInterval(councilTimer);
+  // 4s: fast enough to feel live, slow enough to cost nothing. Skipped
+  // entirely while hidden -- no polling behind a minimised window.
+  councilTimer = setInterval(() => { if (!document.hidden) refreshCouncil(); }, 4000);
+}
+
+function closeCouncil() {
+  document.getElementById('council-overlay').classList.remove('open');
+  clearInterval(councilTimer);
+  councilTimer = null;
+  // Release face DOM/timers. A later explicit Council open rebuilds from the
+  // current runtime snapshot, not from retained hidden visual objects.
+  if (facesMod) { facesMod.destroyAll(); document.getElementById('council-body').replaceChildren(); }
+  speakingAgents.clear();
+}
+document.getElementById('council-close').addEventListener('click', closeCouncil);
+// A hidden window must not animate either.
+document.addEventListener('visibilitychange', () => {
+  if (!facesMod) return;
+  const open = document.getElementById('council-overlay').classList.contains('open');
+  if (document.visibilityState !== 'visible') facesMod.stopAll();
+  else if (open) { refreshCouncil(); facesMod.resumeBlinks(); }
+});
+window.zenoCouncil = {
+  open: openCouncil, close: closeCouncil, refresh: refreshCouncil,
+  speak: councilSpeak, activity: councilAgentActivity,
+  animating: () => (facesMod ? facesMod.animatingCount() : 0),
+};
+
 // --- Situation Room ---------------------------------------------------
 // Renders /api/situation, which composes live subsystem state. Unknown
 // values render as a dash -- a command view that invents numbers is worse
@@ -2824,9 +3105,35 @@ async function refreshSituation() {
     sitRows([['Permission profile', d.permissions.profile]]) +
     `<div class="sit-row" style="display:block;"><span>Session</span><div style="margin-top:4px;color:var(--text);">${escapeHtml(d.session)}</div></div>`;
 }
+
+function refreshSituationAgentPresence() {
+  const card = document.getElementById('sit-agents');
+  const participants = window.agentRing ? window.agentRing.participants() : [];
+  let holder = card.querySelector('.sit-agent-presence');
+  if (!participants.length) { holder?.remove(); return; }
+  if (!holder) {
+    holder = document.createElement('div');
+    holder.className = 'sit-agent-presence';
+    card.appendChild(holder);
+  }
+  holder.replaceChildren();
+  for (const participant of participants) {
+    const info = AGENTS[participant.agent];
+    if (!info) continue;
+    const item = document.createElement('div');
+    item.className = `sit-agent-orb ${participant.state}`;
+    item.style.setProperty('--agent-color', info.color);
+    const orb = document.createElement('i');
+    const name = document.createElement('b'); name.textContent = info.name;
+    const state = document.createElement('small'); state.textContent = participant.state;
+    item.append(orb, name, state); holder.appendChild(item);
+  }
+}
+
 function openSituation() {
   document.getElementById('situation-overlay').classList.add('open');
   refreshSituation();
+  refreshSituationAgentPresence();
   clearInterval(sitClockTimer);
   sitClockTimer = setInterval(() => {
     if (document.getElementById('situation-overlay').classList.contains('open')) {
@@ -2838,9 +3145,10 @@ function closeSituation() {
   document.getElementById('situation-overlay').classList.remove('open');
   clearInterval(sitClockTimer);
   sitClockTimer = null;
+  document.querySelector('#sit-agents .sit-agent-presence')?.remove();
 }
 document.getElementById('situation-close').addEventListener('click', closeSituation);
-window.zenoSituation = { open: openSituation, close: closeSituation, refresh: refreshSituation };
+window.zenoSituation = { open: openSituation, close: closeSituation, refresh: refreshSituation, refreshAgentPresence: refreshSituationAgentPresence };
 
 // --- Agent Monitor ----------------------------------------------------
 // Live view of the Agent Runtime (reyes_agent/agent_runtime.py). Polls
@@ -3401,6 +3709,30 @@ refreshPending();
 refreshNotices();
 refreshMissions();
 refreshKillSwitch();
+// Loaded only in the full dashboard, then only once. The view itself is
+// event-driven; it has no progress polling or animation loop.
+let liveActivityView = null;
+let liveActivityImport = null;
+function ensureLiveActivityView() {
+  if (liveActivityView) return Promise.resolve(liveActivityView);
+  if (!liveActivityImport) {
+    liveActivityImport = import('/static/activity_view.js').then(({ createLiveActivityView }) => {
+      liveActivityView = createLiveActivityView();
+      window.zenoActivity = liveActivityView;
+      return liveActivityView;
+    });
+  }
+  return liveActivityImport;
+}
+void ensureLiveActivityView().then(view => view.refresh());
+window.addEventListener('zeno-project-destination-selected', (event) => {
+  const project = event.detail || {};
+  if (turnActive || !project.name || !project.destination) return;
+  // The owner chose this exact location in the visible Activity View. Route
+  // continuation through the usual turn/permission path so it retains the
+  // original conversation context and never bypasses the agent runtime.
+  void runTurn(`Continue the requested project "${project.name}". Divine explicitly selected this destination: ${project.destination}. Use that destination and show real progress in the Activity View.`);
+});
 // Event Bus is the source of truth for state transitions.  The persistent
 // dashboard fetches initial state once, then refreshes only affected areas.
 if (window.EventSource) {
@@ -3412,11 +3744,44 @@ if (window.EventSource) {
     lastEvent = update;
     const type = update.type || '';
     if (type.startsWith('mission.')) refreshMissions();
+    if (type === 'project.activity' || type === 'ui.workspace_code') {
+      void ensureLiveActivityView().then(view => view.consumeEvent(update));
+    }
     if (type.startsWith('confirmation.') || type.startsWith('tool.')) refreshPending();
     // Heartbeats are useful to the backend's health monitor, but do not
     // represent new UI state. Notifications are the only notice trigger.
     if (type.startsWith('notification.')) refreshNotices();
+    // The native host owns visibility, while each WebView owns its own media
+    // stream.  Release the dashboard stream before the persistent Mini Orb
+    // reacquires it after this window is hidden/minimized.
+    if (type === 'desktop.dashboard_hidden' && ambientEnabled) stopAmbientListening();
     if (document.getElementById('agents-overlay').classList.contains('open') && type.startsWith('agent.')) refreshAgentMonitor();
+    if (type.startsWith('agent.') && window.agentRing) window.agentRing.lifecycle(update);
+    // Real agent lifecycle events drive the Council faces. Nothing is
+    // invented here: if the bus is silent, the faces stay idle. The worker
+    // stamps `visual_state` on the event, but we never DEPEND on it -- a
+    // server built before that field exists still publishes these events,
+    // and a face that silently stops updating is worse than a coarser
+    // mapping. Same event->state convention as agentRing.lifecycle above.
+    if (type.startsWith('agent.') && facesMod) {
+      const p = update.payload || {};
+      const who = p.agent || p.specialist || '';
+      let vs = p.visual_state || '';
+      if (!vs) {
+        if (type === 'agent.task_started' || type === 'agent.thinking') vs = 'thinking';
+        else if (type === 'agent.working') vs = 'working';
+        else if (type === 'agent.task_finished') vs = p.ok === false ? 'error' : 'success';
+        else if (type === 'agent.task_queued') vs = 'waiting';
+        else if (type === 'agent.activated') vs = 'listening';
+        else if (type === 'agent.restarting' || type === 'agent.restart_deferred') vs = 'warning';
+        else if (type === 'agent.restarted') vs = p.ok === false ? 'error' : 'idle';
+      }
+      if (who && vs) {
+        // councilAgentActivity expires momentary states (success/warning/
+        // error) back to the real runtime snapshot on its own.
+        councilAgentActivity(who, vs, p.emotion || '');
+      }
+    }
     if (document.getElementById('situation-overlay').classList.contains('open')) refreshSituation();
     if (document.getElementById('timeline-overlay').classList.contains('open')) loadTimeline();
   };

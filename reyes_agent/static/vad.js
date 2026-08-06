@@ -63,19 +63,40 @@ function emit(kind) {
 export async function start() {
   if (stream) return capabilities();
   startError = "";
+  const processedAudio = {
+    noiseSuppression: true,
+    echoCancellation: true,
+    autoGainControl: true,
+    channelCount: 1,
+  };
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        // These are the real WebRTC audio-processing switches.
-        noiseSuppression: true,
-        echoCancellation: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
+      // These are the real WebRTC audio-processing switches.
+      audio: processedAudio,
     });
   } catch (err) {
-    startError = (err && err.name) ? err.name : String(err);
-    return capabilities();
+    // Some WebView2/device-driver combinations reject channelCount even
+    // though they support a perfectly good processed microphone stream.
+    // Retrying without that optional format constraint is deliberately
+    // narrow: permission denials and a busy device are reported honestly,
+    // never hidden behind repeat prompts.
+    if (err && err.name === "OverconstrainedError") {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            noiseSuppression: true,
+            echoCancellation: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (retryError) {
+        startError = (retryError && retryError.name) ? retryError.name : String(retryError);
+        return capabilities();
+      }
+    } else {
+      startError = (err && err.name) ? err.name : String(err);
+      return capabilities();
+    }
   }
 
   const track = stream.getAudioTracks()[0];

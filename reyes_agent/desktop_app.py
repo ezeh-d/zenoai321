@@ -419,6 +419,18 @@ class _DesktopApi:
             if self._active_bridge_callback == name:
                 self._active_bridge_callback = ""
 
+    @staticmethod
+    def _publish_desktop_state(event_type: str) -> None:
+        """Announce a tiny lifecycle handoff without synchronously calling
+        either WebView window.  The Event Bus fan-out is bounded and lets the
+        Mini Orb and dashboard coordinate their single microphone owner."""
+        try:
+            from reyes_agent import event_bus
+
+            event_bus.publish(event_type, source="desktop_app")
+        except Exception:  # noqa: BLE001 -- UI state must not block a host callback
+            pass
+
     def host_heartbeat(self, sent_at_s: float) -> dict:
         """Tiny renderer-to-host heartbeat; it never performs GUI work."""
         with self._bridge_lock:
@@ -638,8 +650,19 @@ class _DesktopApi:
             )
             if dashboard is not None:
                 dashboard.events.closing += self._hide_dashboard_on_close
+                try:
+                    dashboard.events.minimized += self._dashboard_hidden
+                    dashboard.events.restored += self._dashboard_opened
+                except Exception:  # noqa: BLE001 -- older pywebview builds lack these events
+                    pass
                 self._dashboard_window = dashboard
             return dashboard
+
+    def _dashboard_hidden(self, *_args) -> None:
+        self._publish_desktop_state("desktop.dashboard_hidden")
+
+    def _dashboard_opened(self, *_args) -> None:
+        self._publish_desktop_state("desktop.dashboard_opened")
 
     def _hide_dashboard_on_close(self) -> bool:
         """Close means hide dashboard; only an explicit Mini Orb close exits ZENO."""
@@ -655,6 +678,7 @@ class _DesktopApi:
                 ctypes.windll.user32.ShowWindowAsync(hwnd, 0)  # SW_HIDE, no focus changes
             except Exception:  # noqa: BLE001
                 pass
+        self._dashboard_hidden()
         return False
 
     def show_dashboard(self) -> bool:
@@ -671,6 +695,7 @@ class _DesktopApi:
             # This is an explicit click/wake request, so activating the
             # dashboard is appropriate. The watchdog never calls show().
             dashboard.show()
+            self._dashboard_opened()
             self.request_overlay_repair()
             return True
         except Exception:  # noqa: BLE001
