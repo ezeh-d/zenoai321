@@ -495,3 +495,38 @@ by the owner 2026-08-04. The shipped default for any other installation is
 confirm-gated and configurable. `financial` is BLOCKED in every profile
 with no enabling flag: ZENO has no tool that moves money, and the
 Investment Engine stops at a validated order ticket by design.
+
+---
+
+## Microphone diagnosis and recovery — IMPLEMENTED, live WebView2 validation pending restart
+
+The earlier large “blocked in Windows or this ZENO profile” banner was an
+incorrect frontend collapse of `NotAllowedError`; it did not prove that
+Windows privacy was denied. Local diagnosis on 2026-08-06 found Windows user,
+machine and desktop-app microphone consent set to `Allow`, Deepgram
+configured, and eight recording inputs, with the Realtek Microphone Array as
+the default. A direct PortAudio open was rejected by the audio host before
+samples were read, so it is recorded as a device-initialization/busy-path
+observation, not falsely as a permission denial and not as proof that WebView2
+capture failed.
+
+`microphone.py` now reports the stable states
+`MIC_PERMISSION_DENIED`, `MIC_PERMISSION_NOT_REQUESTED`,
+`WEBVIEW2_PERMISSION_DENIED`, `WINDOWS_PERMISSION_DENIED`,
+`NO_MICROPHONE_FOUND`, `MICROPHONE_DISABLED`, `MICROPHONE_BUSY`,
+`DEVICE_INITIALIZATION_FAILED`, `AUDIO_CAPTURE_FAILED`, `STT_FAILED`,
+`WAKE_WORD_FAILED`, `BACKEND_CONNECTION_FAILED`, and `MICROPHONE_READY`.
+The Dashboard and Mini Orb report browser-observed stream open, live RMS
+input, capture loss, wake/STT transport failure and selected device to a
+small in-memory status endpoint; no audio is stored. The dashboard has
+Enable microphone, Test microphone, Refresh devices, a persistent profile
+device choice and a live input meter. The Mini Orb uses the same saved device
+and remains the sole listener when the dashboard is hidden. Both retain the
+one processed VAD stream and make at most two safe recovery attempts after a
+track ends.
+
+**Validation limit:** offline diagnostic/API/VAD regressions pass. The running
+desktop process predates this change, therefore an actual WebView2
+`getUserMedia` grant, live RMS and end-to-end wake/STT response must be
+observed after ZENO is restarted; the UI now records that evidence instead of
+claiming success from registry settings alone.

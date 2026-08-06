@@ -1465,9 +1465,18 @@ def notifications_set_state(notification_id: int, req: NotificationStateRequest)
     return {"ok": True, "id": notification_id, "state": req.state.strip().upper()}
 
 
+class MicrophoneRuntimeRequest(BaseModel):
+    status: str
+    detail: str = ""
+    source: str = "dashboard"
+    audio_received: bool = False
+    device_id: str = ""
+
+
 @app.get("/api/microphone/diagnose")
-def microphone_diagnose(browser_error: str = "") -> dict[str, Any]:
-    """Distinguish the six real microphone failure modes.
+def microphone_diagnose(browser_error: str = "", permission_state: str = "",
+                        selected_device: str = "") -> dict[str, Any]:
+    """Distinguish actual Windows, WebView2, device and capture faults.
 
     Reads Windows privacy policy READ-ONLY and never changes a system
     setting -- if Windows is the blocker, the user is told exactly which
@@ -1475,7 +1484,29 @@ def microphone_diagnose(browser_error: str = "") -> dict[str, Any]:
     """
     from reyes_agent import microphone
 
-    return microphone.diagnose(browser_error).as_dict()
+    return microphone.diagnose(browser_error, permission_state, selected_device).as_dict()
+
+
+@app.get("/api/microphone/status")
+def microphone_status() -> dict[str, Any]:
+    """The latest browser-observed capture evidence; no audio is retained."""
+    from reyes_agent import microphone
+
+    return microphone.runtime_status()
+
+
+@app.post("/api/microphone/runtime")
+def microphone_runtime(request: MicrophoneRuntimeRequest) -> dict[str, Any]:
+    """Accept compact browser capture lifecycle evidence from the current owner."""
+    from reyes_agent import microphone
+
+    try:
+        return microphone.report_runtime(
+            request.status, detail=request.detail, source=request.source,
+            audio_received=request.audio_received, device_id=request.device_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 class AwarenessSettingsRequest(BaseModel):

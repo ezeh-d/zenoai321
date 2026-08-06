@@ -55,8 +55,11 @@ let currentRms = 0;
 let appliedSettings = null;
 let startError = "";
 let visibilityListenerAttached = false;
+let requestedDeviceId = "";
+let usedFallbackDevice = false;
+let stopping = false;
 
-const listeners = { start: [], end: [] };
+const listeners = { start: [], end: [], level: [], stopped: [] };
 
 function emit(kind) {
   for (const fn of listeners[kind]) {
@@ -65,15 +68,21 @@ function emit(kind) {
 }
 
 /** Open the microphone with the browser's own noise/echo/AGC processing. */
-export async function start() {
+export async function start(options = {}) {
   if (stream) return capabilities();
   startError = "";
+  stopping = false;
+  requestedDeviceId = String(options.deviceId || "");
+  usedFallbackDevice = false;
   const processedAudio = {
     noiseSuppression: true,
     echoCancellation: true,
     autoGainControl: true,
     channelCount: 1,
   };
+  if (requestedDeviceId && requestedDeviceId !== "default") {
+    processedAudio.deviceId = { exact: requestedDeviceId };
+  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       // These are the real WebRTC audio-processing switches.
@@ -87,6 +96,10 @@ export async function start() {
     // never hidden behind repeat prompts.
     if (err && err.name === "OverconstrainedError") {
       try {
+        // A remembered USB/Bluetooth device can disappear between sessions.
+        // Fall back to Windows' current default once; never loop or change a
+        // user selection silently while the device is still present.
+        usedFallbackDevice = Boolean(processedAudio.deviceId);
         stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             noiseSuppression: true,
@@ -107,6 +120,19 @@ export async function start() {
   const track = stream.getAudioTracks()[0];
   // Report what the browser ACTUALLY applied, not what we asked for.
   appliedSettings = track && track.getSettings ? track.getSettings() : null;
+  if (track) {
+    track.addEventListener("ended", () => {
+      if (!stopping) {
+        startError = "AudioCaptureError";
+        // Release the ended stream before notifying the owner.  Otherwise a
+        // recovery call sees a non-null but dead stream and cannot reopen the
+        // device.
+        stop();
+        startError = "AudioCaptureError";
+        emit("stopped");
+      }
+    });
+  }
 
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   ctx = new AudioCtx();
@@ -150,6 +176,9 @@ function tick() {
   }
   const rms = Math.sqrt(sum / buffer.length);
   currentRms = rms;
+  for (const fn of listeners.level) {
+    try { fn(rms); } catch (_e) { /* a meter must never break capture */ }
+  }
 
   // Adapt the noise floor only while NOT speaking, so a long sentence can't
   // drag the floor up and deafen the detector mid-utterance.
@@ -187,6 +216,18 @@ export function onSpeechStart(fn) {
 export function onSpeechEnd(fn) {
   listeners.end.push(fn);
   return () => { listeners.end = listeners.end.filter((item) => item !== fn); };
+}
+
+/** Receive actual captured RMS values.  Callers render at their own cadence. */
+export function onLevel(fn) {
+  listeners.level.push(fn);
+  return () => { listeners.level = listeners.level.filter((item) => item !== fn); };
+}
+
+/** Fired only when an active track is lost unexpectedly, never on stop(). */
+export function onCaptureStopped(fn) {
+  listeners.stopped.push(fn);
+  return () => { listeners.stopped = listeners.stopped.filter((item) => item !== fn); };
 }
 
 /** The processed, single-owner stream used for recording/transcription. */
@@ -263,6 +304,7 @@ export function pauseDetection() { pause(); }
 export function resumeDetection() { resume(); }
 
 export function stop() {
+  stopping = true;
   pause();
   endPcmCapture();
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
@@ -270,6 +312,8 @@ export function stop() {
   source = null;
   analyser = null;
   appliedSettings = null;
+  requestedDeviceId = "";
+  usedFallbackDevice = false;
   currentRms = 0;
   noiseFloor = 0.01;
 }
@@ -285,6 +329,9 @@ export function capabilities() {
     echo_cancellation: s.echoCancellation === true,
     auto_gain_control: s.autoGainControl === true,
     sample_rate: s.sampleRate || null,
+    device_id: s.deviceId || null,
+    requested_device_id: requestedDeviceId || null,
+    used_fallback_device: usedFallbackDevice,
     vad: {
       engine: "energy-adaptive",
       implemented: true,

@@ -860,6 +860,16 @@ body.focus #agent-team-overview { opacity: 0; }
     </div>
     <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
       <span class="label">Microphone<span class="sub">Diagnose exactly what is blocking the mic</span></span>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <button id="mic-enable-btn" class="vt-btn">Enable microphone</button>
+        <button id="mic-test-btn" class="vt-btn">Test microphone</button>
+        <button id="mic-refresh-btn" class="vt-btn">Refresh devices</button>
+      </div>
+      <label style="font-size:11px;color:var(--text-dim);width:100%;">Microphone
+        <select id="mic-device-select" style="display:block;width:100%;margin-top:4px;background:#0c1018;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px;"></select>
+      </label>
+      <div id="mic-live-status" style="font:11.5px system-ui;color:var(--text-dim);">MIC OFF</div>
+      <div style="height:5px;width:100%;max-width:240px;background:rgba(255,255,255,.1);border-radius:999px;overflow:hidden;"><div id="mic-level-bar" style="height:100%;width:0%;background:var(--ok);transition:width .12s linear;"></div></div>
       <button id="mic-diag-btn" class="vt-btn">Diagnose microphone</button>
       <div id="mic-diag-out" style="font:11.5px system-ui;color:var(--text-dim);"></div>
     </div>
@@ -2299,6 +2309,7 @@ async function transcribeVADClip(blob, speakerBlob = null) {
       // a turn. The status makes the real fault visible instead of silently
       // acting on an invented transcript.
       micStatusEl.textContent = result.detail || 'Could not transcribe that. Listening continues.';
+      void reportMicRuntime('STT_FAILED', String(result.detail || 'Speech-to-text request failed.'));
       return;
     }
     const transcript = String(result.transcript || '').trim();
@@ -2322,11 +2333,15 @@ async function transcribeVADClip(blob, speakerBlob = null) {
     }
     noteSpeechFragment(transcript);
   } catch (error) {
-    if (ambientEnabled) micStatusEl.textContent = 'Microphone connection interrupted. Listening continues.';
+    if (ambientEnabled) {
+      micStatusEl.textContent = 'Microphone connection interrupted. Listening continues.';
+      void reportMicRuntime('BACKEND_CONNECTION_FAILED', 'Could not reach ZENO speech-to-text service.');
+    }
   } finally {
     transcriptionActive = false;
     if (ambientEnabled && !turnActive && !settleTimer) {
       micStatusEl.textContent = listeningMode ? 'Listening -- just talk, no wake word needed' : 'Always listening -- say "Zeno"...';
+      compactMicStatus('LISTENING', micAudioProved ? 'audio received' : 'waiting for audio');
     }
   }
 }
@@ -2366,22 +2381,88 @@ function startVADRecording() {
 function bindVADHandlers() {
   if (vadHandlersBound) return;
   vadHandlersBound = true;
-  voiceVAD.onSpeechStart(startVADRecording);
-  voiceVAD.onSpeechEnd(() => finishVADRecording(false));
+  voiceVAD.onSpeechStart(() => {
+    compactMicStatus('HEARING SPEECH', 'capturing command');
+    startVADRecording();
+  });
+  voiceVAD.onSpeechEnd(() => {
+    compactMicStatus('PROCESSING', 'transcribing');
+    finishVADRecording(false);
+  });
+  voiceVAD.onLevel(noteMicLevel);
+  voiceVAD.onCaptureStopped(() => scheduleMicRecovery('Microphone stream ended unexpectedly.'));
 }
 
 function microphoneAvailable() {
   return Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
 }
 
-async function startAmbientListening() {
+const MIC_DEVICE_STORAGE = 'zeno.selectedMicrophoneId';
+let micRecoveryAttempts = 0, micRecoveryTimer = null, micMeterRaf = 0, micMeterValue = 0;
+let micAudioProved = false, micLastRuntimeReport = 0;
+
+function selectedMicrophoneId() { return localStorage.getItem(MIC_DEVICE_STORAGE) || ''; }
+function compactMicStatus(status, text, actionRequired = false) {
+  const live = document.getElementById('mic-live-status');
+  if (live) live.textContent = status + (text ? ' — ' + text : '');
+  micIndicator.classList.toggle('needs-permission', actionRequired);
+  micIndicator.classList.toggle('listening', status === 'LISTENING' || status === 'HEARING SPEECH');
+}
+function reportMicRuntime(status, detail = '', audioReceived = false) {
+  const body = { status, detail, source: 'dashboard', audio_received: audioReceived,
+    device_id: voiceVAD.capabilities().device_id || selectedMicrophoneId() };
+  return fetch('/api/microphone/runtime', { method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body) }).catch(() => null);
+}
+async function browserPermissionState() {
+  try { return (await navigator.permissions.query({name:'microphone'})).state || ''; }
+  catch (_e) { return ''; }
+}
+async function showMicDiagnosis(browserError = '') {
+  const permission = await browserPermissionState();
+  const query = new URLSearchParams({ browser_error: browserError, permission_state: permission,
+    selected_device: selectedMicrophoneId() });
+  return (await fetch('/api/microphone/diagnose?' + query)).json();
+}
+function renderMicMeter() {
+  micMeterRaf = 0;
+  const bar = document.getElementById('mic-level-bar');
+  if (bar) bar.style.width = Math.min(100, Math.round(micMeterValue * 1900)) + '%';
+}
+function noteMicLevel(rms) {
+  micMeterValue = rms;
+  if (!micMeterRaf) micMeterRaf = requestAnimationFrame(renderMicMeter);
+  if (rms > 0.008) {
+    micAudioProved = true;
+    const now = Date.now();
+    if (now - micLastRuntimeReport > 4000) {
+      micLastRuntimeReport = now;
+      void reportMicRuntime('MICROPHONE_READY', 'Live audio received from the selected microphone.', true);
+    }
+  }
+}
+function scheduleMicRecovery(detail) {
+  if (!ambientEnabled || micRecoveryAttempts >= 2 || micRecoveryTimer) return;
+  const delay = 900 * (micRecoveryAttempts + 1);
+  micRecoveryAttempts += 1;
+  compactMicStatus('MIC ERROR', 'retrying capture');
+  void reportMicRuntime('AUDIO_CAPTURE_FAILED', detail || 'Microphone stream stopped unexpectedly.');
+  micRecoveryTimer = setTimeout(() => {
+    micRecoveryTimer = null;
+    if (ambientEnabled) void startAmbientListening({ recovery: true });
+  }, delay);
+}
+
+async function startAmbientListening(options = {}) {
   if (!microphoneAvailable()) {
     micStatusEl.textContent = 'This browser cannot capture microphone audio for always-on voice.';
+    compactMicStatus('MIC ERROR', 'browser capture unavailable', true);
+    void reportMicRuntime('DEVICE_INITIALIZATION_FAILED', 'Browser does not expose getUserMedia or MediaRecorder.');
     return;
   }
   recognitionShouldRun = true;
   ambientEnabled = true;
-  const capabilities = await voiceVAD.start();
+  const capabilities = await voiceVAD.start({ deviceId: selectedMicrophoneId() });
   if (!voiceVAD.mediaStream()) {
     recognitionShouldRun = false;
     ambientEnabled = false;
@@ -2397,15 +2478,22 @@ async function startAmbientListening() {
     lastMicError = capabilities.error || '';
     micStatusEl.textContent = 'Microphone unavailable — checking why…';
     try {
-      const d = await (await fetch('/api/microphone/diagnose?browser_error=' +
-                                    encodeURIComponent(lastMicError))).json();
+      const d = await showMicDiagnosis(lastMicError);
       micStatusEl.textContent = d.summary + (d.fix ? ' ' + d.fix : '');
+      compactMicStatus('MIC ERROR', d.status || 'capture unavailable', true);
+      void reportMicRuntime(d.status || 'DEVICE_INITIALIZATION_FAILED', d.summary);
     } catch (e) {
       micStatusEl.textContent = 'Microphone unavailable: ' + (lastMicError || 'unknown error');
+      compactMicStatus('MIC ERROR', 'diagnostics unavailable', true);
     }
     return;
   }
   bindVADHandlers();
+  micRecoveryAttempts = 0;
+  if (capabilities.used_fallback_device) {
+    localStorage.setItem(MIC_DEVICE_STORAGE, capabilities.device_id || '');
+    void refreshMicrophoneDevices();
+  }
   ambientEnabled = true;
   window.__zenoMicActive = true;
   renderAwarenessIndicators();
@@ -2414,6 +2502,8 @@ async function startAmbientListening() {
   micStatusEl.textContent = capabilities.noise_suppression
     ? 'Always listening -- say "Zeno"...'
     : 'Always listening -- system noise suppression unavailable';
+  compactMicStatus('LISTENING', micAudioProved ? 'audio received' : 'waiting for audio');
+  void reportMicRuntime('MICROPHONE_READY', 'WebView2 microphone stream is open.', micAudioProved);
   orb.setState('idle');
 }
 
@@ -2426,8 +2516,10 @@ function stopAmbientListening() {
   listenBuffer = '';
   finishVADRecording(true);
   voiceVAD.stop();
+  if (micRecoveryTimer) { clearTimeout(micRecoveryTimer); micRecoveryTimer = null; }
   micIndicator.classList.remove('listening');
   micStatusEl.textContent = 'Muted -- click the dot to listen again';
+  compactMicStatus('MIC OFF', 'standby');
 }
 
 micIndicator.addEventListener('click', () => {
@@ -2440,6 +2532,7 @@ micIndicator.addEventListener('click', () => {
 (async function initVoice() {
   if (!microphoneAvailable()) {
     micStatusEl.textContent = 'This browser cannot capture microphone audio for always-on voice.';
+    compactMicStatus('MIC ERROR', 'browser capture unavailable', true);
     return;
   }
   if (!navigator.permissions || !navigator.permissions.query) {
@@ -2447,6 +2540,8 @@ micIndicator.addEventListener('click', () => {
     // required tap, the unavoidable browser-security case.
     micIndicator.classList.add('needs-permission');
     micStatusEl.textContent = 'Click the dot once to enable "Zeno" / "Wake up Zeno" / "Bro"';
+    compactMicStatus('MIC OFF', 'permission needs approval', true);
+    void reportMicRuntime('MIC_PERMISSION_NOT_REQUESTED', 'WebView2 permission has not been requested yet.');
     return;
   }
   try {
@@ -2456,10 +2551,15 @@ micIndicator.addEventListener('click', () => {
     } else {
       micIndicator.classList.add('needs-permission');
       micStatusEl.textContent = 'Click the dot once to enable "Zeno" / "Wake up Zeno" / "Bro"';
+      compactMicStatus(status.state === 'denied' ? 'MIC ERROR' : 'MIC OFF',
+        status.state === 'denied' ? 'permission denied' : 'permission needs approval', true);
+      void reportMicRuntime(status.state === 'denied' ? 'WEBVIEW2_PERMISSION_DENIED' : 'MIC_PERMISSION_NOT_REQUESTED',
+        status.state === 'denied' ? 'WebView2 microphone permission is denied.' : 'Microphone permission has not been requested.');
     }
   } catch (e) {
     micIndicator.classList.add('needs-permission');
     micStatusEl.textContent = 'Click the dot once to enable "Zeno" / "Wake up Zeno" / "Bro"';
+    compactMicStatus('MIC OFF', 'permission needs approval', true);
   }
 })();
 
@@ -2820,8 +2920,7 @@ if (_micDiagBtn) _micDiagBtn.addEventListener('click', async () => {
   out.textContent = 'Checking…';
   try {
     const err = (typeof lastMicError === 'string') ? lastMicError : '';
-    const d = await (await fetch('/api/microphone/diagnose?browser_error=' +
-                                  encodeURIComponent(err))).json();
+    const d = await showMicDiagnosis(err);
     out.innerHTML = `<b style="color:${d.ok ? '#8fd6a8' : 'var(--warn)'}">${escapeHtml(d.summary)}</b>`
       + (d.fix ? `<br>${escapeHtml(d.fix)}` : '')
       + `<br><span style="opacity:.65">${escapeHtml((d.checks || []).join(' · '))}</span>`;
@@ -2843,6 +2942,61 @@ settingsBtn.addEventListener('click', () => {
   loadAwarenessSettings();
   loadSpeakerProfile();
 });
+
+async function refreshMicrophoneDevices() {
+  const select = document.getElementById('mic-device-select');
+  if (!select || !navigator.mediaDevices?.enumerateDevices) return [];
+  try {
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter((item) => item.kind === 'audioinput');
+    const saved = selectedMicrophoneId();
+    select.replaceChildren();
+    const systemDefault = new Option('Windows default microphone', '');
+    select.add(systemDefault);
+    devices.forEach((device, index) => select.add(new Option(device.label || `Microphone ${index + 1}`, device.deviceId)));
+    if (saved && devices.some((device) => device.deviceId === saved)) select.value = saved;
+    else if (saved) localStorage.removeItem(MIC_DEVICE_STORAGE);
+    return devices;
+  } catch (_e) {
+    compactMicStatus('MIC ERROR', 'cannot enumerate devices', true);
+    return [];
+  }
+}
+
+document.getElementById('mic-refresh-btn')?.addEventListener('click', () => { void refreshMicrophoneDevices(); });
+document.getElementById('mic-device-select')?.addEventListener('change', (event) => {
+  const id = String(event.target.value || '');
+  if (id) localStorage.setItem(MIC_DEVICE_STORAGE, id); else localStorage.removeItem(MIC_DEVICE_STORAGE);
+  // This explicit owner action may change capture hardware, so one stop/start
+  // is correct and still preserves the single browser-owned stream.
+  const wasListening = ambientEnabled;
+  if (wasListening) { stopAmbientListening(); void startAmbientListening({ interactive: true }); }
+});
+document.getElementById('mic-enable-btn')?.addEventListener('click', () => {
+  micAudioProved = false;
+  if (ambientEnabled) stopAmbientListening();
+  // getUserMedia is called directly from this explicit owner gesture, which
+  // is what WebView2 requires for an initial permission prompt.
+  void startAmbientListening({ interactive: true }).then(() => refreshMicrophoneDevices());
+});
+document.getElementById('mic-test-btn')?.addEventListener('click', () => {
+  micAudioProved = false;
+  compactMicStatus('LISTENING', 'speak now to test input');
+  if (!ambientEnabled) void startAmbientListening({ interactive: true });
+});
+let micDeviceChangeTimer = null;
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  clearTimeout(micDeviceChangeTimer);
+  micDeviceChangeTimer = setTimeout(async () => {
+    const selected = selectedMicrophoneId();
+    const devices = await refreshMicrophoneDevices();
+    if (ambientEnabled && selected && !devices.some((device) => device.deviceId === selected)) {
+      localStorage.removeItem(MIC_DEVICE_STORAGE);
+      stopAmbientListening();
+      void startAmbientListening({ recovery: true });
+    }
+  }, 400);
+});
+void refreshMicrophoneDevices();
 
 // --- Knowledge Galaxy -------------------------------------------------
 // Draws the REAL vault graph from /api/galaxy. Built once per open with

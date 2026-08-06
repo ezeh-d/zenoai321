@@ -26,11 +26,41 @@ precise place to go instead.
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 # Where Windows records microphone consent. Read-only use.
 _CONSENT_ROOT = r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+
+# Stable states for the browser/API diagnostic boundary.  User-facing wording
+# can change without making a support report ambiguous.
+MIC_PERMISSION_DENIED = "MIC_PERMISSION_DENIED"
+MIC_PERMISSION_NOT_REQUESTED = "MIC_PERMISSION_NOT_REQUESTED"
+WEBVIEW2_PERMISSION_DENIED = "WEBVIEW2_PERMISSION_DENIED"
+WINDOWS_PERMISSION_DENIED = "WINDOWS_PERMISSION_DENIED"
+NO_MICROPHONE_FOUND = "NO_MICROPHONE_FOUND"
+MICROPHONE_DISABLED = "MICROPHONE_DISABLED"
+MICROPHONE_BUSY = "MICROPHONE_BUSY"
+DEVICE_INITIALIZATION_FAILED = "DEVICE_INITIALIZATION_FAILED"
+AUDIO_CAPTURE_FAILED = "AUDIO_CAPTURE_FAILED"
+STT_FAILED = "STT_FAILED"
+WAKE_WORD_FAILED = "WAKE_WORD_FAILED"
+BACKEND_CONNECTION_FAILED = "BACKEND_CONNECTION_FAILED"
+MICROPHONE_READY = "MICROPHONE_READY"
+
+_KNOWN_STATUSES = {
+    MIC_PERMISSION_DENIED, MIC_PERMISSION_NOT_REQUESTED, WEBVIEW2_PERMISSION_DENIED,
+    WINDOWS_PERMISSION_DENIED, NO_MICROPHONE_FOUND, MICROPHONE_DISABLED,
+    MICROPHONE_BUSY, DEVICE_INITIALIZATION_FAILED, AUDIO_CAPTURE_FAILED, STT_FAILED,
+    WAKE_WORD_FAILED, BACKEND_CONNECTION_FAILED, MICROPHONE_READY,
+}
+_runtime_lock = threading.Lock()
+_runtime: dict[str, Any] = {
+    "status": "", "detail": "", "source": "", "updated_at": 0.0,
+    "audio_received": False, "device_id": "",
+}
 
 # Browser DOMException name -> (cause id, what it actually means, what to do)
 _BROWSER_ERRORS: dict[str, tuple[str, str, str]] = {
@@ -68,6 +98,11 @@ _BROWSER_ERRORS: dict[str, tuple[str, str, str]] = {
         "The OS aborted the capture request, usually a transient driver fault.",
         "Try again; if it repeats, restart the Windows Audio service.",
     ),
+    "AudioCaptureError": (
+        AUDIO_CAPTURE_FAILED,
+        "The microphone stream stopped unexpectedly after it had opened.",
+        "ZENO will retry safely. If it keeps happening, reconnect or reselect the microphone.",
+    ),
 }
 
 
@@ -81,8 +116,28 @@ class MicReport:
     checks: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"ok": self.ok, "cause": self.cause, "summary": self.summary,
+        return {"ok": self.ok, "status": self.cause, "cause": self.cause, "summary": self.summary,
                 "fix": self.fix, "details": self.details, "checks": self.checks}
+
+
+def report_runtime(status: str, *, detail: str = "", source: str = "", audio_received: bool = False,
+                   device_id: str = "") -> dict[str, Any]:
+    """Record observed browser capture evidence without retaining audio."""
+    if status not in _KNOWN_STATUSES:
+        raise ValueError(f"unknown microphone status: {status}")
+    snapshot = {
+        "status": status, "detail": str(detail)[:300], "source": str(source)[:40],
+        "updated_at": time.time(), "audio_received": bool(audio_received),
+        "device_id": str(device_id)[:256],
+    }
+    with _runtime_lock:
+        _runtime.update(snapshot)
+        return dict(_runtime)
+
+
+def runtime_status() -> dict[str, Any]:
+    with _runtime_lock:
+        return dict(_runtime)
 
 
 def _read_windows_consent() -> dict[str, Any]:
@@ -149,7 +204,7 @@ def _stt_configured() -> dict[str, Any]:
     }
 
 
-def diagnose(browser_error: str = "") -> MicReport:
+def diagnose(browser_error: str = "", permission_state: str = "", selected_device: str = "") -> MicReport:
     """Full diagnosis. `browser_error` is the DOMException name the panel
     saw, when there was one -- it is the strongest single signal."""
     rep = MicReport()
@@ -163,7 +218,7 @@ def diagnose(browser_error: str = "") -> MicReport:
     denied_desktop = consent.get("desktop_apps") == "Deny"
     if denied_globally or denied_desktop:
         which = "Microphone access" if denied_globally else "Let desktop apps access your microphone"
-        rep.cause = "windows_privacy_denied"
+        rep.cause = WINDOWS_PERMISSION_DENIED
         rep.summary = f"Windows is blocking microphone access — '{which}' is set to Deny."
         rep.fix = ("Open Windows Settings > Privacy & security > Microphone and turn on "
                    f"'{which}'. ZENO cannot change this for you, and shouldn't — it's a "
@@ -177,7 +232,7 @@ def diagnose(browser_error: str = "") -> MicReport:
 
     # 2. No device at all.
     if devices.get("available") and devices.get("input_count", 0) == 0:
-        rep.cause = "no_device"
+        rep.cause = NO_MICROPHONE_FOUND
         rep.summary = "No microphone is connected or enabled on this machine."
         rep.fix = ("Plug in a microphone, or enable the built-in one in Windows Settings > "
                    "System > Sound > Input. Then reopen ZENO.")
@@ -187,12 +242,20 @@ def diagnose(browser_error: str = "") -> MicReport:
         rep.checks.append(f"devices: {devices['input_count']} input(s), default "
                           f"'{devices.get('default') or 'unknown'}'")
 
-    # 3. Whatever the browser actually reported.
+    # 3. An unasked browser grant is neither a device failure nor a denial.
+    if permission_state == "prompt" and not browser_error:
+        rep.cause = MIC_PERMISSION_NOT_REQUESTED
+        rep.summary = "Microphone access has not been approved for ZENO yet."
+        rep.fix = "Select Enable microphone once, then choose Allow in the ZENO microphone prompt."
+        rep.checks.append("browser permission: prompt")
+        return rep
+
+    # 4. Whatever the browser actually reported.
     if browser_error:
         cause, meaning, fix = _BROWSER_ERRORS.get(
             browser_error,
-            ("browser_error", f"The browser reported {browser_error}.",
-             "Reopen ZENO; if it persists, check Windows sound settings."))
+            (DEVICE_INITIALIZATION_FAILED, f"The browser reported {browser_error}.",
+             "Use Enable microphone to retry. If it persists, check Windows sound settings."))
         rep.cause = cause
         rep.summary = meaning
         rep.fix = fix
@@ -200,17 +263,40 @@ def diagnose(browser_error: str = "") -> MicReport:
         # Windows says allowed but the browser said denied -> it's the
         # WebView2/site-level grant, not Windows. Say so precisely.
         if cause == "permission_denied" and consent.get("readable") and not denied_globally:
+            rep.cause = WEBVIEW2_PERMISSION_DENIED
             rep.summary = ("Windows allows microphone access, so this is ZENO's own "
                            "WebView2 profile refusing it — the in-app prompt was dismissed "
                            "or denied earlier.")
-            rep.fix = ("Close ZENO, reopen it, and choose Allow when the microphone prompt "
-                       "appears. If no prompt appears, the saved refusal is in ZENO's "
-                       "WebView2 profile at %LOCALAPPDATA%\\ZENO\\WebView2.")
+            rep.fix = ("Select Enable microphone. If WebView2 keeps a previous refusal, allow "
+                       "Microphone for ZENO's fixed http://127.0.0.1:8765 origin, then retry. "
+                       "Do not delete the whole profile: it preserves your other ZENO settings.")
+        elif cause == "permission_denied":
+            rep.cause = MIC_PERMISSION_DENIED
+        elif cause == "no_device" and selected_device:
+            rep.cause = MICROPHONE_DISABLED
+            rep.summary = "The selected microphone is disconnected or disabled."
+            rep.fix = "Refresh devices, choose an available microphone, then select Enable microphone."
+        elif cause == "no_device":
+            rep.cause = NO_MICROPHONE_FOUND
+        elif cause == "device_busy_or_driver":
+            rep.cause = MICROPHONE_BUSY
+        elif cause in {"constraints_unsupported", "hardware_abort", "insecure_context"}:
+            rep.cause = DEVICE_INITIALIZATION_FAILED
         return rep
 
-    # 4. Nothing wrong that we can see.
+    # 5. Preserve an observed browser failure rather than overwriting it with
+    # a generic system-level "looks fine" report.
+    runtime = runtime_status()
+    if runtime["status"] and runtime["status"] != MICROPHONE_READY:
+        rep.cause = runtime["status"]
+        rep.summary = runtime["detail"] or runtime["status"].replace("_", " ").title()
+        rep.fix = "Select Enable microphone to run a safe retry."
+        rep.checks.append(f"runtime: {runtime['status']}")
+        return rep
+
+    # 6. Nothing wrong that we can see.
     if not stt["deepgram_key"]:
-        rep.cause = "stt_not_configured"
+        rep.cause = STT_FAILED
         rep.summary = ("Microphone access looks fine, but speech-to-text has no Deepgram "
                        "key, so audio cannot be transcribed.")
         rep.fix = "Add DEEPGRAM_API_KEY to .env and restart ZENO."
@@ -218,8 +304,10 @@ def diagnose(browser_error: str = "") -> MicReport:
         return rep
 
     rep.ok = True
-    rep.cause = "ok"
-    rep.summary = "Microphone access and speech-to-text look correctly configured."
+    rep.cause = MICROPHONE_READY
+    rep.summary = ("Microphone access and speech-to-text look correctly configured."
+                   if runtime["audio_received"] else
+                   "Microphone device and permissions look ready; select Test microphone to confirm live audio.")
     rep.fix = ""
     rep.checks.append("stt: configured")
     return rep

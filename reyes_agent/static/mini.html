@@ -90,18 +90,24 @@ setInterval(async()=>{const a=api();if(!document.hidden&&a&&a.host_heartbeat){tr
 // suppression and produce a second permission/session inside one WebView.
 let wakeRecorder=null,wakeChunks=[],wakeTimer=null,wakeActive=false,wakeBusy=false,wakeDiscard=false,wakeRecoveryTimer=null,wakeRecoveryAttempts=0;
 const WAKE_MAX_CLIP_MS=12_000,WAKE_MIN_CLIP_BYTES=1_200;
+const MIC_DEVICE_STORAGE='zeno.selectedMicrophoneId'; let miniAudioProved=false;
+function selectedMicrophoneId(){return localStorage.getItem(MIC_DEVICE_STORAGE)||'';}
+function reportMiniMic(status,detail='',audioReceived=false){return fetch('/api/microphone/runtime',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status,detail,source:'mini-orb',audio_received:audioReceived,device_id:voiceVAD.capabilities().device_id||selectedMicrophoneId()})}).catch(()=>null);}
 function recorderOptions(){const types=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'];const mimeType=types.find(t=>MediaRecorder.isTypeSupported(t));return mimeType?{mimeType}:undefined;}
 function finishWakeClip(discard=false){if(!wakeRecorder)return;wakeDiscard=wakeDiscard||discard;if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}if(wakeRecorder.state!=='inactive')wakeRecorder.stop();}
 async function transcribeWakeClip(blob,speakerBlob=null){if(!wakeActive||wakeBusy||blob.size<WAKE_MIN_CLIP_BYTES)return;wakeBusy=true;orb.setState('processing');try{const form=new FormData();form.append('audio',blob,'zeno-wake.webm');if(speakerBlob&&speakerBlob.size)form.append('speaker_audio',speakerBlob,'zeno-speaker.wav');const res=await fetch('/api/transcribe',{method:'POST',body:form});const data=await res.json().catch(()=>({}));if(data.speaker&&data.speaker.status)document.title='ZENO Mini Orb · '+data.speaker.status.replace(/_/g,' ').toLowerCase();if(res.ok&&/\b(?:wake up zeno|hey zeno|zeno)\b/i.test(String(data.transcript||'')))openDashboard();}catch(_e){}finally{wakeBusy=false;if(wakeActive)orb.setState('idle');}}
 function startWakeClip(){if(!wakeActive||wakeBusy||wakeRecorder)return;const stream=voiceVAD.mediaStream();if(!stream)return;wakeChunks=[];wakeDiscard=false;voiceVAD.beginPcmCapture();try{const recorder=new MediaRecorder(stream,recorderOptions());wakeRecorder=recorder;recorder.ondataavailable=e=>{if(e.data&&e.data.size)wakeChunks.push(e.data);};recorder.onstop=()=>{if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}const chunks=wakeChunks,discard=wakeDiscard;wakeChunks=[];wakeDiscard=false;if(wakeRecorder===recorder)wakeRecorder=null;const pcm=voiceVAD.endPcmCapture();if(!discard)void transcribeWakeClip(new Blob(chunks,{type:recorder.mimeType||'audio/webm'}),pcm);};recorder.start(250);wakeTimer=setTimeout(()=>finishWakeClip(false),WAKE_MAX_CLIP_MS);orb.setState('listening');}catch(_e){voiceVAD.endPcmCapture();wakeRecorder=null;}}
-function stopWakeListener(){wakeActive=false;wakeRecoveryAttempts=0;if(wakeRecoveryTimer){clearTimeout(wakeRecoveryTimer);wakeRecoveryTimer=null;}finishWakeClip(true);voiceVAD.stop();}
+function stopWakeListener(){wakeActive=false;wakeRecoveryAttempts=0;if(wakeRecoveryTimer){clearTimeout(wakeRecoveryTimer);wakeRecoveryTimer=null;}finishWakeClip(true);voiceVAD.stop();document.title='ZENO Mini Orb · MIC OFF';}
 voiceVAD.onSpeechStart(startWakeClip);voiceVAD.onSpeechEnd(()=>finishWakeClip(false));
+voiceVAD.onLevel(rms=>{if(rms>0.008&&!miniAudioProved){miniAudioProved=true;void reportMiniMic('MICROPHONE_READY','Live audio received from Mini Orb.',true);}});
+voiceVAD.onCaptureStopped(()=>{if(wakeActive){document.title='ZENO Mini Orb · MIC ERROR';void reportMiniMic('AUDIO_CAPTURE_FAILED','Mini Orb microphone stream ended unexpectedly.');stopWakeListener();if(wakeRecoveryAttempts<2){wakeRecoveryAttempts++;wakeRecoveryTimer=setTimeout(()=>{wakeRecoveryTimer=null;void startWakeListener();},900*wakeRecoveryAttempts);}}});
 async function startWakeListener(){
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)return false;
   wakeActive=true;
-  const capabilities=await voiceVAD.start();
+  const capabilities=await voiceVAD.start({deviceId:selectedMicrophoneId()});
   if(!voiceVAD.mediaStream()){
-    wakeActive=false;document.title='ZENO Mini Orb · microphone unavailable';
+    wakeActive=false;document.title='ZENO Mini Orb · MIC ERROR';
+    void reportMiniMic(capabilities.error==='NotReadableError'?'MICROPHONE_BUSY':(capabilities.error==='NotAllowedError'?'WEBVIEW2_PERMISSION_DENIED':'DEVICE_INITIALIZATION_FAILED'),capabilities.error||'Microphone unavailable');
     // A hidden dashboard releases the same capture device through its SSE
     // lifecycle event. If this first handoff arrives slightly early, retry a
     // busy device at most twice; denied and missing-device errors stay final.
@@ -113,7 +119,8 @@ async function startWakeListener(){
   wakeRecoveryAttempts=0;
   // The track settings are read by vad.js after opening the stream.  This
   // title is intentionally compact: it is a diagnostic, not a second UI.
-  document.title=capabilities.noise_suppression?'ZENO Mini Orb · listening':'ZENO Mini Orb · listening (basic audio)';
+  document.title=capabilities.noise_suppression?'ZENO Mini Orb · MIC LISTENING':'ZENO Mini Orb · MIC LISTENING (basic audio)';
+  void reportMiniMic('MICROPHONE_READY','WebView2 microphone stream is open.',miniAudioProved);
   orb.setState('idle');
   return true;
 }
@@ -129,7 +136,7 @@ async function startWakeListener(){
   try{
     if(navigator.permissions?.query){
       const status=await navigator.permissions.query({name:'microphone'});
-      if(status.state==='denied')return;
+      if(status.state==='denied'){document.title='ZENO Mini Orb · MIC ERROR';void reportMiniMic('WEBVIEW2_PERMISSION_DENIED','WebView2 microphone permission is denied.');return;}
       await startWakeListener();
       return;
     }
