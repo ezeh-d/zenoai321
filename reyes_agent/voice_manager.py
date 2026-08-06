@@ -172,9 +172,10 @@ def synthesize(text: str, agent: str = "zeno") -> bytes:
 _speech_q: queue.Queue = queue.Queue(maxsize=100)
 _worker: threading.Thread | None = None
 _speech_lock = threading.Lock()
+_playback_stop = threading.Event()
 
 
-def _speak_now(text: str, agent: str) -> None:
+def _speak_now(text: str, agent: str, stop_event: threading.Event) -> None:
     """Server-side playback in the agent's voice.
 
     Streams PCM straight to sounddevice, mirroring the proven
@@ -201,6 +202,8 @@ def _speak_now(text: str, agent: str) -> None:
     out.start()
     try:
         for chunk in stream:
+            if stop_event.is_set():
+                break
             if chunk:
                 out.write(chunk)
     finally:
@@ -216,7 +219,10 @@ def _run_queue() -> None:
             break
         text, agent = item
         try:
-            _speak_now(text, agent)
+            # A queued, later response begins only after any barge-in stopped
+            # the previous item and the queue was drained.
+            _playback_stop.clear()
+            _speak_now(text, agent, _playback_stop)
         except Exception:  # noqa: BLE001
             pass
         finally:
@@ -239,10 +245,32 @@ def speak_queued(text: str, agent: str = "zeno") -> None:
             return
 
 
+def cancel_current() -> int:
+    """Immediately stop server-side speech and discard unsaid queue entries.
+
+    Browser playback is stopped by its own barge-in handler; this covers the
+    local ElevenLabs queue used by specialist introductions and notices.
+    """
+    _playback_stop.set()
+    discarded = 0
+    with _speech_lock:
+        while True:
+            try:
+                item = _speech_q.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                _speech_q.task_done()
+                if item is not None:
+                    discarded += 1
+    return discarded
+
+
 def shutdown() -> None:
     """Stop the owned playback worker and discard only unsaid transient audio."""
     global _worker
     with _speech_lock:
+        _playback_stop.set()
         worker = _worker
         if worker is None or not worker.is_alive():
             _worker = None

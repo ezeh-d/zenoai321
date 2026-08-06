@@ -96,6 +96,14 @@ def create_mission(
              obj_text, f"{now} -- mission created", now, now),
         )
         new_id = cur.lastrowid
+    try:
+        from reyes_agent import intelligence
+
+        intelligence.persist_mission_state(new_id, goal=description.strip(), plan=list(objectives or []),
+                                           pending=list(objectives or []), completed=[])
+        intelligence.update_situation(active_mission=new_id, current_task=name.strip(), current_step="planning")
+    except Exception:  # noqa: BLE001 -- resilient mission creation never depends on telemetry
+        pass
     return f"Mission #{new_id} '{name.strip()}' created (status: planning, priority: {priority})."
 
 
@@ -230,6 +238,22 @@ def update_mission(mission_id: int, note: str, status: str = "", progress: int |
             "UPDATE missions SET status = ?, progress = ?, log = ?, updated = ? WHERE id = ?",
             (new_status, new_progress, new_log, now, mission_id),
         )
+    try:
+        from reyes_agent import intelligence
+
+        prior = intelligence.load_mission_state(mission_id) or {}
+        completed = list(prior.get("completed", []))
+        pending = list(prior.get("pending", []))
+        if new_status == "completed" and note.strip() not in completed:
+            completed.append(note.strip())
+            pending = []
+        elif new_status in {"paused", "blocked"} and note.strip() not in pending:
+            pending.append(note.strip())
+        intelligence.persist_mission_state(mission_id, goal=prior.get("goal", ""), completed=completed,
+                                           pending=pending, errors=[note.strip()] if new_status == "blocked" else prior.get("errors", []))
+        intelligence.update_situation(active_mission=mission_id, current_task=name, current_step=new_status)
+    except Exception:  # noqa: BLE001
+        pass
     return f"Mission #{mission_id} '{name}' updated -- {new_status}, {new_progress}%."
 
 

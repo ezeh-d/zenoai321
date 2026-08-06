@@ -448,6 +448,18 @@ class WorkflowControlRequest(BaseModel):
     name: str = ""
 
 
+class RuntimeControlRequest(BaseModel):
+    action: str = "cancel"
+    correction: str = ""
+
+
+class SimulationRequest(BaseModel):
+    goal: str
+    steps: list[str]
+    risk: str = "medium"
+    files: list[str] = []
+
+
 @app.post("/api/mouse")
 def mouse_move(req: MouseRequest) -> dict[str, Any]:
     """Move the system cursor to a normalized (x,y) and optionally click --
@@ -521,6 +533,61 @@ def status() -> dict[str, Any]:
     }
 
 
+@app.get("/api/intelligence/situation")
+def intelligence_situation() -> dict[str, Any]:
+    from reyes_agent import intelligence
+
+    return intelligence.situation()
+
+
+@app.post("/api/intelligence/interrupt")
+def intelligence_interrupt(req: RuntimeControlRequest) -> dict[str, Any]:
+    from reyes_agent import intelligence
+
+    return intelligence.get_runtime_control().interrupt(action=req.action, correction=req.correction)
+
+
+@app.get("/api/intelligence/actions")
+def intelligence_actions(limit: int = 10) -> dict[str, Any]:
+    from reyes_agent import intelligence
+
+    return {"actions": intelligence.action_history(limit)}
+
+
+@app.post("/api/intelligence/undo")
+def intelligence_undo(count: int = 1) -> dict[str, Any]:
+    # Direct HTTP must not bypass the same confirmation gate that protects
+    # model-initiated undo. The Activity View can show action history and use
+    # the established approval queue to invoke the registered undo tool.
+    from reyes_agent import intelligence
+
+    return {"ok": False, "count": max(1, min(10, count)),
+            "message": "Undo requires an explicit approval in ZENO before any file is restored or removed.",
+            "available": [item for item in intelligence.action_history(count)
+                          if item.get("reversible") and not item.get("undone")]}
+
+
+@app.get("/api/intelligence/capabilities")
+def intelligence_capabilities() -> dict[str, Any]:
+    from reyes_agent import intelligence
+
+    return {"capabilities": intelligence.capabilities()}
+
+
+@app.get("/api/intelligence/health")
+def intelligence_health() -> dict[str, Any]:
+    from reyes_agent import intelligence
+
+    return intelligence.health()
+
+
+@app.post("/api/intelligence/simulate")
+def intelligence_simulate(req: SimulationRequest) -> dict[str, Any]:
+    from reyes_agent import intelligence
+
+    return intelligence.simulate_plan(req.goal, req.steps, risk=req.risk, files=req.files)
+
+
 def _conversation_turn(
     context, message: str, callbacks: dict[str, Any] | None = None,
     voice_identity: dict[str, Any] | None = None,
@@ -533,6 +600,12 @@ def _conversation_turn(
     from reyes_agent import speaker_identity
 
     callbacks = callbacks or {}
+    try:
+        from reyes_agent import intelligence
+
+        intelligence.update_situation(recent_command=message, current_task="conversation", current_step="planning")
+    except Exception:  # noqa: BLE001
+        intelligence = None
     while not _lock.acquire(timeout=0.1):
         context.check_cancelled()
     try:
@@ -571,6 +644,8 @@ def _conversation_turn(
 
             def on_stage(stage: str) -> None:
                 context.progress(stage)
+                if intelligence is not None:
+                    intelligence.update_situation(current_task="conversation", current_step=stage)
                 callback = callbacks.get("stage")
                 if callback:
                     callback({"type": "stage", "stage": stage})
@@ -642,6 +717,14 @@ def chat(req: ChatRequest) -> dict[str, Any]:
     if not message:
         raise HTTPException(400, "Empty message.")
 
+    from reyes_agent.intelligence import get_runtime_control, update_situation
+
+    control = get_runtime_control()
+    control_reply, message = control.handle_user_message(message)
+    if control_reply is not None:
+        return {"reply": control_reply, "tool_calls": [], "interrupted": True}
+    update_situation(recent_command=message, current_task="conversation", current_step="planning")
+
     from reyes_agent.worker_pool import PRIORITY_BRAIN, get_worker_pool
 
     voice_identity = _validated_voice_identity(req.voice_identity, req.voice_identity_proof)
@@ -649,7 +732,11 @@ def chat(req: ChatRequest) -> dict[str, Any]:
         _conversation_turn, message, voice_identity=voice_identity, name="chat", priority=PRIORITY_BRAIN,
         timeout=config.AI_REQUEST_TIMEOUT_S + 60, with_context=True,
     )
-    return _background_result(handle, config.AI_REQUEST_TIMEOUT_S + 65)
+    control.register(handle, label="Conversation", kind="brain")
+    try:
+        return _background_result(handle, config.AI_REQUEST_TIMEOUT_S + 65)
+    finally:
+        control.release(handle)
 
 
 @app.post("/api/chat/stream")
@@ -662,6 +749,17 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
     message = req.message.strip()
     if not message:
         raise HTTPException(400, "Empty message.")
+
+    from reyes_agent.intelligence import get_runtime_control, update_situation
+
+    control = get_runtime_control()
+    control_reply, message = control.handle_user_message(message)
+    if control_reply is not None:
+        def interrupted():
+            yield f"data: {json.dumps({'type': 'text', 'text': control_reply})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'interrupted': True})}\n\n"
+        return StreamingResponse(interrupted(), media_type="text/event-stream")
+    update_situation(recent_command=message, current_task="conversation", current_step="planning")
 
     voice_identity = _validated_voice_identity(req.voice_identity, req.voice_identity_proof)
 
@@ -708,6 +806,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
             worker, name="chat-stream", priority=PRIORITY_BRAIN,
             timeout=config.AI_REQUEST_TIMEOUT_S + 60, with_context=True,
         )
+        control.register(handle, label="Conversation", kind="brain")
         try:
             while True:
                 try:
@@ -723,6 +822,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         finally:
             if not handle.done:
                 handle.cancel()
+            control.release(handle)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -837,27 +937,40 @@ def voice_turn(audio: UploadFile = File(...), speaker_audio: UploadFile | None =
         from reyes_agent.performance_monitor import measure
         from reyes_agent.confidence import record
         from reyes_agent import speaker_identity
+        from reyes_agent.intelligence import get_runtime_control, update_situation
 
-        context.progress("transcribing")
+        control = get_runtime_control()
+        control.register(context.handle, label="Voice command", kind="voice")
         try:
-            with measure("voice_stt"):
-                stt_result = transcribe_result(audio_bytes)
-                transcript = str(stt_result["transcript"]).strip()
-                record("speech", stt_result.get("confidence"),
-                       "Deepgram final alternative" if stt_result.get("confidence") is not None else
-                       "Deepgram response did not provide a confidence value")
-        except STTError as exc:
-            raise RuntimeError(f"Couldn't hear that: {exc}") from exc
-        if not transcript:
-            return {"transcript": "", "reply": "", "tool_calls": []}
-        identity = (speaker_identity.identify(speaker_bytes) if speaker_bytes else {
-            "status": speaker_identity.INSUFFICIENT_AUDIO, "confidence": None,
-            "reason": "No local PCM speaker sample was supplied.", "stored_audio": False,
-        })
-        result = _conversation_turn(context, transcript, voice_identity=identity)
-        signed_identity, proof = _issue_voice_identity(identity)
-        return {"transcript": transcript, "speech_confidence": stt_result.get("confidence"),
-                "speaker": {**identity, **signed_identity}, "speaker_proof": proof, **result}
+            context.progress("transcribing")
+            try:
+                with measure("voice_stt"):
+                    stt_result = transcribe_result(audio_bytes)
+                    transcript = str(stt_result["transcript"]).strip()
+                    record("speech", stt_result.get("confidence"),
+                           "Deepgram final alternative" if stt_result.get("confidence") is not None else
+                           "Deepgram response did not provide a confidence value")
+            except STTError as exc:
+                raise RuntimeError(f"Couldn't hear that: {exc}") from exc
+            if not transcript:
+                return {"transcript": "", "reply": "", "tool_calls": []}
+            # A completed voice utterance can interrupt a preceding turn. Do
+            # not cancel this transcription task itself while returning its
+            # truthful stop/pause acknowledgement.
+            control_reply, transcript = control.handle_user_message(transcript, exclude_id=context.handle.id)
+            if control_reply is not None:
+                return {"transcript": transcript or "", "reply": control_reply, "tool_calls": [], "interrupted": True}
+            update_situation(recent_command=transcript, current_task="voice conversation", current_step="planning")
+            identity = (speaker_identity.identify(speaker_bytes) if speaker_bytes else {
+                "status": speaker_identity.INSUFFICIENT_AUDIO, "confidence": None,
+                "reason": "No local PCM speaker sample was supplied.", "stored_audio": False,
+            })
+            result = _conversation_turn(context, transcript, voice_identity=identity)
+            signed_identity, proof = _issue_voice_identity(identity)
+            return {"transcript": transcript, "speech_confidence": stt_result.get("confidence"),
+                    "speaker": {**identity, **signed_identity}, "speaker_proof": proof, **result}
+        finally:
+            control.release(context.handle)
 
     from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
 
@@ -1035,7 +1148,7 @@ def situation_room() -> dict[str, Any]:
     reports real state -- nothing is synthesised for the dashboard."""
     import psutil
 
-    from reyes_agent import agent_runtime, confirmation, event_bus, heartbeat, model_router, permissions, session_recovery
+    from reyes_agent import agent_runtime, confirmation, event_bus, heartbeat, intelligence, model_router, permissions, session_recovery
     from reyes_agent.tools.missions import list_missions_dicts
 
     vm = psutil.virtual_memory()
@@ -1076,6 +1189,10 @@ def situation_room() -> dict[str, Any]:
         "pending_approvals": len(confirmation.list_pending()),
         "notices": len(heartbeat.list_notices()),
         "session": session_recovery.summary_line(_restore_report or {}),
+        "intelligence": {
+            "situation": intelligence.situation(),
+            "capabilities": intelligence.capabilities(),
+        },
     }
 
 

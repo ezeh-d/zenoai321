@@ -102,11 +102,26 @@ def write_project_file(project_name: str, filename: str, content: str, destinati
         return f"Invalid filename '{filename}' -- must stay inside the project folder."
 
     project_activity.file_started(project_name, filename)
+    # Capture a small, non-sensitive before-state immediately before the
+    # actual write. This is the only write path with an implemented inverse;
+    # other actions remain honestly marked non-reversible.
+    try:
+        from reyes_agent import intelligence
+
+        action_id = intelligence.begin_project_write(target)
+    except Exception:  # noqa: BLE001 -- undo history must never block a file write
+        action_id = None
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         project_activity.file_completed(project_name, filename, content)
     except OSError as exc:
+        try:
+            from reyes_agent import intelligence
+
+            intelligence.abandon_project_write(action_id, f"Could not write {filename}: {exc}")
+        except Exception:  # noqa: BLE001
+            pass
         project_activity.failed(project_name, f"Could not write {filename}: {exc}")
         return f"Could not write '{filename}': {exc}"
 
@@ -135,7 +150,14 @@ def write_project_file(project_name: str, filename: str, content: str, destinati
         shown = str(target.relative_to(config.VAULT_PATH))
     except ValueError:
         shown = str(target)
-    return f"Wrote {shown} ({len(content)} chars)."
+    result = f"Wrote {shown} ({len(content)} chars)."
+    try:
+        from reyes_agent import intelligence
+
+        intelligence.complete_project_write(action_id, target, result)
+    except Exception:  # noqa: BLE001
+        pass
+    return result
 
 
 @register(

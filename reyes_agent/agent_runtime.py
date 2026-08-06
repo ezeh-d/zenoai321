@@ -51,6 +51,13 @@ RESTARTING = "restarting"
 STANDBY = "standby"
 SLEEPING = "sleeping"
 
+
+class AgentTaskCancelled(RuntimeError):
+    """A delegated task observed the owner's cooperative interruption."""
+
+
+_task_local = threading.local()
+
 # A worker ticks its heartbeat every loop and at least this often while
 # blocked on the queue (the queue.get timeout). Stale => unhealthy.
 _HEARTBEAT_INTERVAL = 2.0
@@ -68,6 +75,7 @@ class AgentTask:
     result: str | None = None
     error: str | None = None
     done: threading.Event = field(default_factory=threading.Event)
+    cancel_requested: threading.Event = field(default_factory=threading.Event)
     dedupe_key: str = ""
 
     def wait(self, timeout: float | None = None) -> str:
@@ -75,6 +83,18 @@ class AgentTask:
         if not self.done.wait(timeout):
             return f"Task for {self.agent} timed out after {timeout}s."
         return self.result if self.error is None else f"Error: {self.error}"
+
+    def cancel(self, reason: str = "cancelled") -> bool:
+        if self.done.is_set():
+            return False
+        self.cancel_requested.set()
+        if not self.error:
+            self.error = reason
+        return True
+
+    def check_cancelled(self) -> None:
+        if self.cancel_requested.is_set():
+            raise AgentTaskCancelled(self.error or "cancelled")
 
 
 @dataclass
@@ -109,6 +129,7 @@ class AgentWorker:
         self.started_at = 0.0
         self.metrics = AgentMetrics()
         self.current_task: str = ""
+        self.active_task: AgentTask | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -156,6 +177,15 @@ class AgentWorker:
                 self.queue.task_done()
         return cancelled
 
+    def cancel_tasks(self, reason: str = "owner interruption") -> int:
+        """Cancel current cooperative work and all queued work for this agent."""
+        cancelled = 0
+        active = self.active_task
+        if active is not None and active.cancel(reason):
+            cancelled += 1
+        cancelled += self.cancel_pending(reason)
+        return cancelled
+
     def is_alive(self) -> bool:
         """Ground truth -- the actual OS thread, not a flag we set."""
         return self._thread is not None and self._thread.is_alive()
@@ -192,9 +222,22 @@ class AgentWorker:
         self.state = OFFLINE
 
     def _execute(self, task: AgentTask) -> None:
+        if task.cancel_requested.is_set():
+            task.error = task.error or "cancelled before start"
+            task.result = f"Error: {task.error}"
+            task.done.set()
+            return
         self.state = WORKING
         self.current_task = task.description[:120]
+        self.active_task = task
         started = time.time()
+        try:
+            from reyes_agent import intelligence
+
+            intelligence.update_situation(current_task=task.description, current_step="delegated work",
+                                           active_agents=[self.agent_id])
+        except Exception:  # noqa: BLE001
+            pass
         _publish("agent.task_started", {
             "agent": self.agent_id,
             "task_id": task.id,
@@ -205,8 +248,14 @@ class AgentWorker:
             "emotion": "thinking",
         })
         try:
+            _task_local.task = task
+            task.check_cancelled()
             task.result = task.fn()
+            task.check_cancelled()
             self.metrics.tasks_completed += 1
+        except AgentTaskCancelled as exc:
+            task.error = str(exc)
+            task.result = f"Error: {task.error}"
         except Exception as exc:  # noqa: BLE001 -- a failed task must not kill the worker
             task.error = f"{type(exc).__name__}: {exc}"
             task.result = f"Error: {task.error}"
@@ -217,7 +266,16 @@ class AgentWorker:
             self.metrics.last_activity = time.time()
             self.metrics.last_task = task.description[:120]
             self.current_task = ""
+            self.active_task = None
+            if getattr(_task_local, "task", None) is task:
+                del _task_local.task
             self.heartbeat = time.time()
+            try:
+                from reyes_agent import intelligence
+
+                intelligence.update_situation(current_step="completed" if task.error is None else "failed")
+            except Exception:  # noqa: BLE001
+                pass
             self.state = IDLE
             task.done.set()
             if task.dedupe_key:
@@ -304,6 +362,13 @@ def _publish(event_type: str, payload: dict) -> None:
         event_bus.publish(event_type, payload, source="agent_runtime")
     except Exception:  # noqa: BLE001 -- telemetry must never break the runtime
         pass
+
+
+def current_task_cancel_check() -> None:
+    """Let a delegated provider/tool loop observe its worker's cancellation."""
+    task = getattr(_task_local, "task", None)
+    if task is not None:
+        task.check_cancelled()
 
 
 # --- the runtime -------------------------------------------------------
@@ -483,6 +548,16 @@ def submit(agent_id: str, description: str, fn: Callable[[], str]) -> AgentTask 
         restart(agent_id, reason="submit to dead worker")
     w.wake()
     return w.submit_task(description, fn)
+
+
+def cancel_active(reason: str = "owner interruption") -> int:
+    """Request cooperative cancellation across all live specialist workers."""
+    with _lock:
+        workers = list(_workers.values())
+    cancelled = sum(worker.cancel_tasks(reason) for worker in workers)
+    if cancelled:
+        _publish("agent.tasks_cancelled", {"count": cancelled, "reason": reason, "emotion": "warning"})
+    return cancelled
 
 
 def is_running() -> bool:

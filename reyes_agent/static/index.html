@@ -1856,6 +1856,11 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
     inputEl.disabled = false;
     inputEl.placeholder = 'Talk to ZENO...';
     setTimeout(() => { if (!turnActive) updateIdleListenState(); }, 600);
+    if (pendingBargeTranscript) {
+      const replacement = pendingBargeTranscript;
+      pendingBargeTranscript = '';
+      setTimeout(() => handleHeard(replacement), 0);
+    }
     lastTurnFacts = {
       model: (lastStatus && lastStatus.provider) || 'unknown',
       agents: Array.from(dispatchedAgents),
@@ -1940,14 +1945,26 @@ const VAD_MIN_CLIP_BYTES = 1_200;
 // silence anything a previous build may have left queued.
 let serverTtsAvailable = true;
 const _ttsAudioEl = new Audio();
+let pendingBargeTranscript = '';
+let bargeInRequested = false;
+
+async function requestBargeIn() {
+  if (bargeInRequested) return;
+  bargeInRequested = true;
+  _ttsAudioEl.pause();
+  _ttsAudioEl.removeAttribute('src');
+  window.speechSynthesis.cancel();
+  try { await fetch('/api/intelligence/interrupt', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'cancel'}) }); }
+  catch (_) { /* The active turn still has its ordinary timeout/cancel path. */ }
+  finally { bargeInRequested = false; }
+}
 
 async function speakInBrowser(text) {
   if (!text) return;
-  // Remembered so the persistent-listening loop can discard its own voice
-  // coming back through the mic (see looksLikeSelfEcho). Pause the one
-  // processed microphone stream before playback, then resume it below.
+  // Keep the single processed microphone stream alive during playback so a
+  // genuine voice utterance can barge in. The exact self-echo guard rejects
+  // ZENO's own reply before it can become a command.
   lastSpokenText = text;
-  if (ambientEnabled) voiceVAD.pauseDetection();
   window.speechSynthesis.cancel();
   _ttsAudioEl.pause();
 
@@ -2128,8 +2145,17 @@ function isStandbyPhrase(text) {
 
 async function handleHeard(transcript) {
   transcript = transcript.trim();
-  if (!transcript || turnActive) return;
+  if (!transcript) return;
   if (looksLikeSelfEcho(transcript)) return;  // ZENO hearing itself
+  if (!_ttsAudioEl.paused) void requestBargeIn();
+  // Preserve a real non-echo correction while the prior managed turn is
+  // cancelled. The runTurn finally block starts it only after that turn has
+  // released the one shared conversation history/slot.
+  if (turnActive) {
+    pendingBargeTranscript = transcript;
+    void requestBargeIn();
+    return;
+  }
 
   // Standby works whenever a session is open, wake word or not.
   if ((listeningMode || awaitingCommand) && isStandbyPhrase(transcript)) {
@@ -2306,7 +2332,7 @@ async function transcribeVADClip(blob, speakerBlob = null) {
 }
 
 function startVADRecording() {
-  if (!ambientEnabled || turnActive || transcriptionActive || vadRecorder) return;
+  if (!ambientEnabled || transcriptionActive || vadRecorder) return;
   const stream = voiceVAD.mediaStream();
   if (!stream || !window.MediaRecorder) return;
   vadChunks = [];

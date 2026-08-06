@@ -19,6 +19,8 @@ framed.
 
 from __future__ import annotations
 
+import time
+
 from reyes_agent import config
 from reyes_agent.tools import GROUP_NAMES, register, run_tool, tool_definitions
 
@@ -282,7 +284,25 @@ def delegate(specialist: str, task: str) -> str:
         if agent_runtime.is_running():
             handle = agent_runtime.submit(specialist, task, lambda: _run_specialist(specialist, spec, task))
             if handle is not None:
-                return handle.wait(timeout=180)
+                # Do not block an interrupted parent turn for the full
+                # specialist timeout. The managed context propagates the
+                # cancellation request into the specialist's provider/tool
+                # loop, then returns immediately to the orchestrator.
+                from reyes_agent.worker_pool import current_task_context
+
+                parent = current_task_context()
+                deadline = time.monotonic() + 180
+                while not handle.done.wait(0.1):
+                    if parent is not None:
+                        try:
+                            parent.check_cancelled()
+                        except Exception:
+                            handle.cancel("parent task interrupted")
+                            return "Error: delegated task cancelled because the owner interrupted ZENO."
+                    if time.monotonic() >= deadline:
+                        handle.cancel("delegation timeout")
+                        return f"Error: task for {specialist} timed out after 180s."
+                return handle.wait(timeout=0)
     except Exception:  # noqa: BLE001 -- never let the runtime break delegation
         pass
     return _run_specialist(specialist, spec, task)
@@ -290,6 +310,10 @@ def delegate(specialist: str, task: str) -> str:
 
 def _run_specialist(specialist: str, spec: dict, task: str) -> str:
     from reyes_agent.provider import ProviderError, run_turn
+    try:
+        from reyes_agent.agent_runtime import current_task_cancel_check
+    except Exception:  # noqa: BLE001 -- direct CLI fallback has no worker task
+        current_task_cancel_check = lambda: None
 
     _publish_agent_visual_state(specialist, "thinking", task=task[:200])
 
@@ -316,8 +340,9 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
 
     try:
         for _ in range(_MAX_SUBAGENT_TOOL_ROUNDS):
+            current_task_cancel_check()
             _publish_agent_visual_state(specialist, "thinking", task=task[:200])
-            turn = run_turn(history, system=system, tools=allowed_tools)
+            turn = run_turn(history, system=system, tools=allowed_tools, cancel_check=current_task_cancel_check)
             if not turn.wants_tool:
                 return turn.text
 
@@ -332,6 +357,7 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
                 }
             )
             for tc in turn.tool_calls:
+                current_task_cancel_check()
                 # Same gated entry point as the main loop -- a sub-agent
                 # doesn't get to skip the Tier 6 confirmation gate.
                 _publish_agent_visual_state(specialist, "working", tool=tc.name)
@@ -345,6 +371,7 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
                     except Exception:  # noqa: BLE001 -- activity cannot break a tool
                         pass
                 result = run_tool(tc.name, tc.input)
+                current_task_cancel_check()
                 history.append(
                     {"role": "tool_result", "tool_call_id": tc.id, "name": tc.name, "content": result}
                 )

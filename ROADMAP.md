@@ -371,6 +371,106 @@ proofs, honest no-provider audio results, awareness defaults/history clearing,
 and the browser/API wiring. It runs alongside Phase 21/22 runtime, VAD and
 Mini Overlay regressions.
 
+## Phase 22 — Next Intelligence Layer · PARTIAL, with explicit limits
+
+**20. Interrupt + correction — PARTIAL.** `intelligence.py` registers real
+managed worker handles for chat, streaming chat and voice turns. “Stop”,
+“wait”, “pause”, “cancel” and an explicit “I meant …” correction cancel or
+pause the preceding work before a replacement intent is planned. The browser
+keeps its one VAD stream live during ElevenLabs playback; a non-echo utterance
+stops local audio immediately, cancels the server operation and is replayed
+only after the former conversation slot is released. Agent tasks now carry a
+cooperative cancellation token through their provider/tool loop; queued work
+is removed. Playwright already observes the parent task token while waiting.
+**Limit:** Python cannot forcibly terminate an arbitrary third-party SDK call
+already inside a synchronous native/network function; configured provider and
+Playwright timeouts remain the hard boundary, and cancellation prevents the
+next step rather than pretending to kill that call.
+
+**21. Undo + recovery — PARTIAL.** A bounded, durable local action history now
+records tool outcomes. ZENO project-text writes up to 512 KiB capture a real
+before-state immediately before writing and can be restored/deleted only when
+the current file hash still proves nobody changed it afterwards. External,
+destructive, large or sensitive-file operations are explicitly non-reversible;
+they are never advertised as undoable. `undo_last_actions` remains confirmation
+gated.
+
+**22. Teach-by-demonstration 2.0 — PARTIAL.** The existing reviewed Teach Mode
+continues to use its guarded replay, app/foreground verification, browser tool
+selectors and owner visual confirmation. No coordinates-only replay was added.
+Its named limit is unchanged: a manually demonstrated website has guarded
+desktop semantics unless its original action was a ZENO browser tool.
+
+**23. Situation awareness — PARTIAL.** A lightweight event/request projection
+now exposes the observable active application/window, active managed task,
+current stage, mission, workflow, participating agents and recent command to
+the Situation Room/API. It updates from work rather than introducing a polling
+loop. Ambiguous references are not resolved automatically.
+
+**24. Proactive intelligence — PARTIAL.** Existing quiet, opt-in, bounded
+proactive notices remain the only automatic suggestions. They respect the
+heartbeat kill switch/quiet hours and never authorize an action. No fake
+open-ended prediction model or background provider loop was introduced.
+
+**25. Personal Knowledge Graph — PARTIAL.** The existing evidence-backed note
+graph remains authoritative for inferred note links. A separate explicit,
+owner-confirmed relationship store now supports add/correct/search/delete for
+relationships such as people, projects and agent roles. It does not infer
+private relationships from model output.
+
+**26. Universal search — PARTIAL.** One bounded permitted search now ranks
+Living Memory, note text, explicit relationships, saved workflows, durable
+activity and action history with labelled sources. Ranking is transparent
+lexical relevance plus bounded recency; the existing semantic vault search is
+still a separate specialised tool, so this layer does not claim a new unified
+embedding index.
+
+**27. Time + temporal awareness — PARTIAL.** The new resolver gives exact,
+timezone-aware meanings for today/yesterday/tomorrow, last weekday and finite
+“N hours from now” expressions. Unsupported natural language remains explicit
+rather than guessed; it is not a calendar/reminder parser replacement.
+
+**28. Safe simulation — PARTIAL.** `simulate_plan` produces an unmistakably
+non-executing plan, risk and affected-file preview through the Event Bus. It
+does not call tools or mutate state. Editing/approving a model-generated plan
+still uses the existing normal confirmation path; no pretend dry-run of an
+external website or OS command is claimed.
+
+**29. Self-diagnostics + Health Center — PARTIAL.** An on-demand, event-driven
+Health Center reports actual Kernel, worker queue, Event Bus, agent, voice,
+lazy browser and recognition capability status. It does not add a costly new
+poller. Existing agent/browser recovery remains available; automatic recovery
+is deliberately limited to safe established mechanisms rather than restarting
+hardware/provider services blindly.
+
+**30. Capability awareness / truth — PARTIAL.** `capability_status` provides
+AVAILABLE, PARTIAL, NOT CONFIGURED and UNAVAILABLE states with concrete
+limitations, including audio recognition and spoof-resistant voice identity.
+It prevents this new layer from representing planned/incomplete work as live,
+but it is a curated registry rather than a runtime proof for every third-party
+provider credential.
+
+**31. True mission pause + resume — PARTIAL.** Missions now preserve observable
+goal, plan, completed/pending steps, files, agents, decisions, blockers and
+verification in the existing local state database; pauses/completions update
+the projection. Workflow replay keeps its own precise resumable checkpoint.
+An arbitrary in-flight model/desktop operation cannot be resurrected after a
+process crash, so ZENO requires evidence before retrying an unfinished step.
+
+**32. “ZENO, handle it” — PARTIAL.** The existing Executive Brain, dynamic
+specialists, Activity View, destination gate, permission engine, verification
+recording and on-demand faces are now connected to interruption, situational
+context and persisted mission evidence. ZENO can plan/delegate/observe and
+show real work, but there is no new autonomous outcome executor that claims it
+can resolve every ambiguous goal without asking a consequential question.
+
+**Regression coverage:** `tests/test_next_intelligence.py` verifies managed
+cancellation, specialist cancellation, safe reversible project writes and
+modified-file refusal, mission-state persistence, temporal explicitness,
+relationship correction/deletion, non-executing simulation and the one-stream
+browser barge-in wiring. It runs with the existing Phase 21/22, workflow,
+voice, Mini Orb, Activity View, agent-presence, confidence and kernel suites.
+
 ---
 
 ## Future milestones — interfaces only, no placeholder code

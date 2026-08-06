@@ -70,6 +70,16 @@ def register(
 # specialists still get their scoped sets as before, and ZENO can pull any
 # group in mid-turn when a request actually needs it.
 TOOL_GROUPS: dict[str, str] = {
+    # Next-intelligence operations stay lazy so capability breadth does not
+    # regress the measured default provider payload. Direct stop/cancel is
+    # intercepted before model planning, so it does not need a core schema.
+    "interrupt_work": "intelligence", "capability_status": "intelligence",
+    "action_history": "intelligence", "undo_last_actions": "intelligence",
+    "current_situation": "intelligence", "universal_search": "intelligence",
+    "resolve_time": "intelligence", "simulate_plan": "intelligence",
+    "health_center": "intelligence", "remember_relationship": "intelligence",
+    "search_relationships": "intelligence", "forget_relationship": "intelligence",
+    "save_mission_runtime_state": "intelligence", "load_mission_runtime_state": "intelligence",
     # missions: create/list stay core; the rest load on demand
     "get_mission": "missions", "update_mission": "missions",
     "set_mission_objective_done": "missions",
@@ -155,6 +165,16 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
         except Exception:  # noqa: BLE001
             pass
         audit.log("tool_run", tool=tool.name, input=tool_input, result=result)
+        # The next-intelligence layer records an intentionally bounded action
+        # history and current observable task.  It never becomes a second
+        # executor; this remains the one gated tool path.
+        try:
+            from reyes_agent import intelligence
+
+            intelligence.record_tool_execution(tool.name, tool_input, str(result))
+            intelligence.update_situation(current_task=tool.name, current_step="completed")
+        except Exception:  # noqa: BLE001 -- action history cannot break a tool
+            pass
         # Durable event record -- this is what makes an execution timeline
         # possible. Result is truncated: the bus is a record of what
         # happened, not a second copy of every file ZENO ever read.
@@ -184,6 +204,12 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
         except Exception:  # noqa: BLE001
             pass
         audit.log("tool_error", tool=tool.name, input=tool_input, error=str(exc))
+        try:
+            from reyes_agent import intelligence
+
+            intelligence.update_situation(current_task=tool.name, current_step="failed")
+        except Exception:  # noqa: BLE001
+            pass
         return f"Error running '{tool.name}': {exc}"
 
 
@@ -274,7 +300,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, investing, knowledge_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, intelligence_tools, investing, knowledge_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so
