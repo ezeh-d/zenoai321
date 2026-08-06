@@ -220,7 +220,7 @@ negative/multi-monitor coordinates, repairs stale/off-screen coordinates to a
 working area, and has one five-second no-activate health check for hidden or
 minimized windows. The health path uses `SetWindowPos(HWND_TOPMOST,
 SWP_NOACTIVATE)` rather than focus-stealing `show()`. Verified live on
-2026-08-06: startup, Chrome foreground, File Explorer foreground, dashboard
+2026-08-06: startup, Chrome foreground, File Explorer launch, dashboard
 minimize, and a forced off-screen recovery all left the 210x210 orb visible
 and responsive. VS Code was not installed on this PC, so that one requested
 live application check is unavailable here.
@@ -229,9 +229,16 @@ live application check is unavailable here.
 and the 13 specialists are registered at startup but each supervised worker
 starts only when delegated. Duplicate in-flight specialist work shares one
 result. The normal Mini Orb heartbeat is one bridge call per second (not four)
-and its state uses the existing small particle pool. The bounded 20-second
-stress run completed 40 missions and 1,000 events with all four workers alive,
-60 retained history entries, and 1.66 MB RSS growth.
+and its state uses the existing small particle pool. Its idle state now keeps
+the requested continuous glow and 12 visible particles, but draws them at
+8fps with no continuous core/ring compositor animation; active work raises
+only the particle cadence to 20fps. On the restarted live application,
+after staging settled, a 20-second idle sample recorded 8.28% total ZENO CPU,
+4.22% WebView2 CPU, 521.7 MiB working set and 155 threads; the Mini Orb window
+remained responsive. A short warm-up sample was substantially higher, so this
+is not a substitute for the outstanding five-minute isolated A/B measurement.
+The bounded 20-second stress run completed 40 missions and 1,000 events with
+all four workers alive, 60 retained history entries, and 1.66 MB RSS growth.
 
 **Confidence and verification:** `confidence.py` combines only real supplied
 speech, intent, entity, visual, plan, and verification signals; unknown means

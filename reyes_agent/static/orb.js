@@ -65,9 +65,12 @@ function injectStyles() {
     #orb-simple .orb-ring {
       position: absolute; inset: -8px; border-radius: 50%;
       border: 1px solid hsl(var(--orb-hue) 90% 70% / 0.35);
-      animation: orb-spin var(--orb-spin, 20s) linear infinite;
+      /* The idle companion is visible all day.  Keep its glow and particles
+         alive, but do not continuously composite a decorative ring until
+         ZENO is actually doing work. */
+      animation: none;
     }
-    #orb-simple.lite .orb-ring { animation: none; }
+    #orb-simple.orb-motion:not(.lite) .orb-ring { animation: orb-spin var(--orb-spin, 20s) linear infinite; }
     /* The glow lives on its OWN static layer, separate from the element
        that breathes. box-shadow is PAINTED, not composited: when it sat on
        .orb-core, every frame of the scale animation forced the compositor
@@ -76,7 +79,7 @@ function injectStyles() {
        rasterized once and merely composited, and the glow looks identical. */
     #orb-simple .orb-glow {
       position: absolute; inset: 22px; border-radius: 50%;
-      box-shadow: 0 0 34px hsl(var(--orb-hue) 90% 58% / 0.55), 0 0 80px hsl(var(--orb-hue) 90% 55% / 0.30);
+      box-shadow: 0 0 30px hsl(var(--orb-hue) 90% 58% / 0.52), 0 0 64px hsl(var(--orb-hue) 90% 55% / 0.24);
       transition: box-shadow .6s ease;
       pointer-events: none;
     }
@@ -87,13 +90,15 @@ function injectStyles() {
       position: absolute; inset: 22px; border-radius: 50%;
       background:
         radial-gradient(circle at 34% 28%, hsl(var(--orb-hue) 95% 80%), hsl(var(--orb-hue) 85% 56%) 45%, hsl(var(--orb-hue) 70% 28%) 78%, transparent 100%);
-      animation: orb-breathe 3.6s ease-in-out infinite;
+      animation: none;
       /* Own compositing layer so the breathe animation is a GPU transform
          rather than a repaint of the gradient beneath it. */
       will-change: transform;
       transition: background .6s ease;
     }
-    #orb-simple .orb-core.pulse-burst { animation: orb-breathe 3.6s ease-in-out infinite, orb-pulse-burst .5s ease-out; }
+    #orb-simple.orb-motion:not(.lite) .orb-core { animation: orb-breathe 3.6s ease-in-out infinite; }
+    #orb-simple .orb-core.pulse-burst { animation: orb-pulse-burst .5s ease-out; }
+    #orb-simple.orb-motion:not(.lite) .orb-core.pulse-burst { animation: orb-breathe 3.6s ease-in-out infinite, orb-pulse-burst .5s ease-out; }
     @keyframes orb-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
 
     /* --- expressive eyes -------------------------------------------
@@ -165,6 +170,8 @@ export function initOrb(canvas) {
   root.style.setProperty("--orb-spin", STATES.idle.spin + "s");
 
   let currentEyes = "calm";
+  let currentState = "idle";
+  root.classList.add("orb-idle");
   function setEyes(expression) {
     if (expression === currentEyes) return;
     root.classList.remove("eyes-" + currentEyes);
@@ -175,24 +182,32 @@ export function initOrb(canvas) {
 
   function setState(name) {
     const s = STATES[name] || STATES.idle;
+    const nextState = STATES[name] ? name : "idle";
+    root.classList.remove("orb-" + currentState);
+    currentState = nextState;
+    root.classList.add("orb-" + currentState);
+    // Idle and waiting are deliberately low-motion states.  Their static
+    // glow plus low-rate particles keep ZENO visibly present without a
+    // permanent compositor workload in the Windows overlay.
+    root.classList.toggle("orb-motion", currentState !== "idle" && currentState !== "waiting");
     currentHue = s.hue;
     root.style.setProperty("--orb-hue", String(currentHue));
     root.style.setProperty("--orb-spin", s.spin + "s");
     setEyes(s.eyes || "calm");
-    setParticleCount({ idle: 14, listening: 22, understanding: 24, thinking: 30,
-      acting: 32, waiting: 16, success: 18, processing: 30, speaking: 24,
+    setParticleCount({ idle: 12, listening: 22, understanding: 24, thinking: 30,
+      acting: 32, waiting: 12, success: 18, processing: 30, speaking: 24,
       error: 12, searching: 28, coding: 30, creating: 26, communicating: 22,
       learning: 24, reasoning: 30, sleeping: 10 }[name] || 14);
   }
 
   // One small canvas and a fixed object pool: no particle DOM nodes, no
   // allocations or physics in the draw path, no blur filter.  Idle redraws
-  // at 30fps; meaningful active states use 40fps only in this 220px area.
+  // at 8fps; meaningful active states use 20fps only in this 220px area.
   const particles = Array.from({ length: 40 }, (_v, i) => ({
     phase: (i * 2.399) % (Math.PI * 2), radius: 32 + (i % 7) * 9,
     speed: 0.00022 + (i % 5) * 0.000035, size: 0.8 + (i % 3) * 0.45,
   }));
-  let particleCount = 16;
+  let particleCount = 12;
   let particleTimer = null;      // rAF handle (kept as the audit's liveness flag)
   let particleActive = true;
   let lastParticleDraw = 0;
@@ -208,9 +223,9 @@ export function initOrb(canvas) {
   function drawParticles(now) {
     particleTimer = null;
     if (!particleActive || document.visibilityState !== "visible") return;
-    // Keep the original cadence (40fps busy / 30fps idle) rather than
-    // drawing on every vsync -- particles don't need 60fps and this is a
-    // 2-core machine.
+    // The always-visible Mini Orb does not need 30/40fps canvas work.  An
+    // 8fps idle drift remains visibly alive; active work gets 20fps while
+    // still staying well below the 60fps compositor budget.
     lastParticleDraw = now;
     particleContext.clearRect(0, 0, 220, 220);
     particleContext.fillStyle = `hsl(${currentHue} 92% 78%)`;
@@ -227,14 +242,14 @@ export function initOrb(canvas) {
     particleContext.globalAlpha = 1;
     scheduleParticleFrame();
   }
-  // setTimeout picks the CADENCE (30/40fps -- particles don't need 60), then
+  // setTimeout picks the CADENCE (8/20fps -- particles don't need 60), then
   // one rAF aligns the actual draw to vsync. The rAF is what makes this
   // self-suspending: a minimised WebView2 window is never composited, so the
   // frame callback never fires and no canvas work happens. Scheduling the
   // draw directly on rAF would instead wake 60x/sec just to skip most frames.
   function scheduleParticleFrame() {
     if (!particleActive) { particleTimer = null; return; }
-    const gap = particleCount > 20 ? 25 : 33;
+    const gap = particleCount > 20 ? 50 : 125;
     particleTimer = setTimeout(() => {
       particleTimer = requestAnimationFrame(drawParticles);
     }, gap);
