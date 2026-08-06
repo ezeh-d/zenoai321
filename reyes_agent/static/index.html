@@ -784,6 +784,35 @@ body.focus #agent-team-overview { opacity: 0; }
       <button id="phone-pair-btn" class="vt-btn">Pair Phone</button>
       <div id="phone-pair-info" style="font:12px ui-monospace,monospace;color:var(--text-dim);word-break:break-all;">Configure Cloudflare Tunnel and Access first.</div>
     </div>
+    <div class="toggle-row">
+      <span class="label">Notifications<span class="sub">Show system and ZENO alerts</span></span>
+      <label class="switch"><input type="checkbox" id="nf-enabled"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Read aloud<span class="sub">Speak notifications in ZENO's voice</span></span>
+      <label class="switch"><input type="checkbox" id="nf-aloud"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Desktop toast<span class="sub">Show on the mini orb while you work elsewhere</span></span>
+      <label class="switch"><input type="checkbox" id="nf-toast"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Priority only<span class="sub">Only high and urgent get through</span></span>
+      <label class="switch"><input type="checkbox" id="nf-priority"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Do not disturb<span class="sub">Silence everything except urgent</span></span>
+      <label class="switch"><input type="checkbox" id="nf-dnd"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Notification volume<span class="sub" id="nf-vol-label">70%</span></span>
+      <input type="range" id="nf-volume" min="0" max="100" value="70" style="width:120px;">
+    </div>
+    <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+      <span class="label">Microphone<span class="sub">Diagnose exactly what is blocking the mic</span></span>
+      <button id="mic-diag-btn" class="vt-btn">Diagnose microphone</button>
+      <div id="mic-diag-out" style="font:11.5px system-ui;color:var(--text-dim);"></div>
+    </div>
     <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
       <span class="label">Agent voices<span class="sub">Preview each specialist, or paste a new ElevenLabs voice ID</span></span>
       <div style="display:flex;gap:6px;margin-bottom:4px;">
@@ -1797,6 +1826,7 @@ let listeningMode = false;
 // Deepgram returns final clips, so confidence and alternatives are unknown
 // unless a future STT provider supplies them. The existing safety gate then
 // does not pretend it has a confidence signal it never received.
+let lastMicError = '';             // DOMException name, for /api/microphone/diagnose
 let lastSpeechRaw = '';            // exactly what the engine returned
 let lastSpeechConfidence = null;   // engine confidence, or null if not given
 let lastSpeechAlternatives = [];   // up to 3 alternates, for disambiguation
@@ -2069,9 +2099,20 @@ async function startAmbientListening() {
     ambientEnabled = false;
     micIndicator.classList.remove('listening');
     micIndicator.classList.add('needs-permission');
-    micStatusEl.textContent = capabilities.error === 'NotAllowedError'
-      ? 'Microphone permission is blocked in Windows or this ZENO profile.'
-      : 'Microphone unavailable: ' + (capabilities.error || 'unknown error');
+    // Ask the server which of the six real causes this is, instead of
+    // guessing. The old message named Windows AND the ZENO profile in one
+    // sentence, so it sent the user to Windows privacy settings that were
+    // usually already correct (verified 2026-08-06: all consent keys read
+    // Allow while the panel still showed "blocked in Windows").
+    lastMicError = capabilities.error || '';
+    micStatusEl.textContent = 'Microphone unavailable — checking why…';
+    try {
+      const d = await (await fetch('/api/microphone/diagnose?browser_error=' +
+                                    encodeURIComponent(lastMicError))).json();
+      micStatusEl.textContent = d.summary + (d.fix ? ' ' + d.fix : '');
+    } catch (e) {
+      micStatusEl.textContent = 'Microphone unavailable: ' + (lastMicError || 'unknown error');
+    }
     return;
   }
   bindVADHandlers();
@@ -2170,6 +2211,8 @@ if (!!window.EventSource) {
       document.getElementById('map-overlay-title').textContent = data.location || 'Map';
       frame.src = data.embed_url;
       document.getElementById('map-overlay').classList.add('open');
+    } else if (data.type === 'zeno_notification') {
+      handleZenoNotification(data);
     } else if (data.type === 'roll_call' && Array.isArray(data.sequence)) {
       playRollCall(data.sequence);
     } else if (data.type === 'workspace_code') {
@@ -2404,6 +2447,91 @@ if (_diagBtn) _diagBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Notification settings -------------------------------------------
+// Server-persisted (vault JSON), NOT localStorage: the listener runs in
+// the Python process and has to read the same values, and they must
+// survive a profile reset.
+const NF_FIELDS = {
+  'nf-enabled': 'enabled', 'nf-aloud': 'read_aloud', 'nf-toast': 'desktop_toast',
+  'nf-priority': 'priority_only', 'nf-dnd': 'do_not_disturb',
+};
+let nfSettings = null;
+
+async function loadNotificationSettings() {
+  try {
+    const d = await (await fetch('/api/notifications')).json();
+    nfSettings = d.settings;
+  } catch (e) { return; }
+  for (const [id, key] of Object.entries(NF_FIELDS)) {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!nfSettings[key];
+  }
+  const vol = document.getElementById('nf-volume');
+  if (vol) {
+    vol.value = Math.round((nfSettings.volume ?? 0.7) * 100);
+    document.getElementById('nf-vol-label').textContent = vol.value + '%';
+  }
+}
+
+async function saveNotificationSetting(patch) {
+  try {
+    const res = await fetch('/api/notifications/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const d = await res.json();
+    nfSettings = d.settings;
+  } catch (e) { /* transient */ }
+}
+
+for (const [id, key] of Object.entries(NF_FIELDS)) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', () => saveNotificationSetting({ [key]: el.checked }));
+}
+const _nfVol = document.getElementById('nf-volume');
+if (_nfVol) {
+  _nfVol.addEventListener('input', () => {
+    document.getElementById('nf-vol-label').textContent = _nfVol.value + '%';
+  });
+  _nfVol.addEventListener('change', () =>
+    saveNotificationSetting({ volume: Number(_nfVol.value) / 100 }));
+}
+
+// Incoming notifications from the server (see notifications.py::notify).
+// Reading aloud is opt-in and respects the saved volume.
+function handleZenoNotification(data) {
+  const line = data.title + (data.body ? ' — ' + data.body : '');
+  showCaption(line, '');
+  if (data.priority === 'urgent' || data.priority === 'high') orb.pulse();
+  if (data.read_aloud) {
+    const prevVol = _ttsAudioEl ? _ttsAudioEl.volume : 1;
+    if (_ttsAudioEl && typeof data.volume === 'number') _ttsAudioEl.volume = data.volume;
+    speakInBrowser(line);
+    if (_ttsAudioEl) setTimeout(() => { _ttsAudioEl.volume = prevVol; }, 50);
+  }
+}
+
+// --- Microphone diagnosis --------------------------------------------
+// Asks the server, which reads Windows privacy policy read-only and can
+// tell apart "Windows blocked it" from "this WebView2 profile blocked it"
+// -- the previous message conflated the two and sent the user to Windows
+// settings that were already correct.
+const _micDiagBtn = document.getElementById('mic-diag-btn');
+if (_micDiagBtn) _micDiagBtn.addEventListener('click', async () => {
+  const out = document.getElementById('mic-diag-out');
+  out.textContent = 'Checking…';
+  try {
+    const err = (typeof lastMicError === 'string') ? lastMicError : '';
+    const d = await (await fetch('/api/microphone/diagnose?browser_error=' +
+                                  encodeURIComponent(err))).json();
+    out.innerHTML = `<b style="color:${d.ok ? '#8fd6a8' : 'var(--warn)'}">${escapeHtml(d.summary)}</b>`
+      + (d.fix ? `<br>${escapeHtml(d.fix)}` : '')
+      + `<br><span style="opacity:.65">${escapeHtml((d.checks || []).join(' · '))}</span>`;
+  } catch (e) {
+    out.textContent = 'Diagnosis unavailable.';
+  }
+});
+
 // Built on the first Settings click, so it costs nothing until wanted.
 // Deliberately NOT conditioned on the panel already being open -- that
 // depended on this listener firing after the one that toggles the class,
@@ -2412,6 +2540,7 @@ let voicePanelBuilt = false;
 settingsBtn.addEventListener('click', () => {
   if (voicePanelBuilt) return;
   voicePanelBuilt = true;
+  loadNotificationSettings();
   buildVoiceTestPanel();
 });
 

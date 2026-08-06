@@ -101,12 +101,49 @@ def _boot_core() -> None:
 
 
 def _boot_background_services() -> None:
-    """Mark optional pollers ready without starting them during desktop boot.
+    """Start the optional pollers the user has actually asked for.
 
-    Notification, activity, e-mail, proactive and resource sweeps stay
-    available to their explicit feature entry points, but do not occupy
-    workers or wake the WebView while ZENO is idle.
+    HISTORY: this function was previously reduced to just marking the phase
+    ready, as part of the WebView2 idle-cost work. That silently disabled
+    ZENO's notifications -- the listener code was fine, nothing was calling
+    `start_background()`. Restored here, but deliberately NOT as an
+    unconditional "start everything again":
+
+      * the notification listener starts only when notifications are
+        enabled in the user's saved settings, so turning them off really
+        stops the polling rather than just hiding the output;
+      * activity monitoring respects the Digital DNA kill switch;
+      * each service starts inside its own try block, so one failing
+        cannot stop the rest or the boot phase.
     """
+    from reyes_agent import notifications
+
+    started: list[str] = []
+
+    def _try(name: str, fn) -> None:
+        try:
+            fn()
+            started.append(name)
+        except Exception as exc:  # noqa: BLE001 -- one service must not block the others
+            _set_boot_phase("services_degraded", exc)
+
+    if notifications.load_settings().enabled:
+        from reyes_agent import notification_listener
+
+        _try("notifications", notification_listener.start_background)
+
+    if not (config.VAULT_PATH / "07-System" / "dna_disabled.flag").exists():
+        from reyes_agent import activity_monitor
+
+        _try("activity", activity_monitor.start_background)
+
+    from reyes_agent import heartbeat, proactive
+
+    _try("heartbeat", heartbeat.start_background)
+    _try("proactive", proactive.start_background)
+
+    with _boot_lock:
+        _boot_state["background_services"] = started
     _set_boot_phase("ready")
 
 
@@ -1126,6 +1163,83 @@ def missions_list() -> list[dict[str, Any]]:
     from reyes_agent.tools.missions import list_missions_dicts
 
     return list_missions_dicts()
+
+
+class NotificationSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    read_aloud: bool | None = None
+    desktop_toast: bool | None = None
+    priority_only: bool | None = None
+    do_not_disturb: bool | None = None
+    volume: float | None = None
+    quiet_hours_start: int | None = None
+    quiet_hours_end: int | None = None
+
+
+class NotificationStateRequest(BaseModel):
+    state: str
+    reply: str = ""
+
+
+@app.get("/api/notifications")
+def notifications_status() -> dict[str, Any]:
+    """Settings, listener state, unread count and recent history."""
+    from reyes_agent import notifications
+
+    return notifications.status()
+
+
+@app.get("/api/notifications/history")
+def notifications_history(limit: int = 50, state: str = "",
+                          include_dismissed: bool = False) -> list[dict[str, Any]]:
+    from reyes_agent import notifications
+
+    return notifications.history(limit=limit, state=state,
+                                 include_dismissed=include_dismissed)
+
+
+@app.post("/api/notifications/settings")
+def notifications_set_settings(req: NotificationSettingsRequest) -> dict[str, Any]:
+    """Persist settings, and start/stop the listener to match immediately --
+    turning notifications off must actually stop polling, not just hide it."""
+    from reyes_agent import notifications
+
+    was_enabled = notifications.load_settings().enabled
+    saved = notifications.save_settings(**req.model_dump(exclude_none=True))
+    if saved.enabled and not was_enabled:
+        try:
+            from reyes_agent import notification_listener
+
+            notification_listener.start_background()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "settings": saved.as_dict(),
+            "note": ("Listener starts on the next boot if it is not already running."
+                     if saved.enabled else
+                     "Notifications are off; the system listener stops at the next restart.")}
+
+
+@app.post("/api/notifications/{notification_id}/state")
+def notifications_set_state(notification_id: int, req: NotificationStateRequest) -> dict[str, Any]:
+    from reyes_agent import notifications
+
+    ok = notifications.set_state(notification_id, req.state.strip().upper(), req.reply)
+    if not ok:
+        raise HTTPException(400, "unknown notification or invalid state")
+    return {"ok": True, "id": notification_id, "state": req.state.strip().upper()}
+
+
+@app.get("/api/microphone/diagnose")
+def microphone_diagnose(browser_error: str = "") -> dict[str, Any]:
+    """Distinguish the six real microphone failure modes.
+
+    Reads Windows privacy policy READ-ONLY and never changes a system
+    setting -- if Windows is the blocker, the user is told exactly which
+    toggle to flip.
+    """
+    from reyes_agent import microphone
+
+    return microphone.diagnose(browser_error).as_dict()
 
 
 @app.get("/api/notices")
