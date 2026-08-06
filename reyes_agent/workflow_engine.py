@@ -295,6 +295,11 @@ class TeachingRecorder:
             "x": round(max(0, min(width - 1, x)) / width, 5),
             "y": round(max(0, min(height - 1, y)) / height, 5),
             "expected_app": app,
+            # Coordinates are only a fallback. The app guard is checked
+            # before replay so an unexpected foreground window never gets a
+            # blind click; the post-run owner check handles visual outcomes
+            # a generic desktop recorder cannot infer safely.
+            "verification": "foreground_guarded_manual_action",
         })
 
     def _drain_keyboard(self, *, max_events: int) -> None:
@@ -531,6 +536,10 @@ class WorkflowEngine:
             "created_at": _now(),
             "approved_at": _now(),
             "steps": list(draft["steps"]),
+            "requires_owner_visual_confirmation": any(
+                step.get("op") in {"desktop_click", "hotkey", "key"}
+                for step in draft["steps"]
+            ),
             "issues": list(draft.get("issues", [])),
             "privacy": "Typed text, clipboard data, passwords, and cookies are intentionally excluded.",
             "memory_id": "",
@@ -642,8 +651,15 @@ class WorkflowEngine:
                 return "Another workflow is already running. Pause or cancel it first."
             prior = self._runtime if resume and self._runtime.get("workflow_id") == workflow["id"] else {}
             start_index = int(prior.get("index", 0)) if resume else 0
+            owner_visual_confirmed = bool(prior.get("owner_visual_confirmed", False))
+            if resume and prior.get("awaiting_owner_visual_confirmation"):
+                owner_visual_confirmed = True
             self._runtime.update({"workflow_id": workflow["id"], "name": workflow["name"], "index": start_index,
-                                  "total": len(workflow.get("steps", [])), "prompt": "", "error": ""})
+                                  "total": len(workflow.get("steps", [])), "prompt": "", "error": "",
+                                  "owner_visual_confirmed": owner_visual_confirmed,
+                                  "awaiting_owner_visual_confirmation": False})
+        if owner_visual_confirmed and resume and prior.get("awaiting_owner_visual_confirmation"):
+            self._record_verification(True, "Owner visually confirmed the final desktop result.")
         self._pause_requested.clear()
         self._set_mode(WORKFLOW_RUNNING, workflow_id=workflow["id"], index=start_index,
                        prompt=f"Running {workflow['name']}.")
@@ -722,7 +738,8 @@ class WorkflowEngine:
                 self._publish("workflow.progress", {"workflow_id": workflow_id, "step": index + 1,
                                                      "total": len(steps), "operation": step.get("op", "")})
                 try:
-                    self._execute_step(context, step)
+                    result = self._execute_step(context, step)
+                    self._verify_step(step, result)
                 except WorkflowNeedsInput as need:
                     next_index = index if need.retry_step else index + 1
                     self._set_mode(WORKFLOW_WAITING_FOR_INPUT, workflow_id=workflow_id, index=next_index,
@@ -740,6 +757,17 @@ class WorkflowEngine:
                     )
                     self._publish("workflow.paused", {"workflow_id": workflow_id, "step": index + 1})
                     return
+            with self._lock:
+                needs_owner_check = bool(workflow.get("requires_owner_visual_confirmation"))
+                owner_checked = bool(self._runtime.get("owner_visual_confirmed"))
+            if needs_owner_check and not owner_checked:
+                self._set_mode(
+                    WORKFLOW_WAITING_FOR_INPUT, workflow_id=workflow_id, index=len(steps),
+                    prompt="Inspect the final desktop result, then choose Resume to confirm it is correct.",
+                    awaiting_owner_visual_confirmation=True,
+                )
+                self._publish("workflow.waiting_for_visual_verification", {"workflow_id": workflow_id})
+                return
             self._set_mode(WORKFLOW_COMPLETED, workflow_id=workflow_id, index=len(steps),
                            prompt=f"Completed {workflow['name']}.")
             self._publish("workflow.completed", {"workflow_id": workflow_id, "name": workflow["name"]})
@@ -754,10 +782,74 @@ class WorkflowEngine:
             self._publish("workflow.failed", {"workflow_id": workflow_id, "error": f"{type(exc).__name__}: {exc}"})
             raise
 
-    def _execute_step(self, context, step: dict[str, Any]) -> None:
+    def _record_verification(self, verified: bool, evidence: str) -> None:
+        """Record evidence, not an optimistic success label."""
+        try:
+            from reyes_agent.confidence import record_verification
+
+            record_verification(verified, evidence)
+        except Exception:  # noqa: BLE001 -- verification telemetry is best effort
+            pass
+        self._publish("workflow.verification", {"verified": verified, "evidence": evidence[:240]})
+
+    def _verify_step(self, step: dict[str, Any], result: str | None) -> None:
+        """Use a real app/browser observation wherever one is available."""
+        operation = step.get("op")
+        expected = str(step.get("expected_app") or (step.get("app") if operation == "focus" else "")).lower()
+        # Raw desktop actions are foreground-guarded immediately *before*
+        # they run in _execute_step. Do not demand that they leave the same
+        # app in front afterwards: opening/saving may legitimately change it.
+        if expected and operation not in {"desktop_click", "hotkey", "key"}:
+            try:
+                from reyes_agent.activity_monitor import foreground_app
+
+                active, _title = foreground_app()
+            except Exception:  # noqa: BLE001
+                active = ""
+            if not active:
+                try:
+                    from reyes_agent.confidence import record
+
+                    record("visual", None, f"Foreground application could not be observed for {expected}.")
+                except Exception:  # noqa: BLE001
+                    pass
+                self._publish("workflow.verification", {
+                    "verified": None,
+                    "evidence": f"Foreground application unavailable; did not claim {expected} was focused.",
+                })
+                return
+            if expected not in active.lower():
+                self._record_verification(False, f"Expected foreground app '{expected}', observed '{active or 'unknown'}'.")
+                # The raw action has not run when this is checked before a
+                # desktop action; focus/manual recovery is safer than retrying
+                # a potentially consequential click.
+                raise WorkflowNeedsInput(f"Focus {expected} before ZENO continues.", retry_step=True)
+            self._record_verification(True, f"Foreground app verified as {expected}.")
+            return
+        if operation in {"desktop_click", "hotkey", "key"}:
+            try:
+                from reyes_agent.confidence import record
+
+                record("visual", None, "Manual desktop action awaits the owner's final visual confirmation.")
+            except Exception:  # noqa: BLE001
+                pass
+            self._publish("workflow.verification", {
+                "verified": None,
+                "evidence": "Manual desktop action dispatched; final visual confirmation is required.",
+            })
+            return
+        if operation == "tool":
+            tool = str(step.get("tool", ""))
+            evidence = str(result or "")
+            verified = bool(evidence) and not evidence.lower().startswith(("error", "browser error"))
+            self._record_verification(verified, f"{tool} returned observed browser/tool evidence.")
+            if not verified:
+                raise WorkflowError(f"{tool} did not return verification evidence.")
+
+    def _execute_step(self, context, step: dict[str, Any]) -> str | None:
         operation = step.get("op")
         if operation == "focus":
-            return
+            return None
         if operation == "input_required":
             raise WorkflowNeedsInput(
                 f"Enter the needed text in {step.get('app', 'the application')} yourself, then choose Resume. "
@@ -770,7 +862,7 @@ class WorkflowEngine:
             if str(result).lower().startswith("error"):
                 raise WorkflowError(str(result))
             context.wait(1.0)
-            return
+            return str(result)
         expected = str(step.get("expected_app", "")).lower()
         if expected:
             try:
@@ -797,7 +889,7 @@ class WorkflowEngine:
             else:
                 pyautogui.press(str(step.get("key", "enter")))
             context.wait(0.25)
-            return
+            return "desktop action dispatched"
         if operation == "tool":
             tool = str(step.get("tool", ""))
             if tool not in _REPLAYABLE_TOOLS:
@@ -809,7 +901,7 @@ class WorkflowEngine:
                 raise WorkflowNeedsInput("This step needs a pending approval in ZENO before it can continue.", retry_step=True)
             if str(result).lower().startswith("error") or str(result).lower().startswith("browser error"):
                 raise WorkflowError(str(result))
-            return
+            return str(result)
         raise WorkflowError(f"Unknown recorded operation '{operation}'.")
 
     def status(self) -> dict[str, Any]:

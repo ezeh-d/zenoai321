@@ -134,6 +134,22 @@ def test_pause_is_applied_after_a_completed_step_without_replaying_it() -> None:
         assert engine.status()["index"] == 1
 
 
+def test_manual_workflow_waits_for_owner_visual_verification_before_completion() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        (root / "visual-check.json").write_text(json.dumps({
+            "id": "visual-check", "name": "Visual check", "approved_at": time.time(), "steps": [],
+            "requires_owner_visual_confirmation": True,
+        }), encoding="utf-8")
+        engine = make_engine(root)
+        engine._run_job(FakeContext(), "visual-check", 0)
+        assert engine.status()["mode"] == WORKFLOW_WAITING_FOR_INPUT
+        assert engine.status()["awaiting_owner_visual_confirmation"] is True
+        engine._runtime["owner_visual_confirmed"] = True
+        engine._run_job(FakeContext(), "visual-check", 0)
+        assert engine.status()["mode"] == WORKFLOW_COMPLETED
+
+
 def test_permission_requirement_enters_confirm_mode_before_replay() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)

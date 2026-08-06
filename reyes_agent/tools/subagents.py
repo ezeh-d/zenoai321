@@ -259,7 +259,7 @@ def delegate(specialist: str, task: str) -> str:
     try:
         from reyes_agent import agent_runtime
 
-        if agent_runtime.is_running() and agent_runtime.get_worker(specialist) is not None:
+        if agent_runtime.is_running():
             handle = agent_runtime.submit(specialist, task, lambda: _run_specialist(specialist, spec, task))
             if handle is not None:
                 return handle.wait(timeout=180)

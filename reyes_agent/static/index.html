@@ -1999,11 +1999,11 @@ async function transcribeVADClip(blob) {
     }
     const transcript = String(result.transcript || '').trim();
     if (!transcript || !ambientEnabled) return;
-    // Deepgram returns one final transcript for the VAD-bounded clip. It
-    // does not attach alternatives/confidence in this integration, so the
-    // existing safety gate correctly treats confidence as unknown.
+    // Preserve Deepgram's actual final-alternative confidence when supplied.
+    // Missing confidence stays unknown; it is never made up client-side.
     lastSpeechRaw = transcript;
-    lastSpeechConfidence = null;
+    lastSpeechConfidence = (typeof result.confidence === 'number' && result.confidence >= 0 && result.confidence <= 1)
+      ? result.confidence : null;
     lastSpeechAlternatives = [];
     noteSpeechFragment(transcript);
   } catch (error) {

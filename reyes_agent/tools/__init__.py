@@ -222,7 +222,17 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     if tool is None:
         return f"Error: no tool named '{name}' is registered."
 
-    if tool.requires_confirmation and _autonomy_allows(name):
+    # Confidence is evidence-backed: model providers do not currently emit a
+    # calibrated intent score, so a high-risk tool has *unknown* confidence
+    # rather than a fabricated positive number.  That unknown state is a
+    # reason not to auto-approve consequential actions, even on a trusted
+    # local installation. Low-risk/read-only tools still run without friction.
+    from reyes_agent.confidence import decide_tool
+
+    confidence = decide_tool(name, requires_confirmation=tool.requires_confirmation)
+    must_confirm = tool.requires_confirmation or confidence.requires_confirmation
+
+    if must_confirm and _autonomy_allows(name) and not confidence.requires_confirmation:
         from reyes_agent import audit
 
         # Still audited, so an unattended action is never invisible after
@@ -230,11 +240,12 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
         audit.log("autonomy_auto_approved", tool=name, input=tool_input)
         return execute_tool(tool, tool_input)
 
-    if tool.requires_confirmation:
+    if must_confirm:
         from reyes_agent import confirmation
 
         action = confirmation.request(
-            tool_name=name, tool_input=tool_input, description=f"{name}({tool_input})"
+            tool_name=name, tool_input=tool_input,
+            description=f"{name}({tool_input}) — confidence: {confidence.reason}",
         )
         return (
             f"Queued as request #{action.id} -- this action needs the user's "

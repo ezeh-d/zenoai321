@@ -671,7 +671,7 @@ def _read_audio_upload(audio: UploadFile) -> bytes:
 
 
 @app.post("/api/transcribe")
-def transcribe_audio(audio: UploadFile = File(...)) -> dict[str, str]:
+def transcribe_audio(audio: UploadFile = File(...)) -> dict[str, Any]:
     """Transcribe one VAD-bounded browser clip without starting an agent turn.
 
     The desktop UI calls this from its single processed microphone stream.
@@ -681,13 +681,19 @@ def transcribe_audio(audio: UploadFile = File(...)) -> dict[str, str]:
     """
     audio_bytes = _read_audio_upload(audio)
 
-    def transcribe_job(context) -> dict[str, str]:
-        from reyes_agent.voice.stt import transcribe
+    def transcribe_job(context) -> dict[str, Any]:
+        from reyes_agent.voice.stt import transcribe_result
         from reyes_agent.performance_monitor import measure
+        from reyes_agent.confidence import record
 
         context.progress("transcribing")
         with measure("voice_stt"):
-            return {"transcript": transcribe(audio_bytes).strip()}
+            result = transcribe_result(audio_bytes)
+        transcript = str(result["transcript"]).strip()
+        confidence = result.get("confidence")
+        record("speech", confidence, "Deepgram final alternative" if confidence is not None else
+               "Deepgram response did not provide a confidence value")
+        return {"transcript": transcript, "confidence": confidence}
 
     from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
 
@@ -711,19 +717,24 @@ def voice_turn(audio: UploadFile = File(...)) -> dict[str, Any]:
     audio_bytes = _read_audio_upload(audio)
 
     def voice_job(context) -> dict[str, Any]:
-        from reyes_agent.voice.stt import STTError, transcribe
+        from reyes_agent.voice.stt import STTError, transcribe_result
         from reyes_agent.performance_monitor import measure
+        from reyes_agent.confidence import record
 
         context.progress("transcribing")
         try:
             with measure("voice_stt"):
-                transcript = transcribe(audio_bytes).strip()
+                stt_result = transcribe_result(audio_bytes)
+                transcript = str(stt_result["transcript"]).strip()
+                record("speech", stt_result.get("confidence"),
+                       "Deepgram final alternative" if stt_result.get("confidence") is not None else
+                       "Deepgram response did not provide a confidence value")
         except STTError as exc:
             raise RuntimeError(f"Couldn't hear that: {exc}") from exc
         if not transcript:
             return {"transcript": "", "reply": "", "tool_calls": []}
         result = _conversation_turn(context, transcript)
-        return {"transcript": transcript, **result}
+        return {"transcript": transcript, "speech_confidence": stt_result.get("confidence"), **result}
 
     from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
 
@@ -977,6 +988,14 @@ def permissions_policy() -> dict[str, Any]:
     from reyes_agent import permissions
 
     return permissions.describe()
+
+
+@app.get("/api/confidence")
+def confidence_status() -> dict[str, Any]:
+    """Bounded, evidence-backed confidence diagnostics for the owner."""
+    from reyes_agent import confidence
+
+    return confidence.snapshot()
 
 
 @app.get("/api/events")

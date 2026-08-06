@@ -29,10 +29,10 @@ def _get_client() -> DeepgramClient:
     return _client
 
 
-def transcribe(wav_bytes: bytes) -> str:
-    """Give it a WAV clip, get back what was said. Empty in, empty out."""
+def transcribe_result(wav_bytes: bytes) -> dict[str, str | float | None]:
+    """Return the provider's transcript and its real confidence, if supplied."""
     if not wav_bytes:
-        return ""
+        return {"transcript": "", "confidence": None}
     client = _get_client()
     try:
         resp = client.listen.v1.media.transcribe_file(
@@ -45,6 +45,19 @@ def transcribe(wav_bytes: bytes) -> str:
         raise STTError(str(exc)) from exc
 
     try:
-        return resp.results.channels[0].alternatives[0].transcript
+        alternative = resp.results.channels[0].alternatives[0]
+        raw_confidence = getattr(alternative, "confidence", None)
+        try:
+            confidence = float(raw_confidence) if raw_confidence is not None else None
+        except (TypeError, ValueError):
+            confidence = None
+        if confidence is not None and not 0.0 <= confidence <= 1.0:
+            confidence = None
+        return {"transcript": str(alternative.transcript or ""), "confidence": confidence}
     except (AttributeError, IndexError) as exc:
         raise STTError("No transcript came back in the response.") from exc
+
+
+def transcribe(wav_bytes: bytes) -> str:
+    """Give it a clip, get back only text for legacy callers."""
+    return str(transcribe_result(wav_bytes)["transcript"])

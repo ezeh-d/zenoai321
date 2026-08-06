@@ -212,6 +212,39 @@ window produces a resumable prompt rather than a blind click. **Named limit:**
 manually demonstrated websites replay as guarded desktop actions; only actions
 originally run through ZENO's browser tools retain Playwright-level selectors.
 
+**Mini Orb overlay reliability:** the Mini Orb is now its own lightweight,
+frameless native topmost window. The dashboard is created lazily only when
+opened and can be minimized or hidden without navigating, resizing, or
+destroying the overlay. The overlay persists its native position, accepts
+negative/multi-monitor coordinates, repairs stale/off-screen coordinates to a
+working area, and has one five-second no-activate health check for hidden or
+minimized windows. The health path uses `SetWindowPos(HWND_TOPMOST,
+SWP_NOACTIVATE)` rather than focus-stealing `show()`. Verified live on
+2026-08-06: startup, Chrome foreground, File Explorer foreground, dashboard
+minimize, and a forced off-screen recovery all left the 210x210 orb visible
+and responsive. VS Code was not installed on this PC, so that one requested
+live application check is unavailable here.
+
+**Idle runtime cost:** the dashboard no longer starts a full WebView at boot,
+and the 13 specialists are registered at startup but each supervised worker
+starts only when delegated. Duplicate in-flight specialist work shares one
+result. The normal Mini Orb heartbeat is one bridge call per second (not four)
+and its state uses the existing small particle pool. The bounded 20-second
+stress run completed 40 missions and 1,000 events with all four workers alive,
+60 retained history entries, and 1.66 MB RSS growth.
+
+**Confidence and verification:** `confidence.py` combines only real supplied
+speech, intent, entity, visual, plan, and verification signals; unknown means
+unknown, never a made-up score. Risk is derived from the existing Permission
+Engine. High-risk action with missing/weak confidence goes through the normal
+confirmation gate. Deepgram confidence is retained when its response actually
+supplies it. Workflow replay verifies foreground app and browser-runtime
+evidence where possible; a coordinate-based desktop workflow pauses for the
+owner's final visual confirmation instead of claiming completion. **Gap:**
+current providers do not expose calibrated intent/entity confidence, and
+manual desktop replay cannot infer semantic success without an explicit
+application postcondition or owner confirmation.
+
 **Biggest win, and it was not the GUI.** After three GUI-side fixes the
 user still reported lag, so it was measured: 93 tools → 5.35s/turn vs 5
 tools → 1.50s. Tool COUNT dominated latency; every turn shipped ~13,900

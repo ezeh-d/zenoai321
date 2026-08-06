@@ -14,8 +14,11 @@ def test_orb_uses_one_bounded_canvas_particle_pool() -> None:
     assert 'class="orb-particles"' in source
     assert "Array.from({ length: 40 }" in source
     assert "setInterval(" not in source
-    assert "requestAnimationFrame(" not in source
-    assert "setTimeout(() => drawParticles" in source
+    # The one rAF is aligned to the compositor so hidden/minimized WebView2
+    # windows stop producing frames; this is intentionally not a perpetual
+    # JavaScript animation loop.
+    assert "requestAnimationFrame(drawParticles)" in source
+    assert "const gap = particleCount > 20 ? 25 : 33" in source
     assert 'getContext("webgl")' not in source
     assert 'getContext("webgl2")' not in source
 

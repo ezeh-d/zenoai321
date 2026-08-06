@@ -11,9 +11,11 @@ which is exactly what the spec says not to do.
 
 What IS real, and is what this module implements:
 
-  * Each agent owns a LIVE worker thread that exists from boot to
-    shutdown, blocking on its own queue. The thread is real, its liveness
-    is real, and `threading.Thread.is_alive()` is the source of truth.
+  * A specialist gets one LIVE worker thread on its first delegated task,
+    then keeps that supervised worker while it is useful. Unused specialists
+    remain registered in STANDBY without an OS thread at all. The thread's
+    liveness is real, and `threading.Thread.is_alive()` is the source of
+    truth.
   * Each agent has a REAL task queue. Work is submitted to it and
     processed in order; several agents therefore work genuinely
     concurrently rather than being spawned ad hoc per call.
@@ -66,6 +68,7 @@ class AgentTask:
     result: str | None = None
     error: str | None = None
     done: threading.Event = field(default_factory=threading.Event)
+    dedupe_key: str = ""
 
     def wait(self, timeout: float | None = None) -> str:
         """Block until this task finishes. Returns its result text."""
@@ -110,6 +113,8 @@ class AgentWorker:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._restart_lock = threading.Lock()
+        self._task_lock = threading.Lock()
+        self._pending_by_key: dict[str, AgentTask] = {}
 
     # -- lifecycle ------------------------------------------------------
     def start(self) -> None:
@@ -128,6 +133,28 @@ class AgentWorker:
         self._wake.set()
         self.queue.put(None)  # unblock the get()
         self.state = OFFLINE
+
+    def cancel_pending(self, reason: str = "ZENO is shutting down") -> int:
+        """Resolve queued tasks so callers never wait on abandoned work."""
+        cancelled = 0
+        while True:
+            try:
+                task = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                if task is not None:
+                    task.error = reason
+                    task.result = f"Error: {reason}"
+                    task.done.set()
+                    if task.dedupe_key:
+                        with self._task_lock:
+                            if self._pending_by_key.get(task.dedupe_key) is task:
+                                self._pending_by_key.pop(task.dedupe_key, None)
+                    cancelled += 1
+            finally:
+                self.queue.task_done()
+        return cancelled
 
     def is_alive(self) -> bool:
         """Ground truth -- the actual OS thread, not a flag we set."""
@@ -158,6 +185,7 @@ class AgentWorker:
             except queue.Empty:
                 continue  # idle tick; costs nothing, proves liveness
             if task is None:
+                self.queue.task_done()
                 break
             self._execute(task)
             self.queue.task_done()
@@ -184,6 +212,10 @@ class AgentWorker:
             self.heartbeat = time.time()
             self.state = IDLE
             task.done.set()
+            if task.dedupe_key:
+                with self._task_lock:
+                    if self._pending_by_key.get(task.dedupe_key) is task:
+                        self._pending_by_key.pop(task.dedupe_key, None)
             _publish("agent.task_finished", {
                 "agent": self.agent_id, "ok": task.error is None,
                 "duration_ms": int(dur * 1000),
@@ -201,6 +233,27 @@ class AgentWorker:
             return False
         self._wake.set()
         return True
+
+    def submit_task(self, description: str, fn: Callable[[], str]) -> AgentTask:
+        """Queue one task or return the matching in-flight task.
+
+        The orchestrator can ask for the same specialist work twice while a
+        provider retries a tool-call delta.  Running duplicate work wastes a
+        model call and can create conflicting answers, so identical active
+        descriptions share the first task's result instead.
+        """
+        key = " ".join(description.casefold().split())[:500]
+        with self._task_lock:
+            existing = self._pending_by_key.get(key)
+            if existing is not None and not existing.done.is_set():
+                return existing
+            task = AgentTask(
+                id=uuid.uuid4().hex[:8], agent=self.agent_id, description=description,
+                fn=fn, dedupe_key=key,
+            )
+            self._pending_by_key[key] = task
+            self.queue.put(task)
+            return task
 
     def snapshot(self) -> dict[str, Any]:
         """Observable truth only."""
@@ -263,7 +316,7 @@ _booted_at: float = 0.0
 
 
 def boot(on_line: Callable[[str], None] | None = None) -> list[str]:
-    """Start every agent worker. Returns the real boot log."""
+    """Register the roster and supervisor; specialist threads start on demand."""
     global _supervisor, _booted_at
     lines: list[str] = []
 
@@ -272,22 +325,6 @@ def boot(on_line: Callable[[str], None] | None = None) -> list[str]:
         if on_line:
             on_line(msg)
 
-    with _lock:
-        for agent_id, role in AGENT_ROLES.items():
-            w = _workers.get(agent_id)
-            if w is None:
-                w = AgentWorker(agent_id, role)
-                _workers[agent_id] = w
-            w.start()
-
-    # Confirm each thread actually reached its loop before claiming online.
-    deadline = time.time() + 5
-    for agent_id in AGENT_ROLES:
-        w = _workers[agent_id]
-        while time.time() < deadline and w.state == STARTING:
-            time.sleep(0.01)
-        log(f"{agent_id.upper().replace('_COMM', '')} {'online' if w.is_alive() else 'FAILED TO START'}")
-
     if _supervisor is None or not _supervisor.is_alive():
         _supervisor_stop.clear()
         _supervisor = threading.Thread(target=_supervise, name="agent-supervisor", daemon=True)
@@ -295,10 +332,10 @@ def boot(on_line: Callable[[str], None] | None = None) -> list[str]:
         log("Supervisor online")
 
     _booted_at = time.time()
+    log(f"{len(AGENT_ROLES)} specialists registered; workers start only when delegated.")
     _boot_log[:] = lines
-    alive = sum(1 for w in _workers.values() if w.is_alive())
-    log(f"{alive} of {len(AGENT_ROLES)} specialist agents online.")
-    _publish("runtime.booted", {"agents": alive, "total": len(AGENT_ROLES)})
+    active = sum(1 for w in _workers.values() if w.is_alive())
+    _publish("runtime.booted", {"agents_active": active, "agents_registered": len(AGENT_ROLES)})
     return lines
 
 
@@ -313,6 +350,7 @@ def shutdown() -> None:
     for w in workers:
         if w._thread is not None and w._thread is not threading.current_thread():
             w._thread.join(timeout=2.0)
+        w.cancel_pending()
     if _supervisor is not None and _supervisor is not threading.current_thread():
         _supervisor.join(timeout=2.0)
 
@@ -337,11 +375,30 @@ def _supervise() -> None:
                 restart(w.agent_id, reason=reason)
 
 
+def ensure_worker(agent_id: str) -> AgentWorker | None:
+    """Get one specialist's only worker, creating it only for real work."""
+    role = AGENT_ROLES.get(agent_id)
+    if role is None:
+        return None
+    with _lock:
+        worker = _workers.get(agent_id)
+        if worker is None:
+            worker = AgentWorker(agent_id, role)
+            _workers[agent_id] = worker
+        if not worker.is_alive():
+            worker.start()
+    _publish("agent.activated", {"agent": agent_id, "reason": "delegated work"})
+    return worker
+
+
 def restart(agent_id: str, reason: str = "manual") -> str:
     """Restart ONE worker, preserving its queued work."""
     w = _workers.get(agent_id)
     if w is None:
-        return f"No agent '{agent_id}'."
+        w = ensure_worker(agent_id)
+        if w is None:
+            return f"No agent '{agent_id}'."
+        return f"{agent_id.upper().replace('_COMM','')} activated successfully ({reason})."
     with w._restart_lock:
         old_thread = w._thread
         w.state = RESTARTING
@@ -395,25 +452,39 @@ def restart(agent_id: str, reason: str = "manual") -> str:
 def submit(agent_id: str, description: str, fn: Callable[[], str]) -> AgentTask | None:
     """Queue work on a live agent. Returns the task handle, or None if the
     agent doesn't exist."""
-    w = _workers.get(agent_id)
+    # Test/extension workers may be explicitly registered outside the named
+    # roster. Keep supporting those while regular specialists remain lazy.
+    with _lock:
+        w = _workers.get(agent_id)
+    w = w or ensure_worker(agent_id)
     if w is None:
         return None
     if not w.is_alive():
         restart(agent_id, reason="submit to dead worker")
     w.wake()
-    task = AgentTask(id=uuid.uuid4().hex[:8], agent=agent_id, description=description, fn=fn)
-    w.queue.put(task)
-    return task
+    return w.submit_task(description, fn)
 
 
 def is_running() -> bool:
-    return bool(_workers) and any(w.is_alive() for w in _workers.values())
+    # The runtime is usable once the registry/supervisor booted, even when
+    # no specialist has needed a thread yet.
+    return bool(_booted_at) and _supervisor is not None and _supervisor.is_alive()
 
 
 def health() -> dict[str, Any]:
     """The real operational state. Nothing here is estimated or assumed."""
     with _lock:
-        snaps = [w.snapshot() for w in _workers.values()]
+        created = dict(_workers)
+    snaps = [
+        created[agent_id].snapshot() if agent_id in created else {
+            "agent": agent_id, "role": role, "state": STANDBY, "alive": False,
+            "healthy": True, "heartbeat_age_s": None, "uptime_s": 0,
+            "queue_depth": 0, "current_task": "", "tasks_completed": 0,
+            "tasks_failed": 0, "success_rate": 100.0, "avg_duration_s": 0.0,
+            "restarts": 0, "last_task": "", "last_activity_s_ago": None,
+        }
+        for agent_id, role in AGENT_ROLES.items()
+    ]
     alive = sum(1 for s in snaps if s["alive"])
     healthy = sum(1 for s in snaps if s["healthy"])
     return {
@@ -423,7 +494,9 @@ def health() -> dict[str, Any]:
         "agents_total": len(snaps),
         "agents_alive": alive,
         "agents_healthy": healthy,
-        "all_online": bool(snaps) and alive == len(snaps) and healthy == len(snaps),
+        "agents_registered": len(AGENT_ROLES),
+        "agents_active": alive,
+        "all_online": bool(snaps) and healthy == len(snaps),
         "queued_tasks": sum(s["queue_depth"] for s in snaps),
         "working_now": [s["agent"] for s in snaps if s["state"] == WORKING],
         "agents": snaps,
