@@ -15,6 +15,11 @@ const orb=initOrb(document.getElementById('orb-canvas'));
 // children created only for real Event Bus lifecycle events; they are never
 // separate floating windows and disappear after the real terminal event.
 const agentPresence=createAgentPresence({container:document.body,mode:'mini'});
+// Mini Orb shares the same persisted eye preference. It tracks pointer motion
+// inside its own lightweight WebView only; no native global-mouse hook or
+// high-frequency bridge is introduced just for decoration.
+function applyMiniEyeSettings(settings){if(orb.setEyeTracking)orb.setEyeTracking({enabled:!!settings.cursor_eye_tracking,fps:settings.eye_tracking_fps||'auto',performanceMode:settings.performance_mode||'auto'});}
+fetch('/api/performance-features/settings').then(r=>r.ok?r.json():null).then(data=>{if(data)applyMiniEyeSettings(data.settings||{});}).catch(()=>{});
 function api(){return window.pywebview&&window.pywebview.api;}
 function openDashboard(){
   // There must be one capture owner at a time.  The native host publishes a
@@ -56,6 +61,7 @@ if(window.EventSource){
   agentEventSource.onmessage=(event)=>{try{
     const update=JSON.parse(event.data);
     agentPresence.consume(update);
+    if(update.type==='performance.features_changed')applyMiniEyeSettings(update.payload||{});
     if(update.type==='audio.recognized')showRecognizedAudio(update.payload||{});
     // The dashboard's native close/minimize event is the handoff point for
     // the single microphone stream.  Delay only the reacquire, so the hidden

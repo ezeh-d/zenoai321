@@ -177,6 +177,7 @@ export function initOrb(canvas) {
     root.classList.remove("eyes-" + currentEyes);
     currentEyes = expression;
     root.classList.add("eyes-" + currentEyes);
+    if (currentEyes === "closed") setEyeOffset(0, 0);
   }
   root.classList.add("eyes-calm");
 
@@ -321,6 +322,65 @@ export function initOrb(canvas) {
     }
   });
 
+  // Cursor eyes intentionally have no permanent animation loop. Pointer
+  // events merely coalesce into one capped compositor transform, then one
+  // delayed neutral return. That is smoother than direct DOM writes yet does
+  // no work while the cursor is still, the orb is hidden, sleeping or the
+  // performance profile says the machine is under pressure.
+  const eyesLayer = root.querySelector(".orb-eyes");
+  let eyeTrackingEnabled = false;
+  let eyeTrackingFps = "auto";
+  let eyePerformanceMode = "auto";
+  let eyeUpdateTimer = null;
+  let eyeNeutralTimer = null;
+  let pendingPointer = null;
+  let lastEyeX = 0, lastEyeY = 0;
+  function effectiveEyeFps() {
+    if (eyeTrackingFps === "15" || eyeTrackingFps === "30") return Number(eyeTrackingFps);
+    return eyePerformanceMode === "low_power" || root.classList.contains("lite") ? 15 : 30;
+  }
+  function eyesMayTrack() {
+    return eyeTrackingEnabled && root.style.display !== "none"
+      && document.visibilityState === "visible" && currentEyes !== "closed";
+  }
+  function setEyeOffset(x, y) {
+    if (!eyesLayer) return;
+    // Less than a quarter pixel is invisible, so avoid a compositor update.
+    if (Math.abs(x - lastEyeX) < 0.25 && Math.abs(y - lastEyeY) < 0.25) return;
+    lastEyeX = x; lastEyeY = y;
+    eyesLayer.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0)`;
+  }
+  function applyCursorEyes() {
+    eyeUpdateTimer = null;
+    if (!eyesMayTrack() || !pendingPointer) return;
+    const point = pendingPointer;
+    pendingPointer = null;
+    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+    const x = Math.max(-1, Math.min(1, (point.x - cx) / Math.max(1, cx))) * 3.4;
+    const y = Math.max(-1, Math.min(1, (point.y - cy) / Math.max(1, cy))) * 2.4;
+    setEyeOffset(x, y);
+  }
+  function queueCursorEyes(event) {
+    if (!eyesMayTrack()) return;
+    pendingPointer = { x: event.clientX, y: event.clientY };
+    if (eyeUpdateTimer === null) {
+      eyeUpdateTimer = setTimeout(applyCursorEyes, Math.round(1000 / effectiveEyeFps()));
+    }
+    clearTimeout(eyeNeutralTimer);
+    eyeNeutralTimer = setTimeout(() => { pendingPointer = null; setEyeOffset(0, 0); }, 850);
+  }
+  window.addEventListener("pointermove", queueCursorEyes, { passive: true });
+  function setEyeTracking(options = {}) {
+    eyeTrackingEnabled = !!options.enabled;
+    eyeTrackingFps = String(options.fps || "auto");
+    eyePerformanceMode = String(options.performanceMode || "auto");
+    if (!eyesMayTrack()) {
+      clearTimeout(eyeUpdateTimer); eyeUpdateTimer = null;
+      clearTimeout(eyeNeutralTimer); eyeNeutralTimer = null;
+      pendingPointer = null; setEyeOffset(0, 0);
+    }
+  }
+
   function pulse() {
     core.classList.remove("pulse-burst");
     // Force reflow so re-adding the class restarts the animation even if
@@ -351,6 +411,7 @@ export function initOrb(canvas) {
     if (on) scheduleBlink();
     else clearTimeout(blinkTimer);
     setParticlesActive(on);
+    if (!on) setEyeOffset(0, 0);
   }
 
   return {
@@ -362,11 +423,13 @@ export function initOrb(canvas) {
     setAgentWorking,
     getAgentScreenPositions,
     setEyes,                      // manual override, e.g. sleeping/dream mode
+    setEyeTracking,
     blink: () => {
       root.classList.add("blinking");
       setTimeout(() => root.classList.remove("blinking"), 130);
     },
-    auditMetrics: () => ({ particle_loop: particleTimer !== null, blink_timer: blinkTimer !== null }),
+    auditMetrics: () => ({ particle_loop: particleTimer !== null, blink_timer: blinkTimer !== null,
+      eye_tracking_timer: eyeUpdateTimer !== null }),
     specialists: SPECIALIST_IDS.slice(),
   };
 }

@@ -102,11 +102,22 @@ def _check_dream_mode() -> None:
     """
     global _last_dream_at
     from reyes_agent.activity_monitor import _idle_seconds
+    from reyes_agent import performance_features
 
     now = time.time()
+    settings = performance_features.load_settings()
+    if not settings.dream_mode:
+        performance_features.set_dream_state("DREAM_MODE_IDLE", "Disabled in Settings")
+        return
     if now - _last_dream_at < _DREAM_COOLDOWN_S:
+        performance_features.set_dream_state("DREAM_MODE_WAITING", "Cooldown")
         return
     if _idle_seconds() < _DREAM_IDLE_MIN * 60:
+        performance_features.set_dream_state("DREAM_MODE_WAITING", "Waiting for 10 minutes of idle time")
+        return
+    load = performance_features.load_snapshot()
+    if performance_features.under_load(load):
+        performance_features.set_dream_state("DREAM_MODE_PAUSED", "System or ZENO work is busy")
         return
     _last_dream_at = now
     try:
@@ -117,10 +128,18 @@ def _check_dream_mode() -> None:
         # stops it rather than competing for the machine.
         from reyes_agent import dream_mode, heartbeat
 
-        report = dream_mode.run()
+        performance_features.set_dream_state("DREAM_MODE_RUNNING", "Local maintenance in progress")
+        report = dream_mode.run(should_continue=lambda: (
+            _idle_seconds() >= _DREAM_IDLE_MIN * 60
+            and not performance_features.under_load(performance_features.load_snapshot())
+        ))
         heartbeat._add_notice("dream", report.summary())
-    except Exception:  # noqa: BLE001 -- maintenance failing must not crash the loop
-        pass
+        performance_features.set_dream_state(
+            "DREAM_MODE_PAUSED" if report.interrupted else "DREAM_MODE_COMPLETE",
+            "User activity or load returned" if report.interrupted else report.summary(),
+        )
+    except Exception as exc:  # noqa: BLE001 -- maintenance failing must not crash the loop
+        performance_features.set_dream_state("DREAM_MODE_ERROR", type(exc).__name__)
 
 
 def _check_morning() -> None:

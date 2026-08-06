@@ -1473,6 +1473,14 @@ class MicrophoneRuntimeRequest(BaseModel):
     device_id: str = ""
 
 
+class PerformanceFeatureSettingsRequest(BaseModel):
+    dream_mode: bool | None = None
+    dashboard_updates: bool | None = None
+    cursor_eye_tracking: bool | None = None
+    eye_tracking_fps: str | None = None
+    performance_mode: str | None = None
+
+
 @app.get("/api/microphone/diagnose")
 def microphone_diagnose(browser_error: str = "", permission_state: str = "",
                         selected_device: str = "") -> dict[str, Any]:
@@ -1507,6 +1515,24 @@ def microphone_runtime(request: MicrophoneRuntimeRequest) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/performance-features/settings")
+def performance_feature_settings() -> dict[str, Any]:
+    from reyes_agent import performance_features
+
+    return {"settings": performance_features.load_settings().as_dict(),
+            "dream": performance_features.dream_status()}
+
+
+@app.post("/api/performance-features/settings")
+def update_performance_feature_settings(request: PerformanceFeatureSettingsRequest) -> dict[str, Any]:
+    from reyes_agent import event_bus, performance_features
+
+    changes = request.model_dump(exclude_none=True)
+    settings = performance_features.save_settings(**changes)
+    event_bus.publish("performance.features_changed", settings.as_dict(), source="settings")
+    return {"settings": settings.as_dict(), "dream": performance_features.dream_status()}
 
 
 class AwarenessSettingsRequest(BaseModel):

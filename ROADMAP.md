@@ -530,3 +530,36 @@ desktop process predates this change, therefore an actual WebView2
 `getUserMedia` grant, live RMS and end-to-end wake/STT response must be
 observed after ZENO is restarted; the UI now records that evidence instead of
 claiming success from registry settings alone.
+
+---
+
+## Optional performance features — RE-ENABLED WITH GUARDS
+
+**Dream Mode:** remains enabled through the existing proactive scheduler, but
+now has a persisted on/off setting and explicit `DREAM_MODE_IDLE`, `WAITING`,
+`RUNNING`, `PAUSED`, `COMPLETE` and `ERROR` states. It waits for ten minutes
+of user idle time, a three-hour cooldown and CPU/RAM/worker headroom; it
+checks again between local maintenance passes and yields when activity or core
+work returns. The previous automatic `reindex_vault` call was the confirmed
+performance risk: it can make remote embedding requests for changed notes.
+Automatic Dream Mode now only inspects local graph health; manual indexing
+remains available through the existing tool.
+
+**Background dashboard updates:** the existing Event Bus remains the primary
+source of state changes. The persistent dashboard now has a saved Background
+dashboard updates preference: while hidden it performs only a 5-second status
+refresh (2 seconds visible), without waking closed Council, Timeline,
+Situation Room or Agent Monitor panels. The Mini Orb remains independent of
+dashboard visibility, voice handoff and agent runtime.
+
+**Cursor eyes:** the existing CSS eyes now use a shared, saved, capped
+cursor-following transform (Auto/15/30 FPS). Pointer events coalesce into one
+timer, idle returns once toward neutral, sleeping/hidden/lite states suppress
+it, and a five-second existing dashboard load sample reduces it under high
+CPU/RAM/worker pressure. This tracks cursor movement inside ZENO's WebView;
+no global Windows mouse hook or high-frequency Python/WebView bridge was
+added merely for cosmetic animation.
+
+**Regression coverage:** `tests/test_reenabled_performance_features.py`
+verifies persistence, resource gating, the no-automatic-embedding Dream path,
+the bounded dashboard cadence and cursor-eye wiring.

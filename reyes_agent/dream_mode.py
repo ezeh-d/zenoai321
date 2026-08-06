@@ -43,6 +43,7 @@ class DreamReport:
     actions: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     duration_s: float = 0.0
+    interrupted: bool = False
 
     def summary(self) -> str:
         bits = [f"Dream Mode ran {len(self.passes)} pass(es) in {self.duration_s:.1f}s."]
@@ -234,13 +235,14 @@ def _pass_tomorrow_agenda(rep: DreamReport) -> None:
 
 
 def _pass_knowledge_upkeep(rep: DreamReport) -> None:
-    """Refresh the search index and report graph orphans."""
-    try:
-        from reyes_agent.tools.rag import reindex_vault
+    """Inspect local graph health without triggering cloud embeddings.
 
-        rep.actions.append(f"search index: {reindex_vault()}")
-    except Exception as exc:  # noqa: BLE001
-        rep.skipped.append(f"reindex ({type(exc).__name__})")
+    The old idle pass called ``reindex_vault``.  Although incremental, that
+    can issue Gemini embedding requests for changed notes, violating Dream
+    Mode's no-expensive-model/no-background-network rule.  Manual reindexing
+    remains available through the existing tool; this automatic pass only
+    reports local graph health.
+    """
     try:
         from reyes_agent import knowledge_graph
 
@@ -263,14 +265,15 @@ _PASSES = (
 )
 
 
-def run(force: bool = False) -> DreamReport:
-    """Run maintenance. Re-checks idle between passes unless forced."""
+def run(force: bool = False, should_continue=None) -> DreamReport:
+    """Run local maintenance, yielding between passes when activity returns."""
     rep = DreamReport(started=datetime.now().strftime("%Y-%m-%d %H:%M"))
     t0 = time.time()
     for name, fn in _PASSES:
-        if not force and not _user_is_away():
+        if not force and (not _user_is_away() or (should_continue is not None and not should_continue())):
             rep.skipped.append(f"{name} (user active)")
-            continue
+            rep.interrupted = True
+            break
         try:
             fn(rep)
         except Exception as exc:  # noqa: BLE001 -- one pass must not abort the rest

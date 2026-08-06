@@ -810,6 +810,26 @@ body.focus #agent-team-overview { opacity: 0; }
       <label class="switch"><input type="checkbox" id="perf-toggle"><span class="track"></span></label>
     </div>
     <div class="toggle-row">
+      <span class="label">Dream Mode<span class="sub" id="dream-mode-status">Idle-only local maintenance</span></span>
+      <label class="switch"><input type="checkbox" id="dream-mode-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Background dashboard updates<span class="sub">Event-driven, with a slow hidden refresh</span></span>
+      <label class="switch"><input type="checkbox" id="dashboard-updates-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Cursor eye tracking<span class="sub">Subtle eyes follow the cursor inside ZENO</span></span>
+      <label class="switch"><input type="checkbox" id="eye-tracking-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Eye tracking FPS</span>
+      <select id="eye-tracking-fps" style="background:#0c1018;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;"><option value="auto">Auto</option><option value="15">15</option><option value="30">30</option></select>
+    </div>
+    <div class="toggle-row">
+      <span class="label">Performance profile</span>
+      <select id="performance-profile" style="background:#0c1018;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;"><option value="auto">Auto</option><option value="low_power">Low Power</option><option value="normal">Normal</option></select>
+    </div>
+    <div class="toggle-row">
       <span class="label">Pause heartbeat<span class="sub">Kill switch -- stops proactive checks</span></span>
       <label class="switch"><input type="checkbox" id="kill-toggle"><span class="track"></span></label>
     </div>
@@ -1244,6 +1264,54 @@ perfToggle.addEventListener('change', () => {
   localStorage.setItem('reyes_perf_mode', perfMode ? '1' : '0');
   orb.setPerformanceMode(perfMode);
 });
+
+// --- Optional performance features --------------------------------------
+// One persisted server-side preference object controls the existing Dream
+// scheduler and this page's optional dashboard/eye work. No new timer is
+// created here; hidden refresh is attached to the existing status cadence.
+const featureEls = {
+  dream: document.getElementById('dream-mode-toggle'),
+  dashboard: document.getElementById('dashboard-updates-toggle'),
+  eyes: document.getElementById('eye-tracking-toggle'),
+  fps: document.getElementById('eye-tracking-fps'),
+  profile: document.getElementById('performance-profile'),
+  dreamStatus: document.getElementById('dream-mode-status'),
+};
+let featureSettings = { dream_mode: true, dashboard_updates: true, cursor_eye_tracking: true,
+  eye_tracking_fps: 'auto', performance_mode: 'auto' };
+function applyFeatureSettings(settings, dream = null) {
+  featureSettings = { ...featureSettings, ...settings };
+  featureEls.dream.checked = !!featureSettings.dream_mode;
+  featureEls.dashboard.checked = !!featureSettings.dashboard_updates;
+  featureEls.eyes.checked = !!featureSettings.cursor_eye_tracking;
+  featureEls.fps.value = String(featureSettings.eye_tracking_fps || 'auto');
+  featureEls.profile.value = String(featureSettings.performance_mode || 'auto');
+  if (dream && featureEls.dreamStatus) featureEls.dreamStatus.textContent =
+    String(dream.state || 'DREAM_MODE_IDLE').replace(/_/g, ' ') + (dream.detail ? ' · ' + dream.detail : '');
+  if (orb.setEyeTracking) orb.setEyeTracking({ enabled: featureSettings.cursor_eye_tracking,
+    fps: featureSettings.eye_tracking_fps, performanceMode: featureSettings.performance_mode });
+}
+async function loadFeatureSettings() {
+  try {
+    const data = await (await fetch('/api/performance-features/settings')).json();
+    applyFeatureSettings(data.settings || {}, data.dream || null);
+  } catch (_e) { applyFeatureSettings(featureSettings); }
+}
+async function saveFeatureSettings(changes) {
+  try {
+    const response = await fetch('/api/performance-features/settings', { method: 'POST',
+      headers: {'Content-Type':'application/json'}, body: JSON.stringify(changes) });
+    const data = await response.json();
+    if (!response.ok) throw Error(data.detail || 'Could not save settings.');
+    applyFeatureSettings(data.settings || {}, data.dream || null);
+  } catch (_e) { await loadFeatureSettings(); }
+}
+featureEls.dream.addEventListener('change', () => saveFeatureSettings({dream_mode: featureEls.dream.checked}));
+featureEls.dashboard.addEventListener('change', () => saveFeatureSettings({dashboard_updates: featureEls.dashboard.checked}));
+featureEls.eyes.addEventListener('change', () => saveFeatureSettings({cursor_eye_tracking: featureEls.eyes.checked}));
+featureEls.fps.addEventListener('change', () => saveFeatureSettings({eye_tracking_fps: featureEls.fps.value}));
+featureEls.profile.addEventListener('change', () => saveFeatureSettings({performance_mode: featureEls.profile.value}));
+void loadFeatureSettings();
 
 // --- Explicit observation controls --------------------------------------
 // These settings are intentionally loaded only when the Settings panel is
@@ -4107,6 +4175,12 @@ if (window.EventSource) {
     lastEvent = update;
     const type = update.type || '';
     if (type.startsWith('mission.')) refreshMissions();
+    if (type === 'performance.features_changed') applyFeatureSettings(update.payload || {});
+    if (type === 'dream.state_changed' && featureEls.dreamStatus) {
+      const dream = update.payload || {};
+      featureEls.dreamStatus.textContent = String(dream.state || 'DREAM_MODE_IDLE').replace(/_/g, ' ')
+        + (dream.detail ? ' · ' + dream.detail : '');
+    }
     if (type === 'project.activity' || type === 'ui.workspace_code') {
       void ensureLiveActivityView().then(view => view.consumeEvent(update));
     }
@@ -4155,10 +4229,35 @@ if (window.EventSource) {
     if (document.getElementById('timeline-overlay').classList.contains('open')) loadTimeline();
   };
 }
-// Provider/connection state is cheap, and only the small text node is
-// touched when it actually changes.  CPU/RAM remain on their 2s snapshot
-// cadence in the visible Situation Room/developer diagnostic views.
-const statusTimer = setInterval(() => { if (!document.hidden) refreshStatus(); }, 2000);
+// Provider state is event-driven where possible. This one bounded cadence
+// keeps the persistent dashboard warm while hidden when the owner enables
+// Background dashboard updates: visible 2s, hidden 5s, with closed panels
+// still dormant. It replaces the old permanent setInterval rather than
+// creating a second polling loop.
+let statusTimer = null;
+let nextFeatureLoadSample = 0;
+async function refreshFeatureLoadGuard() {
+  if (!featureSettings.cursor_eye_tracking || performance.now() < nextFeatureLoadSample) return;
+  nextFeatureLoadSample = performance.now() + 5000;
+  try {
+    const data = await (await fetch('/api/performance')).json();
+    const busy = data.system_cpu_percent >= 75 || data.system_ram_percent >= 85
+      || (data.workers && ((data.workers.active || 0) > 0 || (data.workers.queue_depth || 0) > 0));
+    if (orb.setEyeTracking) orb.setEyeTracking({ enabled: featureSettings.cursor_eye_tracking,
+      fps: featureSettings.eye_tracking_fps, performanceMode: busy ? 'low_power' : featureSettings.performance_mode });
+  } catch (_e) { /* optional guard must not disturb the dashboard */ }
+}
+function scheduleStatusRefresh() {
+  clearTimeout(statusTimer);
+  const hidden = document.hidden;
+  statusTimer = setTimeout(async () => {
+    if (!hidden || featureSettings.dashboard_updates) await refreshStatus();
+    await refreshFeatureLoadGuard();
+    scheduleStatusRefresh();
+  }, hidden ? 5000 : 2000);
+}
+document.addEventListener('visibilitychange', scheduleStatusRefresh);
+scheduleStatusRefresh();
 
 // A/B-only renderer telemetry. This runs no animation loop in normal use;
 // when explicitly launched with ZENO_PERFORMANCE_AUDIT=1 it records real
