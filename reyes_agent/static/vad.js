@@ -39,9 +39,14 @@ const HANGOVER_MS = 700;         // pauses shorter than this stay "speaking"
 
 let ctx = null;
 let stream = null;
+let source = null;
 let analyser = null;
 let buffer = null;
 let timer = null;
+let pcmProcessor = null;
+let pcmMute = null;
+let pcmChunks = [];
+let pcmSampleRate = 0;
 
 let noiseFloor = 0.01;
 let speaking = false;
@@ -105,7 +110,7 @@ export async function start() {
 
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   ctx = new AudioCtx();
-  const source = ctx.createMediaStreamSource(stream);
+  source = ctx.createMediaStreamSource(stream);
   analyser = ctx.createAnalyser();
   analyser.fftSize = FFT_SIZE;
   analyser.smoothingTimeConstant = 0.4;
@@ -187,6 +192,70 @@ export function onSpeechEnd(fn) {
 /** The processed, single-owner stream used for recording/transcription. */
 export function mediaStream() { return stream; }
 
+/**
+ * Begin one bounded PCM copy of an already VAD-approved utterance.
+ *
+ * This attaches no second microphone stream and no timer. The processor is
+ * connected through a zero-gain node solely because Web Audio requires an
+ * output connection for ScriptProcessor callbacks; microphone audio is never
+ * routed to the speakers. It is disconnected immediately when the utterance
+ * ends, then the command audio is discarded after local speaker comparison.
+ */
+export function beginPcmCapture() {
+  if (!ctx || !source || pcmProcessor) return false;
+  try {
+    pcmChunks = [];
+    pcmSampleRate = ctx.sampleRate || 16000;
+    pcmProcessor = ctx.createScriptProcessor(4096, 1, 1);
+    pcmMute = ctx.createGain();
+    pcmMute.gain.value = 0;
+    pcmProcessor.onaudioprocess = (event) => {
+      // Copy exactly one mono channel while this one VAD utterance is active.
+      pcmChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    };
+    source.connect(pcmProcessor);
+    pcmProcessor.connect(pcmMute);
+    pcmMute.connect(ctx.destination);
+    return true;
+  } catch (_error) {
+    endPcmCapture();
+    return false;
+  }
+}
+
+function encodePcmWav(chunks, sampleRate) {
+  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  if (!length || !sampleRate) return null;
+  const bytes = new ArrayBuffer(44 + length * 2);
+  const view = new DataView(bytes);
+  const write = (offset, text) => { for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i)); };
+  write(0, 'RIFF'); view.setUint32(4, 36 + length * 2, true); write(8, 'WAVE');
+  write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  write(36, 'data'); view.setUint32(40, length * 2, true);
+  let offset = 44;
+  for (const chunk of chunks) for (let i = 0; i < chunk.length; i++, offset += 2) {
+    const sample = Math.max(-1, Math.min(1, chunk[i]));
+    view.setInt16(offset, sample < 0 ? sample * 32768 : sample * 32767, true);
+  }
+  return new Blob([bytes], { type: 'audio/wav' });
+}
+
+/** Stop and return the PCM WAV copy for this one utterance, or null. */
+export function endPcmCapture() {
+  const chunks = pcmChunks;
+  const sampleRate = pcmSampleRate;
+  if (source && pcmProcessor) { try { source.disconnect(pcmProcessor); } catch (_e) {} }
+  if (pcmProcessor) { try { pcmProcessor.disconnect(); } catch (_e) {} }
+  if (pcmMute) { try { pcmMute.disconnect(); } catch (_e) {} }
+  pcmProcessor = null;
+  pcmMute = null;
+  pcmChunks = [];
+  pcmSampleRate = 0;
+  return encodePcmWav(chunks, sampleRate);
+}
+
 /** Pause detection while ZENO speaks, preventing speaker echo as a command. */
 export function pauseDetection() { pause(); }
 
@@ -195,8 +264,10 @@ export function resumeDetection() { resume(); }
 
 export function stop() {
   pause();
+  endPcmCapture();
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
   if (ctx) { ctx.close().catch(() => {}); ctx = null; }
+  source = null;
   analyser = null;
   appliedSettings = null;
   currentRms = 0;

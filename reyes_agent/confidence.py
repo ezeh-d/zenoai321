@@ -19,8 +19,12 @@ from typing import Mapping
 DOMAINS = ("speech", "intent", "entity", "visual", "plan", "verification")
 _WEIGHTS = {"speech": 0.25, "intent": 0.25, "entity": 0.15,
             "visual": 0.15, "plan": 0.10, "verification": 0.10}
+# Speaker identity is deliberately diagnostic-only.  It must never be folded
+# into speech-to-text, intent or action confidence: voice resemblance is not
+# a replacement for a confirmation factor.
+_RECORDABLE_DOMAINS = frozenset((*DOMAINS, "speaker", "action"))
 _HIGH_RISK_CAPABILITIES = {"filesystem_delete", "system_commands", "email_send", "messaging_send", "social_post"}
-_MEDIUM_RISK_CAPABILITIES = {"filesystem_write", "desktop_automation", "browser_automation", "vision", "app_control"}
+_MEDIUM_RISK_CAPABILITIES = {"filesystem_write", "desktop_automation", "browser_automation", "vision", "audio_capture", "app_control"}
 _lock = threading.Lock()
 _recent: deque[dict] = deque(maxlen=120)
 
@@ -109,7 +113,7 @@ def decide_tool(
 
 def record(domain: str, value: float | int | None, evidence: str, *, emit: bool = True) -> None:
     """Keep bounded diagnostic evidence only; never record user utterances."""
-    if domain not in DOMAINS and domain != "action":
+    if domain not in _RECORDABLE_DOMAINS:
         raise ValueError(f"Unknown confidence domain '{domain}'.")
     score = _score(value)
     item = {"at": time.time(), "domain": domain, "score": score,
@@ -133,5 +137,6 @@ def record_verification(verified: bool, evidence: str) -> None:
 def snapshot() -> dict:
     with _lock:
         items = list(_recent)
-    return {"domains": list(DOMAINS), "recent": items[-20:], "retained": len(items),
-            "policy": "Unknown confidence is never converted into a positive score."}
+    return {"domains": [*DOMAINS, "speaker (separate; never action authority)"],
+            "recent": items[-20:], "retained": len(items),
+            "policy": "Unknown confidence is never converted into a positive score; speaker evidence is never merged with STT."}

@@ -309,6 +309,68 @@ Watching: startup time has grown with the import graph (~0.8s for
 reyes_agent.tools; the larger `site` cost is pip/truststore in this
 environment, not ZENO).
 
+## Phase 21 — Living Recognition (speaker, audio and video) · PARTIAL, with explicit privacy boundaries
+
+**Divine voice identity:** the browser's one existing WebRTC-processed
+microphone stream now creates a bounded PCM copy only for each VAD-approved
+utterance. `speaker_identity.py` compares its local spectral acoustic feature
+vector to a Divine profile enrolled from 3–8 recordings. Raw recordings and
+command clips are discarded; on Windows, the stored feature-vector payload is
+protected with the current Windows user's DPAPI key outside the repository and
+vault. The response states `OWNER_CONFIRMED`, `LIKELY_OWNER`,
+`UNKNOWN_SPEAKER`, `MULTIPLE_SPEAKERS`, `INSUFFICIENT_AUDIO`, or `NO_PROFILE`
+instead of quietly equating it with STT confidence. The server signs each
+fresh result before a browser voice turn can use it, so an arbitrary web
+client cannot post its own `OWNER_CONFIRMED` claim. Unknown voice requests use
+a clean non-persistent history and do not receive recalled living-memory facts
+or private retrieval tools. A high-risk voice action always remains queued for
+desktop confirmation, even on this trusted-local installation.
+
+**Named security limit:** this is local acoustic similarity for
+personalisation and privacy posture, **not** spoof-resistant speaker
+verification. It intentionally does not claim to implement Windows Hello,
+passkeys, PIN validation or liveness detection; those remain the required
+second factor for highly sensitive work. Accent and Pidgin are not used as a
+speaker feature — the profile compares audio characteristics, while Deepgram
+continues to supply an independent speech confidence.
+
+**Audio recognition:** `audio_recognition.py` accepts a finite 4–18 second
+sample from an explicit upload, microphone, or Windows WASAPI loopback source.
+It uses a local perceptual cache that retains a small fingerprint/result only,
+not audio. Provider selection is modular; the integrated AudD adapter is
+enabled only when `AUDD_API_TOKEN` is present, runs with a timeout, and names
+the provider/source in the result. With no provider or no match, ZENO says so
+instead of inventing a title. System and microphone recognition controls are
+off by default and visible in the dashboard. Matched metadata/artwork is
+shown as a short-lived dashboard/Mini Orb card from the real Event Bus event.
+
+**Video and visual awareness:** `visual_awareness.py` provides visible
+Visual Awareness, Microphone Recognition, System Audio Recognition and Rolling
+Buffer controls. All default off. When Visual Awareness + Rolling Buffer are
+enabled, the shared scheduler takes one compressed screen sample every five
+seconds on a background worker and retains at most 12 in-memory frames (no
+disk capture, no camera). `understand_video` either analyses one directly
+requested screen frame or uses that real buffer for a past-event question;
+it applies local OCR to selected frames and at most one vision-model request,
+not every frame. System-audio evidence is fused only when the separate visible
+system-audio control is on. Unknown people are described rather than
+identified; no stranger profile is built. Confidence remains `unknown` when a
+model does not expose a calibrated score, while OCR confidence is labelled as
+the existing local heuristic.
+
+**Named capability gaps:** there is no local music database or configured
+AudD token in source control, so live song naming awaits owner provider
+configuration; loopback depends on the Windows audio driver. There is no
+person-recognition enrolment/UI beyond Divine's voice profile, no temporal
+action classifier, no camera activation by this subsystem, and no automatic
+movie/title identification without concrete visual/audio evidence.
+
+**Regression coverage:** `tests/test_living_recognition.py` verifies profile
+encryption/no raw audio retention, scoped private retrieval, signed identity
+proofs, honest no-provider audio results, awareness defaults/history clearing,
+and the browser/API wiring. It runs alongside Phase 21/22 runtime, VAD and
+Mini Overlay regressions.
+
 ---
 
 ## Future milestones — interfaces only, no placeholder code

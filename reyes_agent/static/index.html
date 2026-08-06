@@ -49,6 +49,9 @@
   header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
   header h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: 0.08em; }
   header .meta { color: var(--text-dim); font-size: 12px; }
+  #awareness-indicators { display:flex; gap:5px; flex-wrap:wrap; max-width:42vw; }
+  .awareness-pill { font-size:10px; padding:3px 7px; border-radius:999px; border:1px solid var(--border); color:var(--text-dim); }
+  .awareness-pill.active { color:#a9e7ff; border-color:rgba(53,193,255,.55); background:rgba(53,193,255,.10); }
   header .spacer { flex: 1; }
   #pending-badge {
     display: none; background: var(--warn); color: #241705;
@@ -122,6 +125,9 @@
   }
   .tool-chip.done { color: #8fd6a8; border-color: rgba(120,220,150,0.4); box-shadow: 0 0 16px rgba(120,220,150,0.15); }
   .tool-chip .tc-status { opacity: 0.85; }
+  #recognition-card { display:none; position:fixed; left:50%; bottom:44px; transform:translateX(-50%); z-index:3; align-items:center; gap:8px; max-width:min(400px,88vw); padding:7px 10px; border-radius:12px; background:rgba(8,16,32,.88); border:1px solid rgba(53,193,255,.35); font-size:12px; }
+  #recognition-card.show { display:flex; }
+  #recognition-artwork { width:34px; height:34px; object-fit:cover; border-radius:7px; display:none; }
   .tc-thumb {
     max-width: 140px; max-height: 140px; border-radius: 10px; border: 1px solid var(--border);
     box-shadow: 0 8px 26px rgba(0,0,0,0.5); pointer-events: none;
@@ -782,6 +788,7 @@ body.focus #agent-team-overview { opacity: 0; }
     <div class="dot"></div>
     <h1>ZENO</h1>
     <span class="meta" id="status-meta">connecting...</span>
+    <div id="awareness-indicators" aria-label="ZENO observation status"></div>
     <div class="spacer"></div>
     <span id="pending-badge">0 pending</span>
     <button id="fullscreen-btn" title="Fullscreen (F11)">&#9974;</button>
@@ -857,6 +864,20 @@ body.focus #agent-team-overview { opacity: 0; }
       <div id="mic-diag-out" style="font:11.5px system-ui;color:var(--text-dim);"></div>
     </div>
     <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+      <span class="label">Awareness controls<span class="sub">All observation is explicit, local by default, and visible above.</span></span>
+      <div class="toggle-row"><span class="label">Visual Awareness<span class="sub">Screen samples only; never starts camera</span></span><label class="switch"><input type="checkbox" id="aw-visual"><span class="track"></span></label></div>
+      <div class="toggle-row"><span class="label">Microphone Recognition<span class="sub">Allow explicit audio recognition from the mic</span></span><label class="switch"><input type="checkbox" id="aw-mic"><span class="track"></span></label></div>
+      <div class="toggle-row"><span class="label">System Audio Recognition<span class="sub">Allow explicit Windows loopback recognition</span></span><label class="switch"><input type="checkbox" id="aw-system"><span class="track"></span></label></div>
+      <div class="toggle-row"><span class="label">Rolling Buffer<span class="sub">Up to 60 seconds in memory; no disk capture</span></span><label class="switch"><input type="checkbox" id="aw-rolling"><span class="track"></span></label></div>
+      <div style="display:flex;gap:6px;"><button id="aw-clear-visual" class="vt-btn">Clear visual history</button><button id="aw-clear-audio" class="vt-btn">Clear audio history</button></div>
+      <div id="awareness-out" style="font:11px system-ui;color:var(--text-dim);"></div>
+    </div>
+    <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+      <span class="label">Divine voice profile<span class="sub">Three short local recordings; only encrypted feature vectors are kept. It never replaces desktop confirmation.</span></span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;"><button id="speaker-record-btn" class="vt-btn">Record sample</button><button id="speaker-delete-btn" class="vt-btn">Delete profile</button></div>
+      <div id="speaker-profile-out" style="font:11px system-ui;color:var(--text-dim);"></div>
+    </div>
+    <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
       <span class="label">Agent voices<span class="sub">Preview each specialist, or paste a new ElevenLabs voice ID</span></span>
       <div style="display:flex;gap:6px;margin-bottom:4px;">
         <button id="voice-rollcall-btn" class="vt-btn" style="flex:1;">▶ Roll call</button>
@@ -871,6 +892,7 @@ body.focus #agent-team-overview { opacity: 0; }
     <div id="caption-text"></div>
   </div>
   <div id="activity-ticker"></div>
+  <div id="recognition-card"><img id="recognition-artwork" alt="Recognized music artwork"><span id="recognition-text"></span></div>
   <div id="stage-label"></div>
 
   <main>
@@ -1212,6 +1234,123 @@ perfToggle.addEventListener('change', () => {
   localStorage.setItem('reyes_perf_mode', perfMode ? '1' : '0');
   orb.setPerformanceMode(perfMode);
 });
+
+// --- Explicit observation controls --------------------------------------
+// These settings are intentionally loaded only when the Settings panel is
+// opened. Nothing here starts a capture device by itself.
+const awarenessEls = {
+  visual: document.getElementById('aw-visual'), mic: document.getElementById('aw-mic'),
+  system: document.getElementById('aw-system'), rolling: document.getElementById('aw-rolling'),
+  out: document.getElementById('awareness-out'), indicators: document.getElementById('awareness-indicators'),
+};
+let awarenessState = null;
+let systemAudioCaptureActive = false;
+function renderAwarenessIndicators() {
+  const holder = awarenessEls.indicators;
+  if (!holder) return;
+  holder.replaceChildren();
+  const states = [
+    ['MIC', Boolean(window.__zenoMicActive), 'microphone listening'],
+    ['SCREEN', Boolean(awarenessState?.screen_capture_active), 'rolling screen buffer'],
+    ['SYS AUDIO', systemAudioCaptureActive, 'system audio capture in progress'],
+    ['CAMERA', false, 'camera inactive'],
+  ];
+  for (const [name, active, label] of states) {
+    const item = document.createElement('span');
+    item.className = 'awareness-pill' + (active ? ' active' : '');
+    item.textContent = name + (active ? ' on' : ' off');
+    item.title = label;
+    holder.appendChild(item);
+  }
+}
+function renderAwarenessSettings(data) {
+  awarenessState = data;
+  if (awarenessEls.visual) awarenessEls.visual.checked = !!data.visual_awareness;
+  if (awarenessEls.mic) awarenessEls.mic.checked = !!data.microphone_recognition;
+  if (awarenessEls.system) awarenessEls.system.checked = !!data.system_audio_recognition;
+  if (awarenessEls.rolling) awarenessEls.rolling.checked = !!data.rolling_buffer;
+  if (awarenessEls.out) awarenessEls.out.textContent = `Screen buffer: ${data.rolling_frames || 0} frame(s); audio history: ${data.rolling_audio_observations || 0}. ${data.privacy || ''}`;
+  renderAwarenessIndicators();
+}
+async function loadAwarenessSettings() {
+  try { renderAwarenessSettings(await (await fetch('/api/awareness/settings')).json()); } catch (_e) {
+    if (awarenessEls.out) awarenessEls.out.textContent = 'Awareness status unavailable.';
+  }
+}
+async function updateAwarenessSetting(key, value) {
+  try {
+    const response = await fetch('/api/awareness/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({[key]: value}) });
+    const data = await response.json();
+    if (!response.ok) throw Error(data.detail || 'Could not save awareness setting.');
+    renderAwarenessSettings(data);
+  } catch (error) {
+    if (awarenessEls.out) awarenessEls.out.textContent = error.message;
+    await loadAwarenessSettings();
+  }
+}
+awarenessEls.visual?.addEventListener('change', () => updateAwarenessSetting('visual_awareness', awarenessEls.visual.checked));
+awarenessEls.mic?.addEventListener('change', () => updateAwarenessSetting('microphone_recognition', awarenessEls.mic.checked));
+awarenessEls.system?.addEventListener('change', () => updateAwarenessSetting('system_audio_recognition', awarenessEls.system.checked));
+awarenessEls.rolling?.addEventListener('change', () => updateAwarenessSetting('rolling_buffer', awarenessEls.rolling.checked));
+document.getElementById('aw-clear-visual')?.addEventListener('click', async () => { await fetch('/api/awareness/clear-visual-history', {method:'POST'}); await loadAwarenessSettings(); });
+document.getElementById('aw-clear-audio')?.addEventListener('click', async () => { await fetch('/api/awareness/clear-audio-history', {method:'POST'}); await loadAwarenessSettings(); });
+
+const speakerProfileOut = document.getElementById('speaker-profile-out');
+const speakerRecordBtn = document.getElementById('speaker-record-btn');
+const speakerSamples = [];
+let speakerRecording = false;
+async function loadSpeakerProfile() {
+  try {
+    const profile = await (await fetch('/api/speaker/profile')).json();
+    speakerProfileOut.textContent = profile.enrolled
+      ? `Enrolled with ${profile.clips} recordings. Raw audio stored: no. ${profile.limitation || ''}`
+      : `Not enrolled. Record ${profile.required_clips || 3} clear samples of Divine in a quiet room.`;
+  } catch (_e) { speakerProfileOut.textContent = 'Voice-profile status unavailable.'; }
+}
+speakerRecordBtn?.addEventListener('click', async () => {
+  if (speakerRecording) return;
+  speakerRecording = true;
+  try {
+    if (!voiceVAD.mediaStream()) await startAmbientListening();
+    if (!voiceVAD.mediaStream()) throw Error('Microphone is unavailable; enrolment did not start.');
+    finishVADRecording(true);
+    // MediaRecorder.stop() dispatches asynchronously. Give a just-finished
+    // command clip a moment to release its PCM tap before starting the
+    // explicitly requested enrolment sample; otherwise its onstop handler
+    // could terminate the new capture.
+    await new Promise(resolve => setTimeout(resolve, 150));
+    voiceVAD.pauseDetection();
+    if (!voiceVAD.beginPcmCapture()) throw Error('Could not start the local PCM recorder.');
+    speakerProfileOut.textContent = `Sample ${speakerSamples.length + 1}/3: speak normally for five seconds…`;
+    await new Promise(resolve => setTimeout(resolve, 5200));
+    const clip = voiceVAD.endPcmCapture();
+    if (ambientEnabled) voiceVAD.resumeDetection();
+    if (!clip || clip.size < 10_000) throw Error('That sample was too short. Try again in a quieter room.');
+    speakerSamples.push(clip);
+    if (speakerSamples.length < 3) {
+      speakerProfileOut.textContent = `Saved local sample ${speakerSamples.length}/3. Record the next one with slightly different natural speech.`;
+      return;
+    }
+    speakerProfileOut.textContent = 'Validating and encrypting the new local profile…';
+    const form = new FormData();
+    speakerSamples.forEach((clip, index) => form.append('clips', clip, `divine-${index + 1}.wav`));
+    const response = await fetch('/api/speaker/enroll', {method:'POST', body:form});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(data.detail || 'Profile enrolment failed.');
+    speakerSamples.length = 0;
+    await loadSpeakerProfile();
+  } catch (error) {
+    voiceVAD.endPcmCapture();
+    if (ambientEnabled) voiceVAD.resumeDetection();
+    speakerProfileOut.textContent = error.message || 'Profile enrolment failed.';
+  } finally { speakerRecording = false; }
+});
+document.getElementById('speaker-delete-btn')?.addEventListener('click', async () => {
+  await fetch('/api/speaker/profile', {method:'DELETE'});
+  speakerSamples.length = 0;
+  await loadSpeakerProfile();
+});
+renderAwarenessIndicators();
 
 // Focus Mode: real effects only -- dims the background, hides idle (not
 // active) agent-ring dots via CSS, and force-engages performance mode
@@ -1580,7 +1719,7 @@ inputEl.addEventListener('blur', () => { if (!turnActive) orb.setState('idle'); 
 // The one shared turn-runner: text composer, wake-word capture, and any
 // future input path all funnel through this, so "REYES always talks
 // back" is true everywhere, not just on whichever path someone tested.
-async function runTurn(text) {
+async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
   if (!text || turnActive) return;
   turnActive = true;
   sendEl.disabled = true;
@@ -1622,7 +1761,7 @@ async function runTurn(text) {
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({ message: text, voice_identity: voiceIdentity, voice_identity_proof: voiceIdentityProof }),
     });
     if (!res.ok || !res.body) {
       thinkingBubble.remove();
@@ -1774,6 +1913,8 @@ let vadMaxClipTimer = null;
 let discardVADClip = false;
 let transcriptionActive = false;
 let vadHandlersBound = false;
+let lastVoiceIdentity = null;
+let lastVoiceIdentityProof = '';
 const VAD_MAX_CLIP_MS = 15_000;
 const VAD_MIN_CLIP_BYTES = 1_200;
 
@@ -2018,7 +2159,7 @@ async function handleHeard(transcript) {
       setListeningUi('listening');
       return;
     }
-    await runTurn(transcript);
+    await runTurn(transcript, lastVoiceIdentity, lastVoiceIdentityProof);
     setListeningUi('listening');
     return;
   }
@@ -2029,7 +2170,7 @@ async function handleHeard(transcript) {
   listeningMode = true;  // session opens here and stays open
   const remainder = (transcript.slice(0, hit.start) + transcript.slice(hit.end)).trim();
   if (remainder) {
-    await runTurn(remainder); // wake word + command in one breath
+    await runTurn(remainder, lastVoiceIdentity, lastVoiceIdentityProof); // wake word + command in one breath
   } else {
     speakInBrowser("I'm listening.");
   }
@@ -2096,6 +2237,7 @@ async function handleHeard(transcript) {
   recognitionShouldRun = true;
   recognition.start();
   ambientEnabled = true;
+  window.__zenoMicActive = true;
   micIndicator.classList.remove('needs-permission');
   micIndicator.classList.add('listening');
   micStatusEl.textContent = 'Always listening -- say "Zeno"...';
@@ -2116,13 +2258,14 @@ function finishVADRecording(discard = false) {
   if (vadRecorder.state !== 'inactive') vadRecorder.stop();
 }
 
-async function transcribeVADClip(blob) {
+async function transcribeVADClip(blob, speakerBlob = null) {
   if (transcriptionActive || !ambientEnabled || blob.size < VAD_MIN_CLIP_BYTES) return;
   transcriptionActive = true;
   if (!turnActive) micStatusEl.textContent = 'Transcribing...';
   try {
     const form = new FormData();
     form.append('audio', blob, 'zeno-command.webm');
+    if (speakerBlob && speakerBlob.size) form.append('speaker_audio', speakerBlob, 'zeno-speaker.wav');
     const response = await fetch('/api/transcribe', { method: 'POST', body: form });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -2140,6 +2283,17 @@ async function transcribeVADClip(blob) {
     lastSpeechConfidence = (typeof result.confidence === 'number' && result.confidence >= 0 && result.confidence <= 1)
       ? result.confidence : null;
     lastSpeechAlternatives = [];
+    // Speaker identity is a separate local acoustic signal, never STT
+    // confidence. The server signs it before a voice turn can use it.
+    lastVoiceIdentity = result.speaker || null;
+    lastVoiceIdentityProof = String(result.speaker_proof || '');
+    const speaker = lastVoiceIdentity || {};
+    if (speaker.status && speaker.status !== 'NO_PROFILE' && speaker.status !== 'INSUFFICIENT_AUDIO') {
+      const score = typeof speaker.confidence === 'number' ? ` (${Math.round(speaker.confidence * 100)}% acoustic similarity)` : '';
+      micStatusEl.textContent = speaker.status === 'OWNER_CONFIRMED'
+        ? 'Divine voice confirmed' + score + ' — transcribing…'
+        : (speaker.status === 'LIKELY_OWNER' ? 'Likely Divine voice' + score + ' — sensitive data remains protected' : 'Unconfirmed voice' + score + ' — private data remains protected');
+    }
     noteSpeechFragment(transcript);
   } catch (error) {
     if (ambientEnabled) micStatusEl.textContent = 'Microphone connection interrupted. Listening continues.';
@@ -2157,6 +2311,7 @@ function startVADRecording() {
   if (!stream || !window.MediaRecorder) return;
   vadChunks = [];
   discardVADClip = false;
+  voiceVAD.beginPcmCapture();
   try {
     const recorder = new MediaRecorder(stream, chooseRecorderOptions());
     vadRecorder = recorder;
@@ -2170,11 +2325,13 @@ function startVADRecording() {
       vadChunks = [];
       discardVADClip = false;
       if (vadRecorder === recorder) vadRecorder = null;
-      if (!discard) void transcribeVADClip(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+      const pcm = voiceVAD.endPcmCapture();
+      if (!discard) void transcribeVADClip(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }), pcm);
     };
     recorder.start(250); // bounded chunks; avoids retaining a long audio buffer
     vadMaxClipTimer = setTimeout(() => finishVADRecording(false), VAD_MAX_CLIP_MS);
   } catch (error) {
+    voiceVAD.endPcmCapture();
     vadRecorder = null;
     micStatusEl.textContent = 'This browser cannot record the processed microphone stream.';
   }
@@ -2202,6 +2359,8 @@ async function startAmbientListening() {
   if (!voiceVAD.mediaStream()) {
     recognitionShouldRun = false;
     ambientEnabled = false;
+    window.__zenoMicActive = false;
+    renderAwarenessIndicators();
     micIndicator.classList.remove('listening');
     micIndicator.classList.add('needs-permission');
     // Ask the server which of the six real causes this is, instead of
@@ -2222,6 +2381,8 @@ async function startAmbientListening() {
   }
   bindVADHandlers();
   ambientEnabled = true;
+  window.__zenoMicActive = true;
+  renderAwarenessIndicators();
   micIndicator.classList.remove('needs-permission');
   micIndicator.classList.add('listening');
   micStatusEl.textContent = capabilities.noise_suppression
@@ -2233,6 +2394,8 @@ async function startAmbientListening() {
 function stopAmbientListening() {
   recognitionShouldRun = false;
   ambientEnabled = false;
+  window.__zenoMicActive = false;
+  renderAwarenessIndicators();
   if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
   listenBuffer = '';
   finishVADRecording(true);
@@ -2651,6 +2814,8 @@ settingsBtn.addEventListener('click', () => {
   voicePanelBuilt = true;
   loadNotificationSettings();
   buildVoiceTestPanel();
+  loadAwarenessSettings();
+  loadSpeakerProfile();
 });
 
 // --- Knowledge Galaxy -------------------------------------------------
@@ -3733,6 +3898,24 @@ window.addEventListener('zeno-project-destination-selected', (event) => {
   // original conversation context and never bypasses the agent runtime.
   void runTurn(`Continue the requested project "${project.name}". Divine explicitly selected this destination: ${project.destination}. Use that destination and show real progress in the Activity View.`);
 });
+let recognitionHideTimer = null;
+function showRecognizedAudio(payload) {
+  const card = document.getElementById('recognition-card');
+  const text = document.getElementById('recognition-text');
+  const art = document.getElementById('recognition-artwork');
+  if (!card || !text || !payload) return;
+  if (!payload.matched) {
+    text.textContent = payload.reason || 'Audio was not confidently identified.';
+    if (art) { art.removeAttribute('src'); art.style.display = 'none'; }
+  } else {
+    text.textContent = `${payload.artist || 'Unknown artist'} — ${payload.title || 'Unknown title'}${payload.album ? ' · ' + payload.album : ''}`;
+    if (art && payload.artwork_url) { art.src = payload.artwork_url; art.style.display = 'block'; }
+    else if (art) { art.removeAttribute('src'); art.style.display = 'none'; }
+  }
+  card.classList.add('show');
+  clearTimeout(recognitionHideTimer);
+  recognitionHideTimer = setTimeout(() => card.classList.remove('show'), 15000);
+}
 // Event Bus is the source of truth for state transitions.  The persistent
 // dashboard fetches initial state once, then refreshes only affected areas.
 if (window.EventSource) {
@@ -3748,6 +3931,12 @@ if (window.EventSource) {
       void ensureLiveActivityView().then(view => view.consumeEvent(update));
     }
     if (type.startsWith('confirmation.') || type.startsWith('tool.')) refreshPending();
+    if (type === 'audio.recognized') showRecognizedAudio(update.payload || {});
+    if (type === 'audio.recognition_started') { systemAudioCaptureActive = update.payload?.source === 'system'; renderAwarenessIndicators(); }
+    if (type === 'audio.recognition_finished') { systemAudioCaptureActive = false; renderAwarenessIndicators(); }
+    if (type === 'awareness.settings_changed' && document.getElementById('settings-panel').classList.contains('open')) loadAwarenessSettings();
+    if (type === 'visual.analysis_started') orb.setState('processing');
+    if (type === 'visual.analysis_finished' && !turnActive) updateIdleListenState();
     // Heartbeats are useful to the backend's health monitor, but do not
     // represent new UI state. Notifications are the only notice trigger.
     if (type.startsWith('notification.')) refreshNotices();

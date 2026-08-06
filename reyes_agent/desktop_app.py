@@ -741,6 +741,10 @@ def main() -> None:
             js_api=api,
         )
         api.attach_mini_window(window)
+        # Keep the historical private alias until the next test-contract
+        # cleanup. It is not reflected to JavaScript (leading underscore) and
+        # points at the same Mini Orb already set by attach_mini_window().
+        api._window = window
         try:
             window.events.minimized += api.request_overlay_repair
             window.events.restored += api.request_overlay_repair

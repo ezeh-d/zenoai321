@@ -16,6 +16,9 @@ the owner-configured Cloudflare Tunnel and Cloudflare Access hostname.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import queue
@@ -35,6 +38,43 @@ from pydantic import BaseModel
 from reyes_agent import config
 
 app = FastAPI(title=config.ASSISTANT_NAME)
+
+# Browser-provided JSON is never sufficient evidence that its speaker is the
+# owner.  The /api/transcribe worker creates a short-lived, server-signed
+# proof for the identity it actually measured, and /api/chat verifies it
+# before applying voice-specific privacy restrictions/context.
+_VOICE_IDENTITY_SIGNING_MATERIAL = os.urandom(32)
+_VOICE_IDENTITY_MAX_AGE_S = 120
+
+
+def _issue_voice_identity(identity: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    public = {
+        "status": str(identity.get("status") or ""),
+        "confidence": identity.get("confidence"),
+        "issued_at": time.time(),
+    }
+    raw = json.dumps(public, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    proof = hmac.new(_VOICE_IDENTITY_SIGNING_MATERIAL, raw, hashlib.sha256).digest()
+    return public, base64.urlsafe_b64encode(proof).decode("ascii")
+
+
+def _validated_voice_identity(identity: dict[str, Any] | None, proof: str) -> dict[str, Any] | None:
+    if not identity or not proof:
+        return None
+    try:
+        public = {
+            "status": str(identity.get("status") or ""),
+            "confidence": identity.get("confidence"),
+            "issued_at": float(identity.get("issued_at")),
+        }
+        raw = json.dumps(public, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        expected = hmac.new(_VOICE_IDENTITY_SIGNING_MATERIAL, raw, hashlib.sha256).digest()
+        supplied = base64.urlsafe_b64decode(proof.encode("ascii"))
+    except Exception:  # noqa: BLE001 -- a malformed client proof is simply untrusted
+        return None
+    if time.time() - public["issued_at"] > _VOICE_IDENTITY_MAX_AGE_S:
+        return None
+    return public if hmac.compare_digest(expected, supplied) else None
 
 
 @app.middleware("http")
@@ -385,6 +425,8 @@ def tts(req: TTSRequest) -> Response:
 
 class ChatRequest(BaseModel):
     message: str
+    voice_identity: dict[str, Any] | None = None
+    voice_identity_proof: str = ""
 
 
 class HeartbeatRequest(BaseModel):
@@ -479,63 +521,79 @@ def status() -> dict[str, Any]:
     }
 
 
-def _conversation_turn(context, message: str, callbacks: dict[str, Any] | None = None) -> dict[str, Any]:
+def _conversation_turn(
+    context, message: str, callbacks: dict[str, Any] | None = None,
+    voice_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """One serialized mutable-history turn, always executed by the worker pool."""
     from reyes_agent.agent import run_agent
     from reyes_agent.memory_manager import trim_history
     from reyes_agent.performance_monitor import measure
+
+    from reyes_agent import speaker_identity
 
     callbacks = callbacks or {}
     while not _lock.acquire(timeout=0.1):
         context.check_cancelled()
     try:
         context.progress("planning")
-        turn_start = len(_history)
-        _history.append({"role": "user", "content": message})
-        tool_calls: list[dict[str, Any]] = []
+        # An unknown voice gets a clean, non-persistent conversation instead
+        # of the shared history (which could contain Divine's previous private
+        # turns).  This applies the identity result before a provider prompt
+        # is built, not after an answer was already generated.
+        source = "voice" if voice_identity else "typed"
+        with speaker_identity.use_context(voice_identity, source=source):
+            use_shared_history = speaker_identity.current_context().may_access_private_data
+            history = _history if use_shared_history else [{"role": "user", "content": message}]
+            turn_start = len(history)
+            if use_shared_history:
+                history.append({"role": "user", "content": message})
+            tool_calls: list[dict[str, Any]] = []
 
-        def on_tool_call(name: str, tool_input: dict, tool_id: str) -> None:
-            context.check_cancelled()
-            tool_calls.append({"name": name, "input": tool_input})
-            callback = callbacks.get("tool")
-            if callback:
-                callback({"type": "tool", "name": name, "input": tool_input, "id": tool_id})
+            def on_tool_call(name: str, tool_input: dict, tool_id: str) -> None:
+                context.check_cancelled()
+                tool_calls.append({"name": name, "input": tool_input})
+                callback = callbacks.get("tool")
+                if callback:
+                    callback({"type": "tool", "name": name, "input": tool_input, "id": tool_id})
 
-        def on_tool_result(name: str, result: str, tool_id: str) -> None:
-            context.check_cancelled()
-            callback = callbacks.get("tool_result")
-            if callback:
-                callback({"type": "tool_result", "name": name, "result": result[:1200], "id": tool_id})
+            def on_tool_result(name: str, result: str, tool_id: str) -> None:
+                context.check_cancelled()
+                callback = callbacks.get("tool_result")
+                if callback:
+                    callback({"type": "tool_result", "name": name, "result": result[:1200], "id": tool_id})
 
-        def on_text(chunk: str) -> None:
-            context.check_cancelled()
-            callback = callbacks.get("text")
-            if callback:
-                callback({"type": "text", "text": chunk})
+            def on_text(chunk: str) -> None:
+                context.check_cancelled()
+                callback = callbacks.get("text")
+                if callback:
+                    callback({"type": "text", "text": chunk})
 
-        def on_stage(stage: str) -> None:
-            context.progress(stage)
-            callback = callbacks.get("stage")
-            if callback:
-                callback({"type": "stage", "stage": stage})
+            def on_stage(stage: str) -> None:
+                context.progress(stage)
+                callback = callbacks.get("stage")
+                if callback:
+                    callback({"type": "stage", "stage": stage})
 
-        try:
-            with measure("ai_turn"):
-                run_agent(
-                    _history,
-                    on_text=on_text if callbacks.get("text") else None,
-                    on_tool_call=on_tool_call,
-                    on_tool_result=on_tool_result,
-                    on_stage=on_stage,
-                    cancel_check=context.check_cancelled,
-                )
-            reply = _history[-1]["content"]
-        except BaseException:
-            del _history[turn_start:]
-            raise
-        finally:
-            trim_history(_history)
-        return {"reply": reply, "tool_calls": tool_calls}
+            try:
+                with measure("ai_turn"):
+                    run_agent(
+                        history,
+                        on_text=on_text if callbacks.get("text") else None,
+                        on_tool_call=on_tool_call,
+                        on_tool_result=on_tool_result,
+                        on_stage=on_stage,
+                        cancel_check=context.check_cancelled,
+                    )
+                reply = history[-1]["content"]
+            except BaseException:
+                if use_shared_history:
+                    del history[turn_start:]
+                raise
+            finally:
+                if use_shared_history:
+                    trim_history(history)
+            return {"reply": reply, "tool_calls": tool_calls}
     finally:
         _lock.release()
 
@@ -586,8 +644,9 @@ def chat(req: ChatRequest) -> dict[str, Any]:
 
     from reyes_agent.worker_pool import PRIORITY_BRAIN, get_worker_pool
 
+    voice_identity = _validated_voice_identity(req.voice_identity, req.voice_identity_proof)
     handle = get_worker_pool().submit(
-        _conversation_turn, message, name="chat", priority=PRIORITY_BRAIN,
+        _conversation_turn, message, voice_identity=voice_identity, name="chat", priority=PRIORITY_BRAIN,
         timeout=config.AI_REQUEST_TIMEOUT_S + 60, with_context=True,
     )
     return _background_result(handle, config.AI_REQUEST_TIMEOUT_S + 65)
@@ -603,6 +662,8 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
     message = req.message.strip()
     if not message:
         raise HTTPException(400, "Empty message.")
+
+    voice_identity = _validated_voice_identity(req.voice_identity, req.voice_identity_proof)
 
     def generate():
         from reyes_agent.worker_pool import PRIORITY_BRAIN, get_worker_pool
@@ -625,6 +686,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
                     context, message,
                     {kind: (lambda event, kind=kind: emit(context, event))
                      for kind in ("text", "tool", "tool_result", "stage")},
+                    voice_identity=voice_identity,
                 )
             except Exception as exc:  # noqa: BLE001 -- errors are streamed, not hidden
                 try:
@@ -708,7 +770,7 @@ def _read_audio_upload(audio: UploadFile) -> bytes:
 
 
 @app.post("/api/transcribe")
-def transcribe_audio(audio: UploadFile = File(...)) -> dict[str, Any]:
+def transcribe_audio(audio: UploadFile = File(...), speaker_audio: UploadFile | None = File(None)) -> dict[str, Any]:
     """Transcribe one VAD-bounded browser clip without starting an agent turn.
 
     The desktop UI calls this from its single processed microphone stream.
@@ -717,20 +779,34 @@ def transcribe_audio(audio: UploadFile = File(...)) -> dict[str, Any]:
     request merely because a clip was captured.
     """
     audio_bytes = _read_audio_upload(audio)
+    # The WebM clip goes to STT; the small browser-generated PCM WAV copy is
+    # used only locally for speaker comparison, then discarded in the worker.
+    speaker_bytes = _read_audio_upload(speaker_audio) if speaker_audio is not None else b""
+    if len(speaker_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Speaker PCM sample is larger than 5 MiB.")
 
     def transcribe_job(context) -> dict[str, Any]:
         from reyes_agent.voice.stt import transcribe_result
         from reyes_agent.performance_monitor import measure
         from reyes_agent.confidence import record
+        from reyes_agent import speaker_identity
 
         context.progress("transcribing")
+        identity = (speaker_identity.identify(speaker_bytes) if speaker_bytes else {
+            "status": speaker_identity.INSUFFICIENT_AUDIO,
+            "confidence": None,
+            "reason": "No local PCM speaker sample was supplied.",
+            "stored_audio": False,
+        })
         with measure("voice_stt"):
             result = transcribe_result(audio_bytes)
         transcript = str(result["transcript"]).strip()
         confidence = result.get("confidence")
         record("speech", confidence, "Deepgram final alternative" if confidence is not None else
                "Deepgram response did not provide a confidence value")
-        return {"transcript": transcript, "confidence": confidence}
+        signed_identity, proof = _issue_voice_identity(identity)
+        return {"transcript": transcript, "confidence": confidence,
+                "speaker": {**identity, **signed_identity}, "speaker_proof": proof}
 
     from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
 
@@ -742,7 +818,7 @@ def transcribe_audio(audio: UploadFile = File(...)) -> dict[str, Any]:
 
 
 @app.post("/api/voice-turn")
-def voice_turn(audio: UploadFile = File(...)) -> dict[str, Any]:
+def voice_turn(audio: UploadFile = File(...), speaker_audio: UploadFile | None = File(None)) -> dict[str, Any]:
     """The browser's voice front door -- record in the page (mic button or
     wake word), post the clip here, get back what REYES heard and said.
 
@@ -752,11 +828,15 @@ def voice_turn(audio: UploadFile = File(...)) -> dict[str, Any]:
     browser's. The browser speaks the reply itself (Web Speech API).
     """
     audio_bytes = _read_audio_upload(audio)
+    speaker_bytes = _read_audio_upload(speaker_audio) if speaker_audio is not None else b""
+    if len(speaker_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Speaker PCM sample is larger than 5 MiB.")
 
     def voice_job(context) -> dict[str, Any]:
         from reyes_agent.voice.stt import STTError, transcribe_result
         from reyes_agent.performance_monitor import measure
         from reyes_agent.confidence import record
+        from reyes_agent import speaker_identity
 
         context.progress("transcribing")
         try:
@@ -770,8 +850,14 @@ def voice_turn(audio: UploadFile = File(...)) -> dict[str, Any]:
             raise RuntimeError(f"Couldn't hear that: {exc}") from exc
         if not transcript:
             return {"transcript": "", "reply": "", "tool_calls": []}
-        result = _conversation_turn(context, transcript)
-        return {"transcript": transcript, "speech_confidence": stt_result.get("confidence"), **result}
+        identity = (speaker_identity.identify(speaker_bytes) if speaker_bytes else {
+            "status": speaker_identity.INSUFFICIENT_AUDIO, "confidence": None,
+            "reason": "No local PCM speaker sample was supplied.", "stored_audio": False,
+        })
+        result = _conversation_turn(context, transcript, voice_identity=identity)
+        signed_identity, proof = _issue_voice_identity(identity)
+        return {"transcript": transcript, "speech_confidence": stt_result.get("confidence"),
+                "speaker": {**identity, **signed_identity}, "speaker_proof": proof, **result}
 
     from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
 
@@ -1273,6 +1359,111 @@ def microphone_diagnose(browser_error: str = "") -> dict[str, Any]:
     from reyes_agent import microphone
 
     return microphone.diagnose(browser_error).as_dict()
+
+
+class AwarenessSettingsRequest(BaseModel):
+    visual_awareness: bool | None = None
+    microphone_recognition: bool | None = None
+    system_audio_recognition: bool | None = None
+    rolling_buffer: bool | None = None
+    screen_interval_s: int | None = None
+    rolling_seconds: int | None = None
+
+
+class VisualAnalysisRequest(BaseModel):
+    question: str = "Describe what is visible."
+    lookback_seconds: int = 0
+
+
+@app.get("/api/speaker/profile")
+def speaker_profile() -> dict[str, Any]:
+    """Profile status only; no vector, recording or secret ever leaves ZENO."""
+    from reyes_agent import speaker_identity
+
+    return speaker_identity.enrollment_status()
+
+
+@app.post("/api/speaker/enroll")
+def speaker_enroll(clips: list[UploadFile] = File(...)) -> dict[str, Any]:
+    """Store a fresh Divine profile from multiple browser-captured WAV clips."""
+    from reyes_agent import speaker_identity
+    from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
+
+    if not 3 <= len(clips) <= 8:
+        raise HTTPException(400, "Provide 3 to 8 short Divine voice recordings.")
+    audio_clips = [_read_audio_upload(clip) for clip in clips]
+    if sum(len(clip) for clip in audio_clips) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Voice-profile recordings exceed the 20 MiB combined limit.")
+    handle = get_worker_pool().submit(
+        lambda _context: speaker_identity.enroll(audio_clips), name="speaker-enroll",
+        priority=PRIORITY_VOICE, timeout=45, with_context=True,
+    )
+    try:
+        return _background_result(handle, 50)
+    except HTTPException as exc:
+        raise HTTPException(exc.status_code, str(exc.detail)) from exc
+
+
+@app.delete("/api/speaker/profile")
+def speaker_delete_profile() -> dict[str, Any]:
+    from reyes_agent import speaker_identity
+
+    return speaker_identity.delete_profile()
+
+
+@app.get("/api/awareness/settings")
+def awareness_settings() -> dict[str, Any]:
+    from reyes_agent import visual_awareness
+
+    return visual_awareness.settings()
+
+
+@app.post("/api/awareness/settings")
+def awareness_set_settings(req: AwarenessSettingsRequest) -> dict[str, Any]:
+    from reyes_agent import visual_awareness
+
+    return visual_awareness.update_settings(**req.model_dump(exclude_none=True))
+
+
+@app.post("/api/awareness/clear-visual-history")
+def awareness_clear_visual_history() -> dict[str, Any]:
+    from reyes_agent import visual_awareness
+
+    return visual_awareness.clear_visual_history()
+
+
+@app.post("/api/awareness/clear-audio-history")
+def awareness_clear_audio_history() -> dict[str, Any]:
+    from reyes_agent import visual_awareness
+
+    return visual_awareness.clear_audio_history()
+
+
+@app.post("/api/audio/recognize")
+def recognize_uploaded_audio(audio: UploadFile = File(...)) -> dict[str, Any]:
+    """Recognize a user-provided short clip; the request worker owns I/O."""
+    from reyes_agent import audio_recognition
+    from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
+
+    audio_bytes = _read_audio_upload(audio)
+    handle = get_worker_pool().submit(
+        lambda _context: audio_recognition.recognize(audio_bytes, source="uploaded"),
+        name="audio-recognize-upload", priority=PRIORITY_VOICE, timeout=30, with_context=True,
+    )
+    return _background_result(handle, 35)
+
+
+@app.post("/api/visual/analyze")
+def analyze_visual(req: VisualAnalysisRequest) -> dict[str, Any]:
+    """One explicit, bounded screen/video analysis outside the HTTP/UI thread."""
+    from reyes_agent import video_recognition
+    from reyes_agent.worker_pool import PRIORITY_BACKGROUND, get_worker_pool
+
+    handle = get_worker_pool().submit(
+        lambda _context: video_recognition.analyze(req.question, lookback_seconds=req.lookback_seconds),
+        name="visual-analyze", priority=PRIORITY_BACKGROUND, timeout=60, with_context=True,
+    )
+    return _background_result(handle, 65)
 
 
 @app.get("/api/notices")

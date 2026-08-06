@@ -222,6 +222,19 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     if tool is None:
         return f"Error: no tool named '{name}' is registered."
 
+    # Voice identity is request-scoped and server-signed. It can protect
+    # private retrieval, but never becomes authority for a consequential
+    # action: desktop confirmation remains a separate factor.
+    try:
+        from reyes_agent import speaker_identity
+
+        denial = speaker_identity.privacy_denial(name)
+        if denial:
+            return denial
+        voice_requires_confirmation = speaker_identity.requires_strong_confirmation(name)
+    except Exception:  # noqa: BLE001 -- identity diagnostics cannot break tools
+        voice_requires_confirmation = False
+
     # Confidence is evidence-backed: model providers do not currently emit a
     # calibrated intent score, so a high-risk tool has *unknown* confidence
     # rather than a fabricated positive number.  That unknown state is a
@@ -230,9 +243,10 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     from reyes_agent.confidence import decide_tool
 
     confidence = decide_tool(name, requires_confirmation=tool.requires_confirmation)
-    must_confirm = tool.requires_confirmation or confidence.requires_confirmation
+    must_confirm = tool.requires_confirmation or confidence.requires_confirmation or voice_requires_confirmation
 
-    if must_confirm and _autonomy_allows(name) and not confidence.requires_confirmation:
+    if (must_confirm and _autonomy_allows(name) and not confidence.requires_confirmation
+            and not voice_requires_confirmation):
         from reyes_agent import audit
 
         # Still audited, so an unattended action is never invisible after
@@ -245,7 +259,9 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
         action = confirmation.request(
             tool_name=name, tool_input=tool_input,
-            description=f"{name}({tool_input}) — confidence: {confidence.reason}",
+            description=(f"{name}({tool_input}) — confidence: {confidence.reason}"
+                         + (" — voice identity is not enough; complete desktop confirmation."
+                            if voice_requires_confirmation else "")),
         )
         return (
             f"Queued as request #{action.id} -- this action needs the user's "
@@ -258,7 +274,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, investing, knowledge_tools, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, investing, knowledge_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

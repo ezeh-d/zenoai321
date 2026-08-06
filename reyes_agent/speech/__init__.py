@@ -226,6 +226,12 @@ def wake_word() -> PhraseWakeWord:
 
 def capabilities() -> dict:
     """Exactly what is real right now. No optimistic reporting."""
+    try:
+        from reyes_agent import speaker_identity
+
+        speaker = speaker_identity.enrollment_status()
+    except Exception as exc:  # noqa: BLE001 -- diagnostics must stay available
+        speaker = {"enrolled": False, "error": f"{type(exc).__name__}: {exc}"}
     return {
         "wake_word": {"engine": _wake.name, "implemented": getattr(_wake, "real", False),
                       "phrases": list(_wake.phrases)},
@@ -244,5 +250,11 @@ def capabilities() -> dict:
         "noise_suppression": {"implemented": True,
                               "note": "Requested on ZENO's browser MediaStream. The UI "
                                       "reports the browser's actual applied setting."},
+        "speaker_identity": {
+            "implemented": True,
+            "engine": "local acoustic speaker similarity",
+            "profile": speaker,
+            "note": "Separate from STT confidence. Raw recordings are discarded; voice evidence is never authentication.",
+        },
         "upgrade_path": "register_vad() / register_recognizer() / register_wake_word()",
     }

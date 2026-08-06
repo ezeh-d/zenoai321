@@ -4,7 +4,8 @@
 <style>
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#dcecff;font:11px system-ui,sans-serif;cursor:grab;user-select:none}
   body.dragging{cursor:grabbing} #orb-simple{width:130px!important;height:130px!important} #orb-canvas{position:fixed;inset:0;width:100%;height:100%}
-</style></head><body><canvas id="orb-canvas"></canvas>
+  #music-card{display:none;position:fixed;left:8px;right:8px;bottom:6px;z-index:4;align-items:center;gap:5px;padding:4px 6px;border-radius:8px;background:rgba(5,12,26,.86);border:1px solid rgba(98,200,255,.45);font-size:9px;pointer-events:none}#music-card.show{display:flex}#music-art{width:20px;height:20px;border-radius:4px;object-fit:cover;display:none}
+</style></head><body><canvas id="orb-canvas"></canvas><div id="music-card"><img id="music-art" alt=""><span id="music-text"></span></div>
 <script type="module">
 import { initOrb } from '/static/orb.js';
 import * as voiceVAD from '/static/vad.js?v=1';
@@ -55,6 +56,7 @@ if(window.EventSource){
   agentEventSource.onmessage=(event)=>{try{
     const update=JSON.parse(event.data);
     agentPresence.consume(update);
+    if(update.type==='audio.recognized')showRecognizedAudio(update.payload||{});
     // The dashboard's native close/minimize event is the handoff point for
     // the single microphone stream.  Delay only the reacquire, so the hidden
     // dashboard has time to release its track first; this never shows a new
@@ -63,6 +65,8 @@ if(window.EventSource){
     if(update.type==='desktop.dashboard_hidden')setTimeout(()=>{if(!wakeActive)void startWakeListener();},700);
   }catch(_e){}};
 }
+let musicHideTimer=null;
+function showRecognizedAudio(payload){const card=document.getElementById('music-card'),text=document.getElementById('music-text'),art=document.getElementById('music-art');if(!card||!text)return;if(payload.matched){text.textContent=`${payload.artist||''} — ${payload.title||''}`.replace(/^\s*—\s*/, '');if(payload.artwork_url){art.src=payload.artwork_url;art.style.display='block';}else art.style.display='none';}else{text.textContent='Audio not identified';art.style.display='none';}card.classList.add('show');clearTimeout(musicHideTimer);musicHideTimer=setTimeout(()=>card.classList.remove('show'),12000);}
 let dragging=false,moved=false,startX=0,startY=0,moveInFlight=false,queuedMove=null;
 function flushMove(){
   if(moveInFlight||!queuedMove)return;
@@ -88,8 +92,8 @@ let wakeRecorder=null,wakeChunks=[],wakeTimer=null,wakeActive=false,wakeBusy=fal
 const WAKE_MAX_CLIP_MS=12_000,WAKE_MIN_CLIP_BYTES=1_200;
 function recorderOptions(){const types=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'];const mimeType=types.find(t=>MediaRecorder.isTypeSupported(t));return mimeType?{mimeType}:undefined;}
 function finishWakeClip(discard=false){if(!wakeRecorder)return;wakeDiscard=wakeDiscard||discard;if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}if(wakeRecorder.state!=='inactive')wakeRecorder.stop();}
-async function transcribeWakeClip(blob){if(!wakeActive||wakeBusy||blob.size<WAKE_MIN_CLIP_BYTES)return;wakeBusy=true;orb.setState('processing');try{const form=new FormData();form.append('audio',blob,'zeno-wake.webm');const res=await fetch('/api/transcribe',{method:'POST',body:form});const data=await res.json().catch(()=>({}));if(res.ok&&/\b(?:wake up zeno|hey zeno|zeno)\b/i.test(String(data.transcript||'')))openDashboard();}catch(_e){}finally{wakeBusy=false;if(wakeActive)orb.setState('idle');}}
-function startWakeClip(){if(!wakeActive||wakeBusy||wakeRecorder)return;const stream=voiceVAD.mediaStream();if(!stream)return;wakeChunks=[];wakeDiscard=false;try{const recorder=new MediaRecorder(stream,recorderOptions());wakeRecorder=recorder;recorder.ondataavailable=e=>{if(e.data&&e.data.size)wakeChunks.push(e.data);};recorder.onstop=()=>{if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}const chunks=wakeChunks,discard=wakeDiscard;wakeChunks=[];wakeDiscard=false;if(wakeRecorder===recorder)wakeRecorder=null;if(!discard)void transcribeWakeClip(new Blob(chunks,{type:recorder.mimeType||'audio/webm'}));};recorder.start(250);wakeTimer=setTimeout(()=>finishWakeClip(false),WAKE_MAX_CLIP_MS);orb.setState('listening');}catch(_e){wakeRecorder=null;}}
+async function transcribeWakeClip(blob,speakerBlob=null){if(!wakeActive||wakeBusy||blob.size<WAKE_MIN_CLIP_BYTES)return;wakeBusy=true;orb.setState('processing');try{const form=new FormData();form.append('audio',blob,'zeno-wake.webm');if(speakerBlob&&speakerBlob.size)form.append('speaker_audio',speakerBlob,'zeno-speaker.wav');const res=await fetch('/api/transcribe',{method:'POST',body:form});const data=await res.json().catch(()=>({}));if(data.speaker&&data.speaker.status)document.title='ZENO Mini Orb · '+data.speaker.status.replace(/_/g,' ').toLowerCase();if(res.ok&&/\b(?:wake up zeno|hey zeno|zeno)\b/i.test(String(data.transcript||'')))openDashboard();}catch(_e){}finally{wakeBusy=false;if(wakeActive)orb.setState('idle');}}
+function startWakeClip(){if(!wakeActive||wakeBusy||wakeRecorder)return;const stream=voiceVAD.mediaStream();if(!stream)return;wakeChunks=[];wakeDiscard=false;voiceVAD.beginPcmCapture();try{const recorder=new MediaRecorder(stream,recorderOptions());wakeRecorder=recorder;recorder.ondataavailable=e=>{if(e.data&&e.data.size)wakeChunks.push(e.data);};recorder.onstop=()=>{if(wakeTimer){clearTimeout(wakeTimer);wakeTimer=null;}const chunks=wakeChunks,discard=wakeDiscard;wakeChunks=[];wakeDiscard=false;if(wakeRecorder===recorder)wakeRecorder=null;const pcm=voiceVAD.endPcmCapture();if(!discard)void transcribeWakeClip(new Blob(chunks,{type:recorder.mimeType||'audio/webm'}),pcm);};recorder.start(250);wakeTimer=setTimeout(()=>finishWakeClip(false),WAKE_MAX_CLIP_MS);orb.setState('listening');}catch(_e){voiceVAD.endPcmCapture();wakeRecorder=null;}}
 function stopWakeListener(){wakeActive=false;wakeRecoveryAttempts=0;if(wakeRecoveryTimer){clearTimeout(wakeRecoveryTimer);wakeRecoveryTimer=null;}finishWakeClip(true);voiceVAD.stop();}
 voiceVAD.onSpeechStart(startWakeClip);voiceVAD.onSpeechEnd(()=>finishWakeClip(false));
 async function startWakeListener(){

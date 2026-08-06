@@ -181,7 +181,8 @@ def list_capabilities() -> str:
             "run_command", "delete_file", "move_file", "set_volume",
             "lock_screen", "media_control", "read_clipboard", "write_clipboard",
         ],
-        "Seeing": ["take_screenshot", "take_webcam_photo"],
+        "Seeing": ["take_screenshot", "take_webcam_photo", "understand_video", "awareness_status"],
+        "Audio recognition": ["recognize_audio"],
         "Web": ["web_search"],
         "Messaging": ["send_slack_message", "send_telegram_message"],
         "Scheduling & reminders": [

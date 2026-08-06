@@ -21,6 +21,16 @@ def all_facts() -> list[tuple[str, str, str]]:
 
 def system_prompt_block() -> str:
     """Background data only; archived/deleted records are never recalled."""
+    # A voice request that has not been server-confirmed as Divine must not
+    # receive recalled facts in its provider prompt.  This is checked before
+    # the model sees the history, not merely at an individual memory tool.
+    try:
+        from reyes_agent.speaker_identity import current_context
+
+        if not current_context().may_access_private_data:
+            return "\n\n[Private memory is unavailable for this unconfirmed voice request.]"
+    except Exception:  # noqa: BLE001 -- memory remains available for existing fronts
+        pass
     facts = all_facts()
     if not facts:
         return ""

@@ -60,6 +60,7 @@ CAPABILITIES: dict[str, str] = {
     "browser_automation": "Drive a real browser session",
     "network_read":       "Fetch web pages, news, search results",
     "vision":             "Screen capture and webcam",
+    "audio_capture":      "Capture microphone or system-loopback audio",
     "email_send":         "Send email on the user's behalf",
     "messaging_send":     "Send Slack/Telegram/chat messages",
     "social_post":        "Publish publicly to social platforms",
@@ -81,6 +82,7 @@ _TRUSTED_LOCAL: dict[str, State] = {
     "browser_automation": ENABLED,
     "network_read": ENABLED,
     "vision": ENABLED,
+    "audio_capture": ENABLED,
     "plugin_exec": ENABLED,
     # Outward-facing: reaches other people, cannot be recalled. Owner can
     # move any of these to ENABLED via .env (see _env_overrides).
@@ -96,6 +98,7 @@ _CAUTIOUS: dict[str, State] = {
     "filesystem_read": ENABLED,
     "network_read": ENABLED,
     "vision": CONFIRM,
+    "audio_capture": CONFIRM,
     "clipboard": ENABLED,
     "app_control": CONFIRM,
     "filesystem_write": CONFIRM,
@@ -138,6 +141,8 @@ TOOL_CAPABILITY: dict[str, str] = {
     "create_3d_model": "filesystem_write",
     "take_screenshot": "vision",
     "take_webcam_photo": "vision",
+    "understand_video": "vision",
+    "recognize_audio": "audio_capture",
     "send_slack_message": "messaging_send",
     "send_telegram_message": "messaging_send",
     "browser_open": "browser_automation",
