@@ -274,7 +274,7 @@ def _scores(rep: Report, events: list[dict]) -> dict:
 
 def save_report(rep: Report) -> str:
     """Write the report into the vault so it's reviewable later."""
-    from reyes_agent.tools.notes import write_note
+    from reyes_agent.tools.obsidian import write_note
 
     lines = [f"# ZENO Evolution Report — {rep.generated}", "", "## Scores", ""]
     for k, v in rep.scores.items():

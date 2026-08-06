@@ -232,7 +232,7 @@ def digital_dna_control(action: str) -> str:
             return f"Could not read activity: {exc}"
         if not rows:
             return "Nothing recorded to export."
-        from reyes_agent.tools.notes import write_note
+        from reyes_agent.tools.obsidian import write_note
 
         body = ["# Digital DNA export", "", f"{len(rows)} samples", "", "| app | timestamp |", "|---|---|"]
         body += [f"| {a} | {t} |" for a, t in rows[-2000:]]

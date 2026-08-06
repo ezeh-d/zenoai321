@@ -247,7 +247,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, investing, knowledge_tools, memory, missions, notes, obsidian, profile_tools, projects, rag, subagents, system, utility, vision, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, investing, knowledge_tools, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so
@@ -301,17 +301,19 @@ def load_plugins() -> list[str]:
         if not allowed:
             audit.log("plugin_refused", plugin=path.stem, reason=reason)
             continue
-        try:
-            spec = importlib.util.spec_from_file_location(f"zeno_plugin_{path.stem}", path)
-            if spec is None or spec.loader is None:
-                continue
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+        # Executed inside the capability sandbox (plugin_sandbox.py) rather
+        # than imported normally, so the manifest is ENFORCED at run time
+        # instead of merely inspected at load time. A plugin declaring
+        # filesystem_read can no longer quietly shell out or open a socket.
+        from reyes_agent import plugin_sandbox
+
+        granted = set(manifest.permissions) if manifest else set()
+        ok, message = plugin_sandbox.execute_plugin(path, path.stem, granted)
+        if ok:
             loaded.append(path.stem)
-            audit.log("plugin_loaded", plugin=path.stem,
-                      permissions=manifest.permissions if manifest else [])
-        except Exception as exc:  # noqa: BLE001 -- one bad plugin must not stop startup
-            audit.log("plugin_load_failed", plugin=path.stem, error=str(exc))
+            audit.log("plugin_loaded", plugin=path.stem, permissions=sorted(granted))
+        else:
+            audit.log("plugin_load_failed", plugin=path.stem, error=message)
     return loaded
 
 

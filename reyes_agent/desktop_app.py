@@ -14,12 +14,14 @@ Run: python -m reyes_agent.desktop_app
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import webview
 
@@ -34,6 +36,14 @@ _WEBVIEW_STORAGE = Path(os.environ.get("LOCALAPPDATA", str(config.PROJECT_ROOT))
 _server_proc: subprocess.Popen | None = None
 _owns_server = False
 _MAX_LOG_BYTES = 2 * 1024 * 1024
+_MINI_SIZE = 210
+_ORB_MARGIN = 24
+_OVERLAY_HEALTH_INTERVAL_S = 5.0
+_TOPMOST_REASSERT_INTERVAL_S = 30.0
+_ORB_POSITION_FILE = (
+    Path(os.environ.get("LOCALAPPDATA", str(config.PROJECT_ROOT)))
+    / "ZENO" / "mini-orb-position.json"
+)
 _BOOT_HTML = """<!doctype html><html><head><meta charset='utf-8'><title>ZENO</title>
 <style>html,body{height:100%;margin:0;background:#050b1e;color:#b9d7ff;font:15px Segoe UI,sans-serif}
 main{height:100%;display:grid;place-items:center}.orb{width:88px;height:88px;border-radius:50%;
@@ -41,6 +51,196 @@ background:radial-gradient(circle at 35% 30%,#d9f6ff,#177bd1 42%,#07163e 72%);bo
 animation:pulse 2.8s ease-in-out infinite}
 @keyframes pulse{50%{transform:scale(1.08);box-shadow:0 0 78px #36a7ffb0}}</style></head>
 <body><main><div class='orb'></div></main></body></html>"""
+
+
+def _read_orb_position() -> tuple[int, int] | None:
+    """Read the one native overlay position; malformed local state is ignored."""
+    try:
+        payload = json.loads(_ORB_POSITION_FILE.read_text(encoding="utf-8"))
+        return int(payload["x"]), int(payload["y"])
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _write_orb_position(position: tuple[int, int]) -> None:
+    """Persist an owner move atomically without putting runtime state in Git."""
+    try:
+        _ORB_POSITION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = _ORB_POSITION_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"x": int(position[0]), "y": int(position[1])}), encoding="utf-8")
+        temporary.replace(_ORB_POSITION_FILE)
+    except OSError:
+        # The orb remains usable even if a user profile is temporarily read-only.
+        pass
+
+
+def _intersection_area(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> int:
+    left = max(a[0], b[0])
+    top = max(a[1], b[1])
+    right = min(a[0] + a[2], b[0] + b[2])
+    bottom = min(a[1] + a[3], b[1] + b[3])
+    return max(0, right - left) * max(0, bottom - top)
+
+
+def _position_is_visible(
+    x: int, y: int, width: int, height: int, work_areas: list[tuple[int, int, int, int]],
+) -> bool:
+    """A saved location is valid only if a useful part of the orb is visible."""
+    rect = (int(x), int(y), int(width), int(height))
+    return any(_intersection_area(rect, area) >= 48 * 48 for area in work_areas)
+
+
+def _visible_or_default_position(
+    x: int, y: int, width: int, height: int, work_areas: list[tuple[int, int, int, int]],
+) -> tuple[int, int]:
+    """Preserve valid negative/multi-monitor coordinates; repair stale ones."""
+    if work_areas and _position_is_visible(x, y, width, height, work_areas):
+        return int(x), int(y)
+    # Prefer the primary working area (the one containing 0,0), then the
+    # first available monitor.  Use work area rather than screen bounds so
+    # the Windows taskbar does not cover the recovered orb.
+    target = next((area for area in work_areas if area[0] <= 0 < area[0] + area[2]
+                   and area[1] <= 0 < area[1] + area[3]), None)
+    target = target or (work_areas[0] if work_areas else (0, 0, 1920, 1080))
+    left, top, work_width, work_height = target
+    return (
+        max(left + _ORB_MARGIN, left + work_width - width - _ORB_MARGIN),
+        max(top + _ORB_MARGIN, top + work_height - height - _ORB_MARGIN),
+    )
+
+
+def _window_handle(window: Any) -> int | None:
+    """Return the WinForms HWND without exposing a native object to JS."""
+    native = getattr(window, "native", None)
+    handle = getattr(native, "Handle", None)
+    if handle is None:
+        return None
+    try:
+        return int(handle.ToInt64())
+    except AttributeError:
+        try:
+            return int(handle)
+        except (TypeError, ValueError):
+            return None
+
+
+def _windows_work_areas() -> list[tuple[int, int, int, int]]:
+    """Physical monitor working areas, including negative secondary screens."""
+    if sys.platform != "win32":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                       ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", RECT),
+                       ("rcWork", RECT), ("dwFlags", wintypes.DWORD)]
+
+        user32 = ctypes.windll.user32
+        areas: list[tuple[int, int, int, int]] = []
+        callback_type = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(RECT), ctypes.c_void_p,
+        )
+
+        @callback_type
+        def visit(monitor, _hdc, _rect, _lparam):
+            info = MONITORINFO()
+            info.cbSize = ctypes.sizeof(MONITORINFO)
+            if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                work = info.rcWork
+                areas.append((int(work.left), int(work.top),
+                              int(work.right - work.left), int(work.bottom - work.top)))
+            return True
+
+        user32.EnumDisplayMonitors(None, None, visit, None)
+        return areas
+    except Exception:  # noqa: BLE001 -- native overlay recovery is best effort
+        return []
+
+
+def _native_window_rect(window: Any) -> tuple[int, int, int, int] | None:
+    if sys.platform != "win32":
+        return None
+    hwnd = _window_handle(window)
+    if not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                       ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+        rect = RECT()
+        if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return int(rect.left), int(rect.top), int(rect.right - rect.left), int(rect.bottom - rect.top)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _restore_native_overlay(
+    window: Any, position: tuple[int, int], *, force_topmost: bool = False,
+) -> tuple[bool, bool, tuple[int, int] | None]:
+    """Repair a hidden, minimized or off-screen overlay without activation.
+
+    pywebview's ``Window.show`` activates WinForms windows.  The overlay must
+    stay visible but never steal typing focus, so Windows receives
+    ``SW_SHOWNOACTIVATE`` and ``SetWindowPos(..., HWND_TOPMOST, NOACTIVATE)``
+    directly.  This is the actual native topmost operation; assigning
+    ``window.on_top`` after creation only changes a Python attribute.
+    """
+    if sys.platform != "win32":
+        return False, False, None
+    hwnd = _window_handle(window)
+    if not hwnd:
+        return False, False, None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        rect = _native_window_rect(window) or (position[0], position[1], _MINI_SIZE, _MINI_SIZE)
+        width = max(_MINI_SIZE, rect[2])
+        height = max(_MINI_SIZE, rect[3])
+        areas = _windows_work_areas()
+        x, y = _visible_or_default_position(position[0], position[1], width, height, areas)
+        hidden = not bool(user32.IsWindowVisible(hwnd))
+        minimized = bool(user32.IsIconic(hwnd))
+        off_screen = not _position_is_visible(rect[0], rect[1], width, height, areas) if areas else False
+        repaired = hidden or minimized or off_screen or (x, y) != (rect[0], rect[1])
+        if hidden or minimized:
+            user32.ShowWindowAsync(hwnd, 4)  # SW_SHOWNOACTIVATE
+        # HWND_TOPMOST + SWP_NOACTIVATE keeps ZENO above normal windows while
+        # preserving the foreground app and its keyboard focus.
+        if repaired or force_topmost:
+            flags = 0x0001 | 0x0010 | 0x0040 | 0x0200  # NOSIZE|NOACTIVATE|SHOWWINDOW|NOOWNERZORDER
+            user32.SetWindowPos(hwnd, ctypes.c_void_p(-1), x, y, 0, 0, flags)
+        return True, repaired, (x, y)
+    except Exception:  # noqa: BLE001 -- a monitor transition must not crash ZENO
+        return False, False, None
+
+
+def _move_native_overlay(window: Any, x: int, y: int) -> bool:
+    """Move the native overlay during an owner drag without activating it."""
+    if sys.platform != "win32":
+        return False
+    hwnd = _window_handle(window)
+    if not hwnd:
+        return False
+    try:
+        import ctypes
+
+        flags = 0x0001 | 0x0010 | 0x0040 | 0x0200  # NOSIZE|NOACTIVATE|SHOWWINDOW|NOOWNERZORDER
+        return bool(ctypes.windll.user32.SetWindowPos(
+            hwnd, ctypes.c_void_p(-1), int(x), int(y), 0, 0, flags,
+        ))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _rotate_log_if_needed(path: Path) -> None:
@@ -156,54 +356,58 @@ def _wait_for_server(timeout: float = 30.0) -> bool:
     return False
 
 
-def _load_when_ready(window, api) -> None:
-    """Wait away from the native UI thread, then hand the same window to the
-    web panel. The user sees a real ZENO window immediately even if a provider
-    import, database recovery, or background service is slow."""
+def _load_when_ready(api) -> None:
+    """Load the light companion after the loopback server is ready.
+
+    The native mini window already exists as the immediate startup shell.  A
+    dashboard WebView is deliberately *not* created here: it is a lazy child
+    window opened only by an explicit user action from the orb.
+    """
+    api.start_overlay_watchdog()
     _start_server()
     if _wait_for_server():
-        try:
-            api.show_mini()
+        api.load_mini_document()
+        return
+    while _server_proc is None or _server_proc.poll() is None:
+        if _wait_for_server(timeout=5.0):
+            api.load_mini_document()
             return
-        except Exception:  # noqa: BLE001
-            pass
-    try:
-        window.evaluate_js(
-            "document.querySelector('.label').textContent = "
-            "'ZENO is still starting — retrying automatically…';"
-        )
-        while _server_proc is None or _server_proc.poll() is None:
-            if _wait_for_server(timeout=5.0):
-                api.show_mini()
-                return
-            if _server_proc is not None and _server_proc.poll() is not None:
-                window.evaluate_js(
-                    "document.querySelector('.label').textContent = "
-                    "'ZENO server failed to start — see zeno_server.log';"
-                )
-                return
-    except Exception:  # noqa: BLE001
-        pass
+        if _server_proc is not None and _server_proc.poll() is not None:
+            return
 
 
 class _DesktopApi:
-    """Exposed to the page as window.pywebview.api -- lets the in-page
-    fullscreen button/F11 drive the NATIVE window fullscreen, which is more
-    reliable inside WebView2 than the browser Fullscreen API alone.
+    """Native bridge for one persistent Mini Orb and one lazy dashboard.
+
+    The overlay and dashboard are separate top-level windows with the same
+    local backend and WebView2 profile.  They are never parent/child windows,
+    and opening, hiding, or minimizing the dashboard can therefore not
+    navigate, minimize, or destroy the Mini Orb.
     """
 
     def __init__(self) -> None:
-        # pywebview reflects every public non-callable attribute into its JS
-        # bridge. Keeping the Window object public made its reflection walk
-        # recursively descend into the full WinForms/WebView2 COM graph on
-        # every navigation. That was captured in a real frozen-host stack in
-        # ``webview.util.get_functions`` / Accessibility. This must remain
-        # private: the browser needs the methods below, never the window.
-        self._window = None
-        self._orb_pos = None  # last known companion-orb position (x, y)
+        # All native objects stay private. pywebview reflects public fields to
+        # JavaScript and walking WinForms/WebView2 COM graphs can freeze hosts.
+        self._window = None  # compatibility alias for the one Mini Orb only
+        self._mini_window = None
+        self._dashboard_window = None
+        self._mini_loaded = False
+        self._orb_pos = _read_orb_position()
+        self._drag: dict[str, float] | None = None
+        self._window_lock = threading.RLock()
         self._bridge_lock = threading.Lock()
         self._active_bridge_callback = ""
         self._bridge_calls = 0
+        self._overlay_stop = threading.Event()
+        self._overlay_repair = threading.Event()
+        self._overlay_watchdog: threading.Thread | None = None
+        self._last_topmost_at = 0.0
+        self._shutting_down = False
+
+    def attach_mini_window(self, window) -> None:
+        with self._window_lock:
+            self._mini_window = window
+            self._window = window
 
     def _bridge_start(self, name: str) -> None:
         with self._bridge_lock:
@@ -216,143 +420,271 @@ class _DesktopApi:
                 self._active_bridge_callback = ""
 
     def host_heartbeat(self, sent_at_s: float) -> dict:
-        """Tiny renderer-to-host heartbeat; never performs GUI work itself."""
+        """Tiny renderer-to-host heartbeat; it never performs GUI work."""
         with self._bridge_lock:
             active = self._active_bridge_callback
             calls = self._bridge_calls
         from reyes_agent.performance_monitor import record_host_heartbeat
+
         delay = record_host_heartbeat(sent_at_s, active_callback=active,
                                       bridge_activity={"calls": calls})
         return {"delay_ms": round(delay * 1000, 1)}
 
     def toggle_fullscreen(self) -> bool:
-        if self._window is not None:
-            self._window.toggle_fullscreen()
-            return True
-        return False
-
-    # --- Desktop Companion Mode ---------------------------------------
-    # The mini orb is a real floating desktop companion: draggable, edge
-    # snapping, and it remembers where it was left. The native window has
-    # no title bar in mini mode, so dragging is done by the page reporting
-    # mouse deltas here and this moving the OS window to match.
-    def screen_size(self) -> dict:
-        try:
-            screens = webview.screens
-            if screens:
-                return {"w": screens[0].width, "h": screens[0].height}
-        except Exception:  # noqa: BLE001
-            pass
-        return {"w": 1920, "h": 1080}
-
-    def move_window(self, x: int, y: int) -> bool:
-        self._bridge_start("move_window")
-        w = self._window
-        if w is None:
-            self._bridge_end("move_window")
+        with self._window_lock:
+            dashboard = self._dashboard_window
+        if dashboard is None:
             return False
         try:
-            scr = self.screen_size()
-            # Clamp so the orb can never be dragged fully off-screen and
-            # become unreachable.
-            x = max(0, min(int(x), scr["w"] - 60))
-            y = max(0, min(int(y), scr["h"] - 60))
-            w.move(x, y)
-            self._orb_pos = (x, y)
+            dashboard.toggle_fullscreen()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    # --- One native, self-healing Mini Orb ---------------------------
+    def _recover_mini(self, *, force_topmost: bool = False) -> bool:
+        with self._window_lock:
+            mini = self._mini_window
+            saved = self._orb_pos or _read_orb_position()
+        if mini is None:
+            return False
+        rect = _native_window_rect(mini)
+        requested = saved or ((rect[0], rect[1]) if rect else (0, 0))
+        ok, repaired, actual = _restore_native_overlay(mini, requested, force_topmost=force_topmost)
+        if actual is not None:
+            with self._window_lock:
+                self._orb_pos = actual
+            if repaired or saved != actual:
+                _write_orb_position(actual)
+        if repaired:
+            try:
+                from reyes_agent import event_bus
+
+                event_bus.publish("desktop.mini_orb_recovered", {"x": actual[0], "y": actual[1]},
+                                  source="desktop_overlay")
+            except Exception:  # noqa: BLE001 -- recovery cannot depend on the server
+                pass
+        return ok
+
+    def start_overlay_watchdog(self) -> None:
+        """One low-frequency native health check, not a UI polling loop."""
+        with self._window_lock:
+            if self._overlay_watchdog is not None and self._overlay_watchdog.is_alive():
+                self._overlay_repair.set()
+                return
+            self._overlay_stop.clear()
+            self._overlay_repair.set()
+            self._overlay_watchdog = threading.Thread(
+                target=self._overlay_watchdog_loop, name="zeno-mini-orb-health", daemon=True,
+            )
+            self._overlay_watchdog.start()
+
+    def _overlay_watchdog_loop(self) -> None:
+        while not self._overlay_stop.is_set():
+            requested = self._overlay_repair.wait(_OVERLAY_HEALTH_INTERVAL_S)
+            self._overlay_repair.clear()
+            if self._overlay_stop.is_set():
+                return
+            now = time.monotonic()
+            force_topmost = requested or now - self._last_topmost_at >= _TOPMOST_REASSERT_INTERVAL_S
+            if self._recover_mini(force_topmost=force_topmost) and force_topmost:
+                self._last_topmost_at = now
+
+    def request_overlay_repair(self) -> None:
+        """Wake the bounded watchdog after a native minimize/hide signal."""
+        self._overlay_repair.set()
+
+    def load_mini_document(self) -> bool:
+        self._bridge_start("load_mini_document")
+        try:
+            self._recover_mini(force_topmost=True)
+            with self._window_lock:
+                mini = self._mini_window
+                loaded = self._mini_loaded
+            if mini is None:
+                return False
+            if not loaded:
+                mini.load_url(f"{_URL}/mini")
+                with self._window_lock:
+                    self._mini_loaded = True
             return True
         except Exception:  # noqa: BLE001
             return False
         finally:
+            self._bridge_end("load_mini_document")
+
+    def _move_orb_to(self, x: int, y: int, *, persist: bool) -> bool:
+        with self._window_lock:
+            mini = self._mini_window
+        if mini is None:
+            return False
+        areas = _windows_work_areas()
+        x, y = _visible_or_default_position(int(x), int(y), _MINI_SIZE, _MINI_SIZE, areas)
+        ok, _repaired, actual = _restore_native_overlay(mini, (x, y), force_topmost=True)
+        if actual is None:
+            actual = (x, y)
+        with self._window_lock:
+            self._orb_pos = actual
+        if persist:
+            _write_orb_position(actual)
+        return ok or _window_handle(mini) is None  # initial boot completes before an HWND exists
+
+    def move_window(self, x: int, y: int) -> bool:
+        """Compatibility bridge for an explicit owner move, never screen-zero clamped."""
+        self._bridge_start("move_window")
+        try:
+            return self._move_orb_to(int(x), int(y), persist=True)
+        finally:
             self._bridge_end("move_window")
 
-    def snap_orb(self, size: int = 210, margin: int = 30) -> dict:
-        """Snap the companion orb to the nearest edge/corner, then report
-        where it landed so the page can remember it."""
-        w = self._window
-        if w is None:
-            return {"ok": False}
-        scr = self.screen_size()
-        try:
-            x, y = getattr(self, "_orb_pos", (scr["w"] - size - margin, scr["h"] - size - 120))
-        except Exception:  # noqa: BLE001
-            x, y = scr["w"] - size - margin, scr["h"] - size - 120
-        # Horizontal: nearest of left / right. Vertical: nearest of top /
-        # bottom. That yields the four corners plus, when one axis is near
-        # centre, the edge positions in between.
-        left = margin
-        right = scr["w"] - size - margin
-        top = margin
-        bottom = scr["h"] - size - 120
-        snap_x = left if x < (scr["w"] / 2 - size / 2) else right
-        snap_y = top if y < (scr["h"] / 2 - size / 2) else bottom
-        self.move_window(snap_x, snap_y)
-        return {"ok": True, "x": snap_x, "y": snap_y}
+    def begin_orb_drag(self, screen_x: float, screen_y: float, css_width: float = _MINI_SIZE) -> bool:
+        """Capture a native starting rect so dragging survives DPI scaling."""
+        with self._window_lock:
+            mini = self._mini_window
+        rect = _native_window_rect(mini) if mini is not None else None
+        if rect is None:
+            return False
+        physical_per_css = max(0.5, min(3.0, rect[2] / max(1.0, float(css_width or _MINI_SIZE))))
+        with self._window_lock:
+            self._drag = {"screen_x": float(screen_x), "screen_y": float(screen_y),
+                          "native_x": float(rect[0]), "native_y": float(rect[1]),
+                          "scale": physical_per_css}
+        return True
 
-    def restore_orb_position(self, x: int, y: int) -> bool:
-        """Put the companion orb back where the user last left it."""
-        return self.move_window(x, y)
+    def move_orb_drag(self, screen_x: float, screen_y: float) -> bool:
+        """Coalesced browser calls land as native no-activate moves."""
+        with self._window_lock:
+            mini = self._mini_window
+            drag = dict(self._drag) if self._drag else None
+        if mini is None or drag is None:
+            return False
+        x = round(drag["native_x"] + (float(screen_x) - drag["screen_x"]) * drag["scale"])
+        y = round(drag["native_y"] + (float(screen_y) - drag["screen_y"]) * drag["scale"])
+        return _move_native_overlay(mini, x, y)
+
+    def end_orb_drag(self) -> dict:
+        """Persist a drag and repair only truly unreachable coordinates.
+
+        The orb may be placed anywhere.  It gently docks only when the owner
+        releases it within 16 physical pixels of a monitor edge.
+        """
+        with self._window_lock:
+            mini = self._mini_window
+            self._drag = None
+        rect = _native_window_rect(mini) if mini is not None else None
+        if rect is None:
+            return {"ok": False}
+        x, y, width, height = rect
+        areas = _windows_work_areas()
+        x, y = _visible_or_default_position(x, y, width, height, areas)
+        for left, top, work_width, work_height in areas:
+            if _intersection_area((x, y, width, height), (left, top, work_width, work_height)) < 48 * 48:
+                continue
+            right, bottom = left + work_width - width, top + work_height - height
+            if abs(x - left) <= 16:
+                x = left
+            elif abs(x - right) <= 16:
+                x = right
+            if abs(y - top) <= 16:
+                y = top
+            elif abs(y - bottom) <= 16:
+                y = bottom
+            break
+        ok = self._move_orb_to(x, y, persist=True)
+        return {"ok": bool(ok), "x": x, "y": y}
+
+    def snap_orb(self, size: int = _MINI_SIZE, margin: int = _ORB_MARGIN) -> dict:
+        """Legacy bridge name; preserves a free placement rather than forcing a corner."""
+        del size, margin
+        return self.end_orb_drag()
+
+    def restore_orb_position(self, x: int | None = None, y: int | None = None) -> bool:
+        # A native saved position wins. Optional JS coordinates migrate old
+        # localStorage positions only when no native position has been saved.
+        with self._window_lock:
+            saved = self._orb_pos or _read_orb_position()
+        if saved is None and x is not None and y is not None:
+            saved = (int(x), int(y))
+        if saved is None:
+            self.request_overlay_repair()
+            return True
+        return self._move_orb_to(saved[0], saved[1], persist=True)
 
     def set_mini(self, on: bool) -> bool:
-        """Shrink the whole window to a small corner orb (floating over
-        other apps) while REYES works, then restore. Called by the page
-        auto-shrink logic. Best-effort -- silently no-ops if the pywebview
-        build doesn't support a given call."""
-        w = self._window
-        if w is None:
-            return False
-        try:
-            screens = webview.screens
-            sw = screens[0].width if screens else 1920
-            sh = screens[0].height if screens else 1080
-        except Exception:  # noqa: BLE001
-            sw, sh = 1920, 1080
-        try:
-            try:
-                w.on_top = bool(on)          # float over apps in mini mode
-            except Exception:  # noqa: BLE001
-                pass
-            if on:
-                try:
-                    w.restore()
-                except Exception:  # noqa: BLE001
-                    pass
-                w.resize(210, 210)
-                w.move(sw - 240, sh - 300)   # bottom-right corner
-            else:
-                w.resize(1600, 1000)
-                w.move(max(0, (sw - 1600) // 2), max(0, (sh - 1000) // 2))
-        except Exception:  # noqa: BLE001
-            return False
+        """Compatibility API: the orb is always independent and available."""
+        if on:
+            self.request_overlay_repair()
+            return self.load_mini_document()
         return True
 
     def show_mini(self) -> bool:
-        """Switch this one WebView to the lightweight companion document."""
-        self._bridge_start("show_mini")
-        if not self.set_mini(True) or self._window is None:
-            self._bridge_end("show_mini")
-            return False
-        try:
-            self._window.load_url(f"{_URL}/mini")
+        return self.load_mini_document()
+
+    # --- Lazy dashboard ------------------------------------------------
+    def _ensure_dashboard(self):
+        with self._window_lock:
+            existing = self._dashboard_window
+            if existing is not None:
+                return existing
+            dashboard = webview.create_window(
+                title=config.ASSISTANT_NAME,
+                url=_DASHBOARD_URL,
+                width=1600,
+                height=1000,
+                min_size=(900, 600),
+                background_color="#050b1e",
+                js_api=self,
+                on_top=False,
+            )
+            if dashboard is not None:
+                dashboard.events.closing += self._hide_dashboard_on_close
+                self._dashboard_window = dashboard
+            return dashboard
+
+    def _hide_dashboard_on_close(self) -> bool:
+        """Close means hide dashboard; only an explicit Mini Orb close exits ZENO."""
+        if self._shutting_down:
             return True
-        except Exception:  # noqa: BLE001
-            return False
-        finally:
-            self._bridge_end("show_mini")
+        with self._window_lock:
+            dashboard = self._dashboard_window
+        hwnd = _window_handle(dashboard)
+        if hwnd and sys.platform == "win32":
+            try:
+                import ctypes
+
+                ctypes.windll.user32.ShowWindowAsync(hwnd, 0)  # SW_HIDE, no focus changes
+            except Exception:  # noqa: BLE001
+                pass
+        return False
 
     def show_dashboard(self) -> bool:
-        """Return the same WebView (not a second frontend) to the dashboard."""
+        """Open the lazy dashboard without navigating, hiding, or resizing the orb."""
         self._bridge_start("show_dashboard")
-        if self._window is None:
-            self._bridge_end("show_dashboard")
-            return False
         try:
-            self.set_mini(False)
-            self._window.load_url(_URL)
+            dashboard = self._ensure_dashboard()
+            if dashboard is None:
+                return False
+            try:
+                dashboard.restore()
+            except Exception:  # noqa: BLE001
+                pass
+            # This is an explicit click/wake request, so activating the
+            # dashboard is appropriate. The watchdog never calls show().
+            dashboard.show()
+            self.request_overlay_repair()
             return True
         except Exception:  # noqa: BLE001
             return False
         finally:
             self._bridge_end("show_dashboard")
+
+    def shutdown(self) -> None:
+        self._shutting_down = True
+        self._overlay_stop.set()
+        self._overlay_repair.set()
+        thread = self._overlay_watchdog
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
 
 
 def main() -> None:
@@ -367,22 +699,27 @@ def main() -> None:
 
     try:
         api = _DesktopApi()
-        # ZENO starts as the compact, frameless companion. The full dashboard
-        # is intentionally opt-in through the Mini Orb's Open button.
+        # ZENO starts as one compact, frameless native overlay. The dashboard
+        # is a separate *lazy* child window created only when the owner opens
+        # it, so it cannot replace or hide the Mini Orb.
         window = webview.create_window(
-            title=config.ASSISTANT_NAME,
+            title=f"{config.ASSISTANT_NAME} Mini Orb",
             html=_BOOT_HTML,
-            width=210,
-            height=210,
-            min_size=(210, 210),
+            width=_MINI_SIZE,
+            height=_MINI_SIZE,
+            min_size=(_MINI_SIZE, _MINI_SIZE),
             background_color="#000000",
             frameless=True,
             on_top=True,
+            focus=False,
+            easy_drag=False,
             js_api=api,
         )
-        api._window = window
+        api.attach_mini_window(window)
         try:
-            window.events.minimized += lambda: api.show_mini()
+            window.events.minimized += api.request_overlay_repair
+            window.events.restored += api.request_overlay_repair
+            window.events.closed += api.shutdown
         except Exception:  # noqa: BLE001 -- older pywebview builds lack this event
             pass
         # debug=False -- user does not want the right-click "Inspect"
@@ -391,10 +728,11 @@ def main() -> None:
         # made Windows ask for microphone permission after every restart.
         # This app-local profile preserves the user's one-time grants.
         webview.start(
-            _load_when_ready, args=(window, api), debug=False,
+            _load_when_ready, args=(api,), debug=False,
             private_mode=False, storage_path=str(_WEBVIEW_STORAGE),
         )
         # Window closed -> shut the server process down so it doesn't linger.
+        api.shutdown()
         _stop_server()
     finally:
         instance.release()

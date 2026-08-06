@@ -21,6 +21,11 @@ const STATES = {
   // as possible to the same color language the ticker/GUI already uses.
   idle:          { hue: 187, spin: 22, eyes: "calm" },
   listening:     { hue: 32,  spin: 16, eyes: "attentive" },
+  understanding: { hue: 208, spin: 15, eyes: "attentive" },
+  thinking:      { hue: 259, spin: 9,  eyes: "focused" },
+  acting:        { hue: 306, spin: 8,  eyes: "focused" },
+  waiting:       { hue: 56,  spin: 28, eyes: "scanning" },
+  success:       { hue: 137, spin: 20, eyes: "bright" },
   processing:    { hue: 259, spin: 9,  eyes: "focused" },
   speaking:      { hue: 180, spin: 7,  eyes: "calm" },
   error:         { hue: 356, spin: 26, eyes: "concerned" },
@@ -174,9 +179,10 @@ export function initOrb(canvas) {
     root.style.setProperty("--orb-hue", String(currentHue));
     root.style.setProperty("--orb-spin", s.spin + "s");
     setEyes(s.eyes || "calm");
-    setParticleCount({ idle: 16, listening: 24, processing: 34, speaking: 28,
-      error: 14, searching: 32, coding: 34, creating: 30, communicating: 24,
-      learning: 28, reasoning: 34, sleeping: 12 }[name] || 16);
+    setParticleCount({ idle: 14, listening: 22, understanding: 24, thinking: 30,
+      acting: 32, waiting: 16, success: 18, processing: 30, speaking: 24,
+      error: 12, searching: 28, coding: 30, creating: 26, communicating: 22,
+      learning: 24, reasoning: 30, sleeping: 10 }[name] || 14);
   }
 
   // One small canvas and a fixed object pool: no particle DOM nodes, no

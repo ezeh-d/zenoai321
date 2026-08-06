@@ -110,12 +110,15 @@ def _check_dream_mode() -> None:
         return
     _last_dream_at = now
     try:
-        from reyes_agent.tools.rag import reindex_vault
+        # Full maintenance sweep (dream_mode.py): reindex, archive duplicate
+        # memories, write the day summary, flag stalled work, assemble
+        # tomorrow's agenda. All deterministic/local -- no cloud AI usage --
+        # and it re-checks idle between passes, so the user coming back
+        # stops it rather than competing for the machine.
+        from reyes_agent import dream_mode, heartbeat
 
-        result = reindex_vault()
-        from reyes_agent import heartbeat
-
-        heartbeat._add_notice("dream", f"Dream Mode maintenance: {result}")
+        report = dream_mode.run()
+        heartbeat._add_notice("dream", report.summary())
     except Exception:  # noqa: BLE001 -- maintenance failing must not crash the loop
         pass
 

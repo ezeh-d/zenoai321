@@ -101,7 +101,7 @@ def explore_knowledge(topic: str, depth: int = 1) -> str:
 )
 def research_lab(topic: str, questions: list | None = None) -> str:
     from reyes_agent.tools.missions import create_mission, list_missions_dicts, update_mission
-    from reyes_agent.tools.notes import write_note
+    from reyes_agent.tools.obsidian import write_note
     from reyes_agent.tools.subagents import delegate
 
     topic = topic.strip()

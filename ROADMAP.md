@@ -40,10 +40,14 @@ merged parallel calls into one and corrupted their arguments — fixed in
 `tools/missions.py` — bounded state machine, objectives, progress, log,
 GUI panel, ATLAS integration. Campaigns mirror into missions.
 
-## Phase 5 — Living Memory · PARTIAL
-**Done:** vault notes, semantic search over real embeddings
-(`tools/rag.py`), memory facts, activity history, Event Bus history.
-**Gap:** no memory versioning, no merge/split/archive UI.
+## Phase 5 — Living Memory · DONE
+`living_memory.py` — file-backed canonical records with immutable version
+snapshots, edit/compare/restore, archive/restore/delete/purge, merge and
+split (both with previews), and importance/recall tracking. Semantic
+search over real embeddings (`tools/rag.py`), plus activity and Event Bus
+history. Dream Mode archives near-duplicates reversibly (never purges).
+The legacy SQLite `facts` table is imported once for compatibility and is
+no longer the authority. Existing memories were preserved throughout.
 
 ## Phase 6 — Knowledge Graph · DONE
 `knowledge_graph.py` — real entities and edges from the vault:
@@ -120,9 +124,15 @@ voice, then ZENO summarises).
 **Gap:** no single unified "home screen"/Situation Room composing them
 into one view.
 
-## Phase 15 — Dream Mode · PARTIAL
-**Done:** idle detection, reindexing on idle, proactive nudges.
-**Gap:** no day-summary generation or agenda preparation.
+## Phase 15 — Dream Mode · DONE
+`dream_mode.py` — five idle passes: knowledge upkeep (reindex + orphan
+report), memory de-duplication (archives near-duplicates reversibly),
+daily summary written from recorded activity, stalled-work detection, and
+tomorrow's agenda. **Zero cloud AI usage by design** — every pass is
+local SQL/set/string work, so the summary's figures are counts of real
+rows rather than model prose. Re-checks idle between passes, so the user
+returning stops the run. Verified: 5/5 passes in 0.6s, real summary note
+written.
 
 ## Phase 16 — Digital DNA · DONE
 `digital_dna` computes the working-pattern profile from the REAL
@@ -142,8 +152,39 @@ Every artefact it reports exists on disk.
 
 ## Phase 18 — Plugin System · DONE
 Manifest-declared permissions, capability validation, per-version user
-approval, audit logging. **Named limit:** approved plugins are not
-sandboxed — the gate controls whether code loads, not what it does after.
+approval, audit logging, **and run-time enforcement** (`plugin_sandbox.py`).
+Plugins execute with restricted builtins: guarded `open()` (writes need
+`filesystem_write`, outside reads need `filesystem_read`), guarded
+`__import__` (network/subprocess/desktop-automation modules each need
+their capability), `eval`/`exec`/`compile` removed, and only
+`reyes_agent.tools` reachable — behind a proxy that exposes `register`
+only. Credentials and the permission engine are never importable at any
+level. Every attempt is audited.
+
+Verified 8/8 against real plugin files, including two bugs the tests
+caught in the first implementation: `from reyes_agent import config`
+bypassed the name check and **printed a live API key**, and attribute
+traversal could reach the same object even with the import blocked. Both
+closed, then re-verified; a normal plugin can still register tools.
+
+**Named limit, unchanged in substance:** this is a same-process
+capability guard, not a security boundary. It stops casual/accidental
+over-reach and makes attempts visible; a determined hostile plugin can
+still escape it. True isolation needs a separate OS-sandboxed process,
+which is NOT implemented.
+
+## Phase 10b — OCR / Document Intelligence · DONE (with named gaps)
+`ocr.py` + `tools/ocr_tools.py`. Uses the OCR engine built into Windows
+via `winsdk` (already a dependency) — Tesseract was rejected on evidence:
+neither `pytesseract` nor its native binary is installed, so wiring it
+would have shipped a module that imports and then fails. Screen-region and
+full-screen OCR, image OCR, and direct reads for text/markdown/csv/code.
+Temporary screen captures are deleted after reading. Confidence is a
+labelled heuristic (word-shape/length/volume), never presented as an
+engine score. Verified: 617 words read off the live screen at 0.97.
+**Gaps, reported by the tool rather than hidden:** PDF/DOCX/XLSX/PPTX need
+libraries that are not installed and say so explicitly instead of
+returning empty text.
 
 ## Phase 19 — Command Center · DONE
 **Situation Room** (`GET /api/situation` + full GUI): six live panels —

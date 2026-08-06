@@ -17,30 +17,40 @@ async function refresh(){
     const agent=data.agents&&data.agents[0]?` · ${data.agents[0]}`:'';
     const text=task.name?`${task.name} · ${progress.stage||'working'}${elapsed}${agent}`:'ZENO · idle';
     document.title=text;
-    if(task.name||mode==='WORKFLOW_RUNNING')orb.setState('processing');
+    const stage=String(progress.stage||'').toLowerCase();
+    if(mode==='WORKFLOW_FAILED'||mode==='WORKFLOW_CANCELLED')orb.setState('error');
+    else if(mode==='WORKFLOW_COMPLETED')orb.setState('success');
+    else if(mode==='WORKFLOW_WAITING_FOR_INPUT'||mode==='WORKFLOW_WAITING_FOR_CONFIRMATION')orb.setState('waiting');
+    else if(mode==='WORKFLOW_RUNNING')orb.setState('acting');
+    else if(mode==='TEACH_MODE_STARTING'||mode==='TEACH_MODE_REVIEW')orb.setState('understanding');
     else if(mode.startsWith('TEACH_MODE_'))orb.setState('listening');
-    else if(mode==='WORKFLOW_FAILED')orb.setState('error');
+    else if(/listen|speech|transcrib/.test(stage))orb.setState('listening');
+    else if(/understand|plan|verif/.test(stage))orb.setState('understanding');
+    else if(/think|reason|process/.test(stage))orb.setState('thinking');
+    else if(/wait|queue/.test(stage)||(!task.name&&data.queue_depth))orb.setState('waiting');
+    else if(task.name||data.active_count||data.agents?.length)orb.setState('acting');
     else orb.setState('idle');
-  }catch(e){orb.setState('error');}
+  }catch(_e){/* Preserve the last honest state during a transient local request failure. */}
 }
 refresh();setInterval(()=>{if(!document.hidden)refresh();},2000);
-let dragging=false,moved=false,startX=0,startY=0,winX=0,winY=0,moveInFlight=false,queuedMove=null;
+let dragging=false,moved=false,startX=0,startY=0,moveInFlight=false,queuedMove=null;
 function flushMove(){
   if(moveInFlight||!queuedMove)return;
   const point=queuedMove;queuedMove=null;const a=api();
-  if(!a||!a.move_window)return;
+  if(!a||(typeof a.move_orb_drag!=='function'&&typeof a.move_window!=='function'))return;
   moveInFlight=true;
-  a.move_window(point.x,point.y).catch(()=>{}).finally(()=>{moveInFlight=false;if(queuedMove)requestAnimationFrame(flushMove);});
+  const move=typeof a.move_orb_drag==='function'?a.move_orb_drag(point.screenX,point.screenY):a.move_window(point.screenX,point.screenY);
+  Promise.resolve(move).catch(()=>{}).finally(()=>{moveInFlight=false;if(queuedMove)requestAnimationFrame(flushMove);});
 }
-document.addEventListener('mousedown',e=>{const a=api();if(!a||!a.move_window)return;dragging=true;moved=false;startX=e.screenX;startY=e.screenY;const saved=JSON.parse(localStorage.getItem('zeno_orb_pos')||'null');winX=saved?saved.x:0;winY=saved?saved.y:0;document.body.classList.add('dragging');});
-document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX-startX,dy=e.screenY-startY;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;queuedMove={x:winX+dx,y:winY+dy};requestAnimationFrame(flushMove);});
-document.addEventListener('mouseup',()=>{if(!dragging)return;dragging=false;document.body.classList.remove('dragging');const a=api();if(a&&a.snap_orb)a.snap_orb().then(p=>{if(p&&p.ok)localStorage.setItem('zeno_orb_pos',JSON.stringify({x:p.x,y:p.y}));});});
+document.addEventListener('mousedown',e=>{const a=api();if(!a)return;dragging=true;moved=false;startX=e.screenX;startY=e.screenY;document.body.classList.add('dragging');if(a.begin_orb_drag)a.begin_orb_drag(e.screenX,e.screenY,window.outerWidth||210).catch(()=>{});});
+document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX-startX,dy=e.screenY-startY;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;queuedMove={screenX:e.screenX,screenY:e.screenY};requestAnimationFrame(flushMove);});
+document.addEventListener('mouseup',()=>{if(!dragging)return;dragging=false;document.body.classList.remove('dragging');const a=api();if(a){const end=a.end_orb_drag||a.snap_orb;if(end)Promise.resolve(end.call(a)).catch(()=>{});}});
 document.addEventListener('click',()=>{if(!moved)openDashboard();});
-window.addEventListener('pywebviewready',()=>{const saved=JSON.parse(localStorage.getItem('zeno_orb_pos')||'null'),a=api();if(saved&&a&&a.restore_orb_position)a.restore_orb_position(saved.x,saved.y);});
+window.addEventListener('pywebviewready',()=>{const a=api();if(a&&a.restore_orb_position)a.restore_orb_position().catch(()=>{});});
 // One awaited heartbeat (max 4/s) proves that WebView messages are crossing
 // into the Python host. It is never tied to animation frames and cannot
 // accumulate bridge calls while the host is delayed.
-setInterval(async()=>{const a=api();if(!document.hidden&&a&&a.host_heartbeat){try{await a.host_heartbeat(Date.now()/1000);}catch(_e){}}},250);
+setInterval(async()=>{const a=api();if(!document.hidden&&a&&a.host_heartbeat){try{await a.host_heartbeat(Date.now()/1000);}catch(_e){}}},1000);
 // The compact companion uses the same *processed* microphone stream as the
 // dashboard. A second Web Speech capture here would bypass VAD/noise
 // suppression and produce a second permission/session inside one WebView.
