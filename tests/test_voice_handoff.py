@@ -24,6 +24,18 @@ def test_miniorb_reacquires_after_dashboard_hides_and_keeps_persistent_profile()
     assert "type === 'desktop.dashboard_hidden' && ambientEnabled" in dashboard
 
 
+def test_miniorb_executes_a_wake_word_command_without_showing_the_dashboard() -> None:
+    """The Mini Orb is the normal voice surface, not just a dashboard opener."""
+    mini = (ROOT / "reyes_agent" / "static" / "mini.html").read_text(encoding="utf-8")
+    assert "function miniWakeCommand(transcript)" in mini
+    assert "fetch('/api/chat'" in mini
+    assert "fetch('/api/tts'" in mini
+    assert "voiceVAD.pauseDetection()" in mini
+    assert "await runMiniCommand(command,data)" in mini
+    # The old behavior discarded the command by doing only this after STT.
+    assert "test(String(data.transcript||'')))openDashboard()" not in mini
+
+
 def test_vad_retries_only_the_unsupported_optional_constraint() -> None:
     vad = (ROOT / "reyes_agent" / "static" / "vad.js").read_text(encoding="utf-8")
     assert 'err && err.name === "OverconstrainedError"' in vad
