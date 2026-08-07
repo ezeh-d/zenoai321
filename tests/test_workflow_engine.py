@@ -205,7 +205,12 @@ def test_voice_tools_web_api_and_mini_orb_share_one_workflow_runtime() -> None:
     assert {"workflow_teach", "workflow_run", "workflow_confirm"}.issubset(TOOLS)
     assert TOOLS["workflow_confirm"].requires_confirmation is True
     assert permissions.capability_for_tool("workflow_confirm") == "desktop_automation"
-    paths = {route.path for route in app.routes}
+    # Read the paths FastAPI actually reports. `app.routes` is not a flat
+    # list of endpoints: an included APIRouter appears as a single
+    # `_IncludedRouter` with no `.path`, so iterating it and touching
+    # `.path` breaks the moment any router is mounted (the /api/v1 remote
+    # API now is one). The OpenAPI schema is the real registration record.
+    paths = set(app.openapi()["paths"])
     assert {"/api/workflows", "/api/workflows/teach", "/api/workflows/run"}.issubset(paths)
     mini = (ROOT / "reyes_agent" / "static" / "mini.html").read_text(encoding="utf-8")
     assert "data.workflow" in mini
