@@ -155,6 +155,11 @@ VAULT_PATH = Path(os.environ.get("VAULT_PATH", str(PROJECT_ROOT / "REYES"))).exp
 # their own seams in reyes_agent/voice/.
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_MODEL = os.environ.get("DEEPGRAM_MODEL", "nova-3").strip()
+DEEPGRAM_LANGUAGE = os.environ.get("DEEPGRAM_LANGUAGE", "en").strip() or "en"
+DEEPGRAM_KEYTERMS = tuple(
+    term.strip() for term in os.environ.get("DEEPGRAM_KEYTERMS", "Zeno,Divine").split(",")
+    if term.strip()
+)
 # One short, processed utterance should never hold a voice worker for the
 # general 90-second model deadline. These settings are also exposed through
 # /api/speech/capabilities so both WebView microphone owners use one policy.

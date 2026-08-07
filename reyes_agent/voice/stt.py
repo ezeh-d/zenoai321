@@ -44,6 +44,8 @@ def transcribe_result(wav_bytes: bytes) -> dict[str, str | float | None]:
         resp = client.listen.v1.media.transcribe_file(
             request=wav_bytes,
             model=config.DEEPGRAM_MODEL,
+            language=config.DEEPGRAM_LANGUAGE,
+            keyterm=list(config.DEEPGRAM_KEYTERMS) if config.DEEPGRAM_MODEL.startswith("nova-3") else None,
             smart_format=True,
             punctuate=True,
             # The SDK's request timeout interrupts the actual httpx call.
