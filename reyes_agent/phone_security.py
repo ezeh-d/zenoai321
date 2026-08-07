@@ -141,11 +141,27 @@ class PhoneSecurity:
                          (_hash(_b64(challenge)), _b64(challenge), purpose, subject, time.time() + CHALLENGE_TTL_S))
 
     def _take_challenge(self, challenge: str, purpose: str) -> sqlite3.Row:
+        """Consume a verification challenge exactly once.
+
+        The conditional update is the authority here.  A read followed by an
+        unconditional update allowed two concurrent requests to both observe
+        the same unused challenge before either one marked it consumed.
+        """
+        now = time.time()
         with self._connection() as conn:
-            row = conn.execute("SELECT * FROM challenges WHERE challenge_hash=?", (_hash(challenge),)).fetchone()
-            if not row or row["purpose"] != purpose or row["used"] or row["expires"] < time.time():
+            row = conn.execute(
+                "SELECT * FROM challenges WHERE challenge_hash=? AND purpose=?",
+                (_hash(challenge), purpose),
+            ).fetchone()
+            if not row:
                 raise PermissionError("Verification challenge expired or was already used.")
-            conn.execute("UPDATE challenges SET used=1 WHERE challenge_hash=?", (row["challenge_hash"],))
+            consumed = conn.execute(
+                "UPDATE challenges SET used=1 WHERE challenge_hash=? AND purpose=? "
+                "AND used=0 AND expires>?",
+                (row["challenge_hash"], purpose, now),
+            )
+            if consumed.rowcount != 1:
+                raise PermissionError("Verification challenge expired or was already used.")
         return row
 
     def finish_registration(self, credential: dict[str, Any], challenge: str, origin: str, rp_id: str) -> str:
@@ -158,7 +174,7 @@ class PhoneSecurity:
         device_id = str(uuid.uuid4())
         with self._connection() as conn:
             conn.execute("UPDATE pairs SET consumed=1 WHERE token_hash=?", (subject["pair"],))
-            conn.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (
+            conn.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
                 device_id, subject["name"], _b64(verified.credential_id), verified.credential_public_key,
                 verified.sign_count, PENDING_APPROVAL, json.dumps(sorted(DEFAULT_SCOPES)), time.time(), None, None, None))
         self._audit("device_pending", device_id, name=subject["name"])

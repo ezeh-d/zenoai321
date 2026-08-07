@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from reyes_agent.phone_security import PhoneSecurity, TRUSTED, _b64, _hash
+from reyes_agent import phone_security
+from reyes_agent.phone_security import PENDING_APPROVAL, PhoneSecurity, TRUSTED, _b64, _hash
 
 
 def _security() -> tuple[tempfile.TemporaryDirectory[str], PhoneSecurity]:
@@ -47,6 +48,32 @@ def test_challenge_cannot_be_taken_twice_serially() -> None:
         else:
             raise AssertionError("a consumed challenge was accepted again")
     finally:
+        temp.cleanup()
+
+
+def test_registration_persists_a_pending_device() -> None:
+    """A verified WebAuthn registration must match the durable table schema."""
+    temp, security = _security()
+    original_verifier = phone_security.verify_registration_response
+
+    class VerifiedCredential:
+        credential_id = b"credential-id"
+        credential_public_key = b"public-key"
+        sign_count = 7
+
+    try:
+        pair = security.create_pair()
+        options = security.registration_options(pair["token"], "Divine phone", "zeno.example.test")
+        phone_security.verify_registration_response = lambda **_kwargs: VerifiedCredential()  # type: ignore[assignment]
+        device_id = security.finish_registration(
+            {}, options["challenge"], "https://zeno.example.test", "zeno.example.test"
+        )
+        device = security._device(device_id)
+        assert device["state"] == PENDING_APPROVAL
+        assert device["sign_count"] == 7
+        assert not security._valid_pair(pair["token"])
+    finally:
+        phone_security.verify_registration_response = original_verifier
         temp.cleanup()
 
 
