@@ -38,9 +38,9 @@ overwrite.
 ---
 
 **Agent:** CODEX
-**Task:** _(unclaimed — CODEX to fill in)_
+**Task:** — (Speech repair landed; files released)
 **Files:** —
-**Status:** —
+**Status:** IDLE
 
 Highest-value parallel work now that phase 1 is committed:
 - **Attack-test the new surface.** Put them in
@@ -89,6 +89,18 @@ session → "Hello ZENO" → real reply from the same brain (12s) → FINANCIAL
 and SENSITIVE refused 403 → read-only views → disallowed website action
 refused → revoked device 401 immediately → reconnect → audit carries no
 token.
+
+**Agent:** CODEX
+**Task:** Speech input stability, endpointing and noisy-room calibration
+**Commits:** `3b50562`, `3fd085b`
+**Tests:** all 36 standalone test files passed; focused speech/VAD/Mini Orb,
+startup, worker and workflow groups passed.
+**Measured:** live Deepgram sample after warm-up averaged **1.40s** (0.54s
+best, 2.01s worst across three calls); ZENO wake name recognized in all three.
+**Summary:** short noise clips now exit PROCESSING, ambient floor calibrates
+in 750ms, speech ends after 700ms silence, utterances cap at 12s, browser and
+provider calls have coordinated 12s deadlines, and Nova-3 receives ZENO name
+key-term prompting.
 
 ---
 
