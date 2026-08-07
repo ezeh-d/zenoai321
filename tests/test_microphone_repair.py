@@ -35,10 +35,21 @@ def test_windows_denial_wins_over_browser_error() -> None:
     assert report.cause == microphone.WINDOWS_PERMISSION_DENIED
 
 
-def test_webview2_denial_is_not_misreported_as_windows_denial() -> None:
-    report = _diagnose(browser_error="NotAllowedError")
+def test_confirmed_webview2_denial_is_not_misreported_as_windows_denial() -> None:
+    report = _diagnose(browser_error="NotAllowedError", permission_state="denied")
     assert report.cause == microphone.WEBVIEW2_PERMISSION_DENIED
-    assert "Windows allows" in report.summary
+    assert "currently reports" in report.summary
+
+
+def test_unconfirmed_not_allowed_does_not_claim_a_past_profile_refusal() -> None:
+    report = _diagnose(browser_error="NotAllowedError")
+    assert report.cause == microphone.MIC_PERMISSION_DENIED
+    assert "could not be confirmed" in report.summary
+    assert "dismissed" not in report.summary
+
+    granted = _diagnose(browser_error="NotAllowedError", permission_state="granted")
+    assert granted.cause == microphone.DEVICE_INITIALIZATION_FAILED
+    assert "not evidence" in granted.fix
 
 
 def test_device_busy_and_missing_selected_device_have_distinct_states() -> None:
@@ -63,6 +74,9 @@ def test_frontend_uses_selected_device_meter_and_bounded_recovery() -> None:
     assert "voiceVAD.start({ deviceId: selectedMicrophoneId() })" in dashboard
     assert "voiceVAD.onLevel(noteMicLevel)" in dashboard
     assert "micRecoveryAttempts >= 2" in dashboard
+    assert "max-width: min(680px, 92vw)" in dashboard
+    assert "function renderMicDiagnosis(d)" in dashboard
+    assert "micStatusEl.textContent = d.summary || 'Microphone unavailable.';" in dashboard
     assert "voiceVAD.start({deviceId:selectedMicrophoneId()})" in mini
     assert "voiceVAD.onCaptureStopped" in mini
     assert "used_fallback_device" in vad and "onCaptureStopped" in vad

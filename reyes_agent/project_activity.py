@@ -9,15 +9,12 @@ view and is capped so a long coding session cannot grow ZENO indefinitely.
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any
-
-from reyes_agent import config
 
 _lock = threading.RLock()
 _projects: dict[str, dict[str, Any]] = {}
@@ -96,22 +93,24 @@ def _project(name: str) -> dict[str, Any]:
         return _projects.get(_key(name)) or _new_project(name)
 
 
+def desktop_path() -> Path:
+    """The owner's REAL Desktop, honouring OneDrive/redirection.
+
+    The Known Folder resolution itself now lives in
+    ``reyes_agent.executors.desktop`` so the build pipeline and this older
+    write path cannot drift apart about where the Desktop is -- two answers
+    to that question is exactly how a file ends up somewhere the owner
+    cannot see it. Kept here as the name other modules already import.
+    """
+    from reyes_agent.executors import desktop as desktop_executor
+
+    return desktop_executor.desktop_path()
+
+
 def _user_folder(name: str) -> Path:
-    home = Path(os.environ.get("USERPROFILE") or Path.home())
-    label = " ".join(name.strip().casefold().replace("_", " ").replace("-", " ").split())
-    if label in {"desktop", "my desktop"}:
-        return home / "Desktop"
-    if label in {"documents", "document", "my documents"}:
-        return home / "Documents"
-    if label in {"zeno projects", "zeno project", "zeno"}:
-        return config.VAULT_PATH / "02-Projects"
-    raw = Path(name).expanduser()
-    if not raw.is_absolute():
-        raise ValueError("Choose Desktop, Documents, ZENO Projects, or provide a full folder path.")
-    resolved = raw.resolve()
-    if resolved == Path(resolved.anchor):
-        raise ValueError("A drive root is not a valid project destination.")
-    return resolved
+    from reyes_agent.executors import desktop as desktop_executor
+
+    return desktop_executor.resolve_destination(name)
 
 
 def request_destination(name: str) -> dict[str, Any]:

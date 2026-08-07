@@ -231,7 +231,11 @@ def test_browser_runtime_returns_at_its_deadline_without_blocking_caller() -> No
             pass
         else:
             raise AssertionError("A stalled browser action did not time out")
-        assert time.monotonic() - started < 0.12
+        # Semantic proof, not a scheduler-sensitive wall-clock target: the
+        # caller must return while the deliberately stalled owner action is
+        # still running. This catches a synchronous wait without flaking on
+        # a loaded Windows machine.
+        assert not finished.is_set(), "caller waited for the stalled browser action"
         assert finished.wait(1.0)
         # The same dedicated owner worker remains usable after the timed-out
         # caller returns; this mirrors a Playwright operation completing just

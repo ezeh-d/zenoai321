@@ -314,7 +314,10 @@ def _run_openai_compatible(
         model=model,
         messages=_to_openai_messages(history, system),
         stream=True,
-        max_tokens=600,  # bounds worst-case generation time -- replies are meant to be short anyway
+        # High enough that a tool call carrying real file contents can
+        # finish. See config.MAX_OUTPUT_TOKENS for why 600 was actively
+        # harmful rather than merely conservative.
+        max_tokens=config.MAX_OUTPUT_TOKENS,
     )
     if tools:
         kwargs["tools"] = _to_openai_tools(tools)
@@ -379,7 +382,12 @@ def _run_openai_compatible(
         try:
             tool_input = json.loads(slot["arguments"] or "{}")
         except json.JSONDecodeError:
-            tool_input = {}
+            # Almost always a call cut off at the output limit mid-JSON.
+            # Collapsing it to {} silently turned "write these six files"
+            # into a no-op the model then had to explain away. Marked
+            # instead, so run_tool can tell it exactly what went wrong and
+            # it can retry with fewer files per call.
+            tool_input = {"__truncated_arguments__": len(slot["arguments"] or "")}
         tool_calls.append(
             ToolCall(
                 id=slot["id"] or f"call_{i}",
@@ -480,6 +488,7 @@ def run_turn(
     tools: list[dict] | None = None,
     on_text: OnText | None = None,
     cancel_check: Callable[[], None] | None = None,
+    task_kind: str = "",
 ) -> AgentTurn:
     """Send the conversation (+ optional tool definitions), get back one turn.
 
@@ -497,9 +506,26 @@ def run_turn(
     immediately. Non-retryable errors (bad key, bad input, unknown
     provider) raise on the first attempt, same as before -- retrying those
     would just fail the same way three times instead of once.
+
+    CROSS-PROVIDER FALLBACK (added 2026-08-07)
+    ------------------------------------------
+    This used to retry `config.MODEL_PROVIDER` three times and then give
+    up, while `model_router` computed a perfectly good fallback chain that
+    nothing ever read. So one provider outage took ZENO down even with two
+    other working API keys configured. Now the chain is walked: each
+    provider gets its retry budget for transient errors, and a provider
+    that is genuinely down (bad key, model gone, breaker open) is skipped
+    so the next one answers.
+
+    `task_kind` comes from cognition.Route.model_kind, so a coding question
+    can prefer a different provider from a research one -- when more than
+    one is configured. With a single key the chain has one entry and this
+    is a no-op, which `model_router.explain()` states plainly.
     """
-    runner = _RUNNERS.get(config.MODEL_PROVIDER)
-    if runner is None:
+    from reyes_agent import model_router
+
+    chain = [p for p in model_router.chain_for(task_kind or "general") if p in _RUNNERS]
+    if not chain:
         raise ProviderError(
             f"Unknown MODEL_PROVIDER '{config.MODEL_PROVIDER}'. "
             f"Valid options: {', '.join(_RUNNERS)}."
@@ -509,48 +535,62 @@ def run_turn(
     api_history = personality.append_voice_cue(_windowed(history))
 
     last_exc: ProviderError | None = None
-    for attempt in range(_MAX_RETRY_ATTEMPTS):
-        if cancel_check:
-            cancel_check()
-        emitted = False
+    emitted = False   # once ANY token reached the caller, switching would duplicate it
 
-        def _tracking_on_text(chunk: str) -> None:
-            nonlocal emitted
+    for provider in chain:
+        runner = _RUNNERS[provider]
+        for attempt in range(_MAX_RETRY_ATTEMPTS):
             if cancel_check:
                 cancel_check()
-            emitted = True
-            if on_text:
-                on_text(chunk)
 
-        _t0 = time.time()
-        try:
-            _result = runner(api_history, system, tools or [], _tracking_on_text)
-            # Real measured latency feeds the Model Router's health/metrics.
-            # Never estimated -- see model_router.py.
-            try:
-                from reyes_agent import model_router
-
-                model_router.record(config.MODEL_PROVIDER, time.time() - _t0, ok=True)
-            except Exception:  # noqa: BLE001 -- telemetry must not break a turn
-                pass
-            return _result
-        except ProviderError as exc:
-            try:
-                from reyes_agent import model_router
-
-                model_router.record(config.MODEL_PROVIDER, time.time() - _t0, ok=False, error=str(exc))
-            except Exception:  # noqa: BLE001
-                pass
-            last_exc = exc
-            if emitted or not exc.retryable or attempt == _MAX_RETRY_ATTEMPTS - 1:
-                raise
-            delay = _RETRY_BASE_DELAY_S * (2**attempt)
-            # Backoff must not keep a cancelled request alive. Use short waits
-            # only here (not a polling worker loop) so cancellation is prompt.
-            while delay > 0:
+            def _tracking_on_text(chunk: str) -> None:
+                nonlocal emitted
                 if cancel_check:
                     cancel_check()
-                slice_s = min(0.1, delay)
-                time.sleep(slice_s)
-                delay -= slice_s
-    raise last_exc  # unreachable -- loop always returns or raises
+                emitted = True
+                if on_text:
+                    on_text(chunk)
+
+            _t0 = time.time()
+            try:
+                _result = runner(api_history, system, tools or [], _tracking_on_text)
+                # Real measured latency feeds the Model Router's health/metrics.
+                # Never estimated -- see model_router.py.
+                try:
+                    model_router.record(provider, time.time() - _t0, ok=True)
+                except Exception:  # noqa: BLE001 -- telemetry must not break a turn
+                    pass
+                return _result
+            except ProviderError as exc:
+                try:
+                    model_router.record(provider, time.time() - _t0, ok=False, error=str(exc))
+                except Exception:  # noqa: BLE001
+                    pass
+                last_exc = exc
+                # Text already streamed to the user. Neither retrying nor
+                # failing over is safe now -- both would repeat output.
+                if emitted:
+                    raise
+                if not exc.retryable:
+                    break          # this provider is genuinely down: next one
+                if attempt == _MAX_RETRY_ATTEMPTS - 1:
+                    break          # transient budget spent: next one
+                delay = _RETRY_BASE_DELAY_S * (2**attempt)
+                # Backoff must not keep a cancelled request alive. Use short waits
+                # only here (not a polling worker loop) so cancellation is prompt.
+                while delay > 0:
+                    if cancel_check:
+                        cancel_check()
+                    slice_s = min(0.1, delay)
+                    time.sleep(slice_s)
+                    delay -= slice_s
+
+    # Every provider in the chain failed. Name them, so "ZENO is down" is
+    # never mistaken for "the network hiccuped".
+    if last_exc is None:  # pragma: no cover -- chain is never empty here
+        raise ProviderError("No model provider was available.")
+    raise ProviderError(
+        f"Every configured model provider failed ({', '.join(chain)}). "
+        f"Last error: {last_exc}",
+        retryable=last_exc.retryable,
+    ) from last_exc

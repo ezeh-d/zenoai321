@@ -82,7 +82,13 @@ class AgentTask:
         """Block until this task finishes. Returns its result text."""
         if not self.done.wait(timeout):
             return f"Task for {self.agent} timed out after {timeout}s."
-        return self.result if self.error is None else f"Error: {self.error}"
+        # The worker already formatted an outcome-specific message
+        # ("Cancelled: ..." vs "Error: ..."). Re-deriving it from `error`
+        # here -- as this used to -- silently discarded that distinction and
+        # reported every cancellation as a crash.
+        if self.result is not None:
+            return self.result
+        return f"Error: {self.error}" if self.error else ""
 
     def cancel(self, reason: str = "cancelled") -> bool:
         if self.done.is_set():
@@ -101,10 +107,16 @@ class AgentTask:
 class AgentMetrics:
     tasks_completed: int = 0
     tasks_failed: int = 0
+    tasks_cancelled: int = 0
     total_duration: float = 0.0
     restarts: int = 0
     last_activity: float = 0.0
     last_task: str = ""
+    # Retained so the dashboard can show "recent error, if any" without
+    # re-deriving it from the event log.
+    last_error: str = ""
+    last_error_at: float = 0.0
+    last_result: str = ""
 
     @property
     def avg_duration(self) -> float:
@@ -165,9 +177,11 @@ class AgentWorker:
                 break
             try:
                 if task is not None:
+                    # Queued-but-never-started work is cancelled, not failed.
                     task.error = reason
-                    task.result = f"Error: {reason}"
+                    task.result = f"Cancelled: {reason}"
                     task.done.set()
+                    self.metrics.tasks_cancelled += 1
                     if task.dedupe_key:
                         with self._task_lock:
                             if self._pending_by_key.get(task.dedupe_key) is task:
@@ -253,13 +267,23 @@ class AgentWorker:
             task.result = task.fn()
             task.check_cancelled()
             self.metrics.tasks_completed += 1
+            self.metrics.last_result = str(task.result or "")[:300]
         except AgentTaskCancelled as exc:
+            # Distinct from a failure on purpose. The old text was
+            # "Error: <reason>", which read identically to a crash, so a
+            # caller (including ZENO, which feeds this straight back to the
+            # model) could not tell "this task broke" from "the owner
+            # stopped it" -- and would apologise for a fault that never
+            # happened. Cancellation is also NOT counted in tasks_failed.
             task.error = str(exc)
-            task.result = f"Error: {task.error}"
+            task.result = f"Cancelled: {task.error}"
+            self.metrics.tasks_cancelled += 1
         except Exception as exc:  # noqa: BLE001 -- a failed task must not kill the worker
             task.error = f"{type(exc).__name__}: {exc}"
             task.result = f"Error: {task.error}"
             self.metrics.tasks_failed += 1
+            self.metrics.last_error = task.error[:300]
+            self.metrics.last_error_at = time.time()
         finally:
             dur = time.time() - started
             self.metrics.total_duration += dur
@@ -346,12 +370,17 @@ class AgentWorker:
             "current_task": self.current_task,
             "tasks_completed": self.metrics.tasks_completed,
             "tasks_failed": self.metrics.tasks_failed,
+            "tasks_cancelled": self.metrics.tasks_cancelled,
             "success_rate": round(self.metrics.success_rate, 1),
             "avg_duration_s": round(self.metrics.avg_duration, 2),
             "restarts": self.metrics.restarts,
             "last_task": self.metrics.last_task,
             "last_activity_s_ago": (round(time.time() - self.metrics.last_activity)
                                      if self.metrics.last_activity else None),
+            "last_error": self.metrics.last_error,
+            "last_error_s_ago": (round(time.time() - self.metrics.last_error_at)
+                                  if self.metrics.last_error_at else None),
+            "last_result": self.metrics.last_result,
         }
 
 
@@ -382,7 +411,7 @@ AGENT_ROLES: dict[str, str] = {
     "titan": "Chief Financial Officer",
     "kate": "Chief Education Officer",
     "ultron": "Chief Strategy Officer",
-    "zeal": "Creative Director",
+    "zeal": "Creative Director & Design Specialist",
     "hermes_comm": "Chief Communications Officer",
     "nova": "Chief Vision Officer",
     "helios": "Chief Wellness Officer",
@@ -564,6 +593,44 @@ def is_running() -> bool:
     # The runtime is usable once the registry/supervisor booted, even when
     # no specialist has needed a thread yet.
     return bool(_booted_at) and _supervisor is not None and _supervisor.is_alive()
+
+
+# --- presence ----------------------------------------------------------
+# The ONE place a display status is derived. The dashboard styles by this
+# string and never re-decides, so the UI cannot drift into claiming
+# something the runtime does not support.
+#
+# Heartbeat means "this worker's loop is reachable", NOT "it is busy". An
+# agent parked on its queue heartbeats every ~2s and is ONLINE, which is
+# exactly what makes a stale heartbeat meaningful: it can only mean the
+# loop is wedged.
+ONLINE = "ONLINE"          # initialized, reachable, waiting for work
+S_WORKING = "WORKING"      # actually executing a task right now
+S_THINKING = "THINKING"    # planning//reasoning (event-driven, transient)
+S_DELEGATING = "DELEGATING"  # a worker of this agent is running
+S_ERROR = "ERROR"          # unhealthy, wedged, or last task failed
+S_OFFLINE = "OFFLINE"      # not initialized
+
+PRESENCE_STATES = (ONLINE, S_WORKING, S_THINKING, S_DELEGATING, S_ERROR, S_OFFLINE)
+
+
+def presence_status(snap: dict[str, Any]) -> tuple[str, str]:
+    """(status, why) for one agent snapshot. Evidence-based only."""
+    if not snap.get("alive"):
+        # Never started is OFFLINE, not ERROR -- lazy spawn is by design.
+        return S_OFFLINE, "worker thread not started"
+    if snap.get("state") == ERROR:
+        return S_ERROR, "worker reported an error state"
+    if not snap.get("healthy"):
+        age = snap.get("heartbeat_age_s")
+        return S_ERROR, f"heartbeat stale ({age}s > {_STALE_AFTER}s); loop may be wedged"
+    if snap.get("state") == WORKING:
+        return S_WORKING, snap.get("current_task") or "executing a task"
+    if snap.get("queue_depth", 0) > 0:
+        return S_WORKING, f"{snap['queue_depth']} task(s) queued"
+    if snap.get("state") in (RESTARTING, STARTING):
+        return S_THINKING, f"worker {snap['state']}"
+    return ONLINE, "initialized and waiting for work"
 
 
 def health() -> dict[str, Any]:

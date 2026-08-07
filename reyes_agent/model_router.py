@@ -52,6 +52,18 @@ _DEFAULT_ROUTES: dict[str, tuple[str, ...]] = {
 }
 
 
+# Circuit breaker. After this many consecutive failures a provider is
+# OPEN (skipped entirely) for the cooldown, then HALF_OPEN -- one probe
+# call is allowed through. A success closes it; a failure re-opens it with
+# a longer cooldown. Without this, "route around a degraded provider" meant
+# permanently, and a provider that recovered was never used again.
+_BREAKER_THRESHOLD = 3
+_BREAKER_COOLDOWN_S = 60.0
+_BREAKER_MAX_COOLDOWN_S = 900.0
+
+CLOSED, OPEN, HALF_OPEN = "CLOSED", "OPEN", "HALF_OPEN"
+
+
 @dataclass
 class ProviderStats:
     calls: int = 0
@@ -61,15 +73,27 @@ class ProviderStats:
     last_latency: float = 0.0
     last_used: float = 0.0
     last_error: str = ""
+    opened_at: float = 0.0
+    cooldown: float = _BREAKER_COOLDOWN_S
 
     @property
     def avg_latency(self) -> float:
         return (self.total_latency / self.calls) if self.calls else 0.0
 
     @property
+    def breaker(self) -> str:
+        """CLOSED / OPEN / HALF_OPEN, derived from real failures and time."""
+        if self.consecutive_failures < _BREAKER_THRESHOLD:
+            return CLOSED
+        if time.time() - self.opened_at >= self.cooldown:
+            return HALF_OPEN
+        return OPEN
+
+    @property
     def healthy(self) -> bool:
-        # Three consecutive failures is a real signal, not a guess.
-        return self.consecutive_failures < 3
+        # OPEN is skipped; HALF_OPEN is allowed exactly so recovery can be
+        # detected instead of assumed.
+        return self.breaker != OPEN
 
 
 _stats: dict[str, ProviderStats] = {}
@@ -130,16 +154,87 @@ def record(provider: str, latency: float, ok: bool, error: str = "") -> None:
     """Record a REAL call. This is the only thing that produces metrics."""
     with _lock:
         st = _stats.setdefault(provider, ProviderStats())
+        was = st.breaker
         st.calls += 1
         st.total_latency += latency
         st.last_latency = latency
         st.last_used = time.time()
         if ok:
             st.consecutive_failures = 0
+            st.opened_at = 0.0
+            st.cooldown = _BREAKER_COOLDOWN_S      # recovery resets the backoff
         else:
             st.failures += 1
             st.consecutive_failures += 1
             st.last_error = error[:200]
+            if st.consecutive_failures >= _BREAKER_THRESHOLD:
+                # A failure while probing means it is still broken: back off
+                # further rather than retrying every cooldown forever.
+                st.cooldown = (min(st.cooldown * 2, _BREAKER_MAX_COOLDOWN_S)
+                               if was == HALF_OPEN else st.cooldown)
+                st.opened_at = time.time()
+        now = st.breaker
+    if was != now:
+        try:
+            from reyes_agent import event_bus
+
+            event_bus.publish("model.breaker_changed",
+                              {"provider": provider, "from": was, "to": now,
+                               "consecutive_failures": _stats[provider].consecutive_failures,
+                               "error": _stats[provider].last_error},
+                              source="model_router")
+        except Exception:  # noqa: BLE001 -- telemetry never breaks a turn
+            pass
+
+
+def chain_for(kind: str = "general") -> list[str]:
+    """Every provider worth TRYING for this task kind, best first.
+
+    This is what makes fallback real. `route()` returns the single best
+    choice; this returns the ordered list the caller walks when one fails,
+    so a dead provider costs one attempt instead of the whole turn.
+    """
+    kind = (kind or "general").strip().lower()
+    if kind not in TASK_KINDS:
+        kind = "general"
+    avail = available_providers()
+    with _lock:
+        snapshot = {p: (s.breaker, s.avg_latency) for p, s in _stats.items()}
+
+    usable, probes = [], []
+    for provider in _configured_route(kind):
+        if not avail.get(provider):
+            continue
+        state = snapshot.get(provider, (CLOSED, 0.0))[0]
+        if state == OPEN:
+            continue
+        (probes if state == HALF_OPEN else usable).append(provider)
+    # Healthy providers first, recovering ones last: a probe should not sit
+    # in front of a provider known to be working.
+    ordered = usable + probes
+    if not ordered and avail.get(config.MODEL_PROVIDER, config.MODEL_PROVIDER == "ollama"):
+        ordered = [config.MODEL_PROVIDER]
+    if not ordered:
+        # Everything is open. Trying the configured provider anyway beats
+        # refusing to answer -- the breaker exists to stop hammering, not to
+        # make ZENO mute.
+        ordered = [config.MODEL_PROVIDER]
+    return ordered
+
+
+def breaker_state(provider: str) -> str:
+    with _lock:
+        st = _stats.get(provider)
+    return st.breaker if st else CLOSED
+
+
+def reset(provider: str = "") -> None:
+    """Test hook / manual recovery."""
+    with _lock:
+        if provider:
+            _stats.pop(provider, None)
+        else:
+            _stats.clear()
 
 
 def explain() -> dict:

@@ -208,6 +208,7 @@ def diagnose(browser_error: str = "", permission_state: str = "", selected_devic
     """Full diagnosis. `browser_error` is the DOMException name the panel
     saw, when there was one -- it is the strongest single signal."""
     rep = MicReport()
+    permission_state = str(permission_state or "").strip().lower()
     consent = _read_windows_consent()
     devices = _enumerate_devices()
     stt = _stt_configured()
@@ -260,16 +261,29 @@ def diagnose(browser_error: str = "", permission_state: str = "", selected_devic
         rep.summary = meaning
         rep.fix = fix
         rep.checks.append(f"browser: {browser_error}")
-        # Windows says allowed but the browser said denied -> it's the
-        # WebView2/site-level grant, not Windows. Say so precisely.
+        # A NotAllowedError only proves that this one capture attempt was
+        # refused. WebView2 can use it for a gesture, policy, or capture
+        # failure too; an explicit Permissions-API `denied` state is needed
+        # before we claim that the saved profile refused the microphone.
         if cause == "permission_denied" and consent.get("readable") and not denied_globally:
-            rep.cause = WEBVIEW2_PERMISSION_DENIED
-            rep.summary = ("Windows allows microphone access, so this is ZENO's own "
-                           "WebView2 profile refusing it — the in-app prompt was dismissed "
-                           "or denied earlier.")
-            rep.fix = ("Select Enable microphone. If WebView2 keeps a previous refusal, allow "
-                       "Microphone for ZENO's fixed http://127.0.0.1:8765 origin, then retry. "
-                       "Do not delete the whole profile: it preserves your other ZENO settings.")
+            if permission_state == "denied":
+                rep.cause = WEBVIEW2_PERMISSION_DENIED
+                rep.summary = "WebView2 currently reports microphone permission as denied for ZENO."
+                rep.fix = ("Select Enable microphone once and choose Allow if WebView2 presents its one-time prompt. "
+                           "ZENO keeps the same profile and fixed local origin, so an allowed grant persists. "
+                           "Do not delete the profile.")
+                rep.checks.append("browser permission: denied")
+            elif permission_state == "granted":
+                rep.cause = DEVICE_INITIALIZATION_FAILED
+                rep.summary = "WebView2 reports the microphone grant, but this capture attempt was still refused."
+                rep.fix = ("Use Test microphone once. If it repeats, refresh the selected device or check whether another "
+                           "app is holding the microphone; this is not evidence that the saved WebView2 permission was revoked.")
+                rep.checks.append("browser permission: granted (conflicts with capture error)")
+            else:
+                rep.cause = MIC_PERMISSION_DENIED
+                rep.summary = "WebView2 refused this microphone request; its saved permission state could not be confirmed."
+                rep.fix = ("Select Enable microphone once to retry from an explicit ZENO action. If WebView2 then reports "
+                           "permission denied, ZENO will show that exact state. Do not delete the profile.")
         elif cause == "permission_denied":
             rep.cause = MIC_PERMISSION_DENIED
         elif cause == "no_device" and selected_device:

@@ -241,6 +241,61 @@ zero console errors. Reachable from the command palette, alongside the
 Agent Monitor and Timeline.
 
 ## Phase 20 — Optimization & Production Readiness · ONGOING
+
+**Website Builder Mode (Phase 1 foundation):** Website requests now enter the
+existing Fast/Deep router as `WEBSITE_BUILDER`; actual project work remains in
+`build_project`, the managed Task Engine, bounded terminal executor, preview
+manager and Live Activity View. Successful web builds register durable local
+metadata (name, framework, folder, status and detected pages) in the existing
+state database. `website_project` can list these projects, run bounded static
+title/description/alt checks, and make an on-project `.zeno/versions`
+checkpoint before a redesign. Checkpoints exclude dependencies, build output
+and Git data and use configurable source-only limits (default 750 files / 12
+MiB; capped limits are reported rather than silently treated as full undo
+points). The existing Coding Executor now supplies structured defect
+categories plus a five-attempt safe-repair loop; a repair that increases the
+measured defect score is rolled back. Website Studio is available from the
+dashboard's **Web Studio** panel as well as tools. Its on-demand Visual Check
+uses the existing single-owner Playwright runtime to render a managed local
+preview at desktop and mobile sizes, save screenshots and report layout
+evidence; it does not claim aesthetic success. The preview manager has one
+managed record per project (URL, port, PID/thread, owners and start time), so
+repeated starts reuse rather than stack servers. No extra server, worker,
+Event Bus, agent or memory vault was introduced.
+
+**Website Studio audit repair:** generated website folders are now refused if
+they resolve inside the ZENO installation or vault. Restoring a checkpoint is
+explicit-confirmation gated, automatically snapshots the current project
+first, and only replaces ordinary tracked project files (dependencies, build
+output, Git data and checkpoint history are preserved). Test-mode builds no
+longer pollute durable Website Studio project memory.
+
+**Whole-system regression audit (2026-08-07):** every repository standalone
+test suite passed after a complete sweep of the kernel, workers, agents,
+Event Bus, browser runtime, voice/VAD, Mini Orb, Website Studio, workflows,
+recognition and dashboard paths. Two confirmed regressions were corrected:
+the local Intelligence Router now uses a bounded exact-message cache while
+returning fresh diagnostic maps per caller (repeated routing stays below its
+1 ms budget), and the browser-owner runtime now waits only until the caller's
+actual remaining deadline rather than rounding short deadlines up to a 50 ms
+poll interval. External provider limits remain correctly reported rather than
+masked: the current Gemini/OpenAI accounts were quota/credit limited during
+an offline test path, and provider configuration/credit changes require the
+owner rather than a source-code workaround.
+
+**Creator, Mastery and Foodie Intelligence:** `creator_mode.py` and
+`foodie_intelligence.py` extend the existing conversation engine, Fast/Deep
+router, Event Bus and local state database rather than creating another brain,
+memory store, task scheduler or permanent specialist. Creator projects retain
+only an explicit project ID, goal, stage, completed stages, verified files,
+decisions and open tasks. Mastery coaching tracks owner-supplied practice
+evidence and weak areas, never claims an objective score or automatic
+promotion. Foodie Mode handles practical recipes, step-by-step cooking,
+ingredient scaling and food-safety policy; its optional cooking session stores
+only the current agreed steps. It does not retain food preferences separately
+from Living Memory, make idle model calls, or claim timers/assets/results that
+were not actually created. Existing ZEAL, project, image, vision, research and
+timer capabilities are reused only when the request requires them.
 Done: WebGL removed; webcam inference made opt-in; dev loop stops when
 off; transform-based ring; voice caching; background threads for campaigns
 and agent work.
@@ -563,3 +618,95 @@ added merely for cosmetic animation.
 **Regression coverage:** `tests/test_reenabled_performance_features.py`
 verifies persistence, resource gating, the no-automatic-embedding Dream path,
 the bounded dashboard cadence and cursor-eye wiring.
+
+---
+
+## Multi-level specialist teams and Subspace — PARTIAL
+
+The existing 13 primary specialists now have bounded, on-demand worker-team
+definitions (74 workers total), rather than treating APEX as a special
+parallel framework. Workers reuse the current specialist provider turn,
+scoped tool registry, permission path, cancellation check and Event Bus; no
+worker thread, private Event Bus, or recursive worker hierarchy is created.
+The hard limits are three workers per specialist task, three tool rounds per
+worker, a 120-second worker deadline, and depth `ZENO → primary → worker`.
+Workers with missing tools report `UNAVAILABLE`; they are not run or displayed
+as operational merely because their role exists.
+
+`/api/hierarchy` supplies the live agent-runtime snapshot and capability
+metadata to the on-demand **Agent Subspace** dashboard overlay. It fetches
+once when opened and afterwards receives only real `agent.*` Event Bus
+messages. The normal view contains ZENO plus genuinely participating
+specialists/workers; selecting a participating specialist expands that team's
+registered workers and their capability status. Closing the overlay drops its
+small in-memory projection, DOM and listeners. Worker terminal events now
+truthfully distinguish `success`, `error`, `timed_out`, and `cancelled`; this
+corrects the earlier false-success visual state.
+
+**Verified offline:** worker capability containment, parent attribution,
+budget/depth limits, Event Bus delivery, provider failure, timeout and owner
+cancellation; hierarchy endpoint shape; Python and dashboard/Mini Orb syntax;
+existing agent-runtime, voice-handoff, Mini Orb, performance and intelligence
+regressions.
+
+**Live-verified 2026-08-06 (running server, real provider):** `/api/hierarchy`
+returns 13 primaries / 74 workers, all `AVAILABLE`, HTTP 200 in 19 ms. A real
+worker turn (`apex → pixel`, "measure this machine") completed in 23.9 s,
+called `system_health`, and returned a measurement grounded in real values
+(RAM 7.6/8.4 GB, 90%). `agent.worker_started` was published with
+`parent: apex`, which is the field Subspace nests on. `tests/test_agent_teams.py`
+(16 assertions) passes.
+
+**Known behaviour, not a defect but worth stating:** commanders often answer
+simple questions themselves instead of calling a worker. This is a direct
+consequence of the containment rule — a commander holds at least its team's
+tools, so for a one-tool question like "why is my FPS low" APEX can call
+`system_health` directly and does, returning the correct answer in one model
+call instead of two. Measured: ZENO → APEX answered correctly with real
+numbers, but `agent.worker_started` did not fire. Workers engage for sub-tasks
+that genuinely need their depth. If more eager delegation is wanted, the lever
+is the team-roster guidance in `_run_specialist`, not the architecture.
+
+**Still not live-verified:** the Subspace overlay rendering a multi-worker
+mission on the running desktop process (the endpoint and event payloads it
+consumes are verified; the visual assembly is not), and cancellation
+propagating ZENO → primary → worker against a live provider. Manual summon/dismiss controls are intentionally not
+added: delegation and cancellation continue through the existing permissioned
+mission/agent runtime rather than a dashboard button that could fabricate or
+bypass work.
+
+---
+
+## Creative Design + Learning Intelligence â€” PARTIAL, with explicit execution limits
+
+ZEAL remains the one existing Creative Director, now explicitly scoped for
+original logo/brand direction, typography, colour, layout, UI/UX critique,
+vector-capable project assets and design education. No second creative agent,
+image queue, renderer or idle model was created. Complex design-learning paths
+and complete identities take the existing DEEP route; small questions such as
+kerning remain FAST. The agent receives compact per-turn policies requiring
+originality, visual evidence for critique, small-scale/monochrome logo checks,
+print constraints and real tool evidence before it calls an asset complete.
+
+`learning_mode` persists only explicit owner learning progress (subject,
+level, completed topics, reported difficulty, exercise and next lesson) in the
+existing local `state.db`, emits bounded Event Bus updates, and supports both
+design curricula and a modest generic path for other hard-to-start skills. It
+does not infer learner progress, create a persistent worker, or duplicate
+Living Memory. `critique_current_design` stays lazy and calls the existing
+screenshot/vision seam only when the owner asks to inspect a visible design.
+Existing image generation and project-writing tools remain the sole execution
+paths, including real SVG/text assets where appropriate; their save-location,
+worker, cancellation and Activity View rules remain unchanged.
+
+**Named limits:** native Figma, Canva, Photoshop, Illustrator, printer and
+vector-editor control is not claimed unless a real tool is connected. Visual
+critique needs an available screenshot/vision provider; otherwise ZENO reports
+that limitation instead of inventing observations. An image generation or
+project write is not reported as completed until its existing tool returns a
+real result.
+
+**Regression coverage:** `tests/test_design_learning.py` verifies FAST/DEEP
+routing, original/evidence-based design policy, local persistent/adaptive
+learning progress, generic learning paths, lazy tool registration, ZEAL scope,
+and that design/learning remain prompt policy on the existing provider turn.

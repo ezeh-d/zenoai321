@@ -134,7 +134,7 @@
   }
   /* Mini mode: REYES shrinks to just the orb (window is resized small by
      the desktop app). Hide all chrome so only the glowing orb shows. */
-  body.mini #ui, body.mini #map-overlay, body.mini #dev-overlay, body.mini #code-overlay, body.mini #news-overlay, body.mini #cmdk-overlay, body.mini #explain-btn, body.mini #explain-panel, body.mini #timeline-overlay, body.mini #agents-overlay, body.mini #situation-overlay, body.mini #galaxy-overlay, body.mini #council-overlay { display: none !important; }
+  body.mini #ui, body.mini #map-overlay, body.mini #dev-overlay, body.mini #code-overlay, body.mini #news-overlay, body.mini #cmdk-overlay, body.mini #explain-btn, body.mini #explain-panel, body.mini #timeline-overlay, body.mini #agents-overlay, body.mini #situation-overlay, body.mini #galaxy-overlay, body.mini #council-overlay, body.mini #subspace-overlay { display: none !important; }
   body.mini #orb-canvas { cursor: pointer; }
   /* Companion mode: the whole window IS the orb. Shrink the orb to fit the
      210px window and drop the desktop background so only the glow shows. */
@@ -217,28 +217,33 @@
     display: flex; flex-direction: column; align-items: center; gap: 10px;
     margin: 0 16px 24px 16px; pointer-events: auto;
   }
-  /* Not a button -- REYES listens on its own once permission exists from
-     a prior visit; this is just a small "is it listening" indicator dot.
-     Only becomes a click target on the very first-ever visit, when the
-     browser requires one gesture to grant mic access at all. */
+  /* This is the one real microphone control. Its state is derived from the
+     processed capture stream; it never merely animates a cosmetic icon. */
   #mic-indicator {
-    width: 10px; height: 10px; border-radius: 50%; background: var(--text-dim);
-    transition: background 0.2s, box-shadow 0.2s;
+    width: 34px; height: 34px; border: 1px solid var(--border); border-radius: 50%;
+    display: grid; place-items: center; padding: 0; background: var(--panel);
+    color: var(--text-dim); cursor: pointer; transition: background .2s, box-shadow .2s, color .2s;
   }
+  #mic-indicator::after { content: '🎙'; font-size: 16px; line-height: 1; }
+  #mic-indicator:hover, #mic-indicator:focus-visible { border-color: var(--accent); color: var(--text); outline: none; }
   #mic-indicator.listening {
     background: var(--ok);
     box-shadow: 0 0 0 6px rgba(74,222,128,0.15);
     animation: mic-pulse 1.8s ease-in-out infinite;
   }
   #mic-indicator.needs-permission {
-    background: var(--warn); cursor: pointer;
+    background: var(--warn);
     box-shadow: 0 0 0 6px rgba(255,180,84,0.15);
   }
+  #mic-indicator[aria-busy="true"] { cursor: progress; opacity: .8; }
   @keyframes mic-pulse {
     0%, 100% { box-shadow: 0 0 0 6px rgba(74,222,128,0.12); }
     50% { box-shadow: 0 0 0 12px rgba(74,222,128,0.04); }
   }
-  #mic-status { font-size: 12px; color: var(--text-dim); }
+  #mic-status {
+    max-width: min(680px, 92vw); font-size: 12px; line-height: 1.35;
+    color: var(--text-dim); text-align: center; overflow-wrap: anywhere;
+  }
 
   #text-composer { display: none; width: 100%; max-width: 640px; gap: 10px; }
   #text-composer.visible { display: flex; }
@@ -453,7 +458,7 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
    IDs/blocks rather than merged into map-overlay's, since each has its own
    trigger event and inner layout; the visual chrome is duplicated on
    purpose for that isolation, not because it needed rebuilding. */
-#code-overlay, #news-overlay, #timeline-overlay, #agents-overlay, #situation-overlay, #galaxy-overlay, #council-overlay {
+#code-overlay, #news-overlay, #timeline-overlay, #agents-overlay, #situation-overlay, #galaxy-overlay, #council-overlay, #subspace-overlay {
   display: none;
   position: fixed;
   top: 50%; left: 50%;
@@ -468,7 +473,7 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
   overflow: hidden;
   flex-direction: column;
 }
-#code-overlay.open, #news-overlay.open, #timeline-overlay.open, #agents-overlay.open, #situation-overlay.open, #galaxy-overlay.open, #council-overlay.open { display: flex; }
+#code-overlay.open, #news-overlay.open, #timeline-overlay.open, #agents-overlay.open, #situation-overlay.open, #galaxy-overlay.open, #council-overlay.open, #subspace-overlay.open { display: flex; }
 
 /* Council: the agent faces live HERE, not as floating desktop windows.
    ZENO's orb stays the primary identity; these are the specialists. */
@@ -482,6 +487,100 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
   flex-shrink: 0; padding: 8px 16px; border-top: 1px solid rgba(120,170,255,0.12);
   font: 11px system-ui, sans-serif; color: var(--text-dim);
 }
+
+/* Subspace is a small, event-driven hierarchy inspector. It has no physics
+   simulation, animation timer or hidden polling loop: nodes render only when
+   this overlay is open and an actual agent event or explicit refresh occurs. */
+#subspace-overlay { width: min(94vw, 1060px); height: min(82vh, 700px); }
+.ws-mini {
+  background: rgba(110,168,255,.10); border: 1px solid rgba(120,170,255,.3);
+  color: var(--text); border-radius: 6px; padding: 3px 9px; margin-left: 8px;
+  font: 10px system-ui; letter-spacing: .04em; cursor: pointer;
+}
+.ws-mini:hover { background: rgba(110,168,255,.2); }
+.ws-mini[disabled] { opacity: .5; cursor: default; }
+/* --- presence styling -------------------------------------------------
+   Styled by the server's `status`, never re-decided here. An initialized
+   agent looks awake; grey is reserved for genuinely OFFLINE/ERROR, so dim
+   always means something is actually wrong.
+
+   Cost control (this build has a measured lag history): the breathing cue
+   animates `opacity` on ONE small pseudo-element, which the compositor
+   handles without repaint. No animated box-shadow, no filter, no particles.
+   13 idle orbs = 13 composited opacity lerps. */
+.subspace-primary[data-status] { opacity: 1; }
+.subspace-node-dot { position: relative; }
+.subspace-node-dot::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%;
+  background: radial-gradient(circle, var(--subspace-color) 0%, transparent 70%);
+  opacity: 0; pointer-events: none;
+}
+
+/* ONLINE: alive, reachable, waiting. Slow calm breath. */
+.subspace-primary[data-status="ONLINE"] .subspace-node-dot::after {
+  opacity: .30; animation: sub-breathe 3.6s ease-in-out infinite;
+}
+.subspace-primary[data-status="ONLINE"] .subspace-state { color: #8fd6a8; }
+
+/* WORKING: genuinely executing. Faster, clearly stronger. */
+.subspace-primary[data-status="WORKING"] .subspace-node-dot::after {
+  opacity: .75; animation: sub-breathe 1.15s ease-in-out infinite;
+}
+.subspace-primary[data-status="WORKING"] .subspace-state { color: #ffd479; }
+
+.subspace-primary[data-status="THINKING"] .subspace-node-dot::after {
+  opacity: .55; animation: sub-breathe 1.9s ease-in-out infinite;
+}
+.subspace-primary[data-status="THINKING"] .subspace-state { color: #a8c8ff; }
+
+.subspace-primary[data-status="DELEGATING"] .subspace-node-dot::after {
+  opacity: .6; animation: sub-breathe 1.5s ease-in-out infinite;
+}
+.subspace-primary[data-status="DELEGATING"] .subspace-state { color: #c9a8ff; }
+
+/* ERROR / OFFLINE are the ONLY greyed states. */
+.subspace-primary[data-status="ERROR"] { border-color: rgba(255,120,120,.5); }
+.subspace-primary[data-status="ERROR"] .subspace-state { color: #ff9d9d; }
+.subspace-primary[data-status="ERROR"] .subspace-node-dot { filter: saturate(.5) brightness(.7); }
+.subspace-primary[data-status="OFFLINE"] { opacity: .5; }
+.subspace-primary[data-status="OFFLINE"] .subspace-node-dot { filter: saturate(0) brightness(.55); }
+.subspace-primary[data-status="OFFLINE"] .subspace-state { color: var(--text-dim); }
+
+@keyframes sub-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.28); } }
+@media (prefers-reduced-motion: reduce) {
+  .subspace-node-dot::after { animation: none !important; }
+}
+
+/* Detail panel */
+#subspace-detail {
+  border-top: 1px solid rgba(120,170,255,.16); padding: 10px 16px;
+  font: 11px system-ui; color: var(--text-dim); max-height: 168px; overflow-y: auto;
+}
+#subspace-detail b { color: var(--text); font-weight: 700; }
+#subspace-detail .sd-row { display: grid; grid-template-columns: 116px 1fr; gap: 8px; padding: 2px 0; }
+#subspace-detail .sd-err { color: #ff9d9d; }
+#subspace-body { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+.subspace-root { display: grid; justify-items: center; gap: 4px; margin: 2px 0 16px; }
+.subspace-root i, .subspace-node-dot { display: block; border-radius: 50%; background: radial-gradient(circle at 35% 28%, #d9efff, #4a87e8 55%, #101827); border: 1px solid #75a7ff; box-shadow: 0 0 18px rgba(90,145,255,.5); }
+.subspace-root i { width: 44px; height: 44px; }
+.subspace-root b { font: 800 13px system-ui; letter-spacing: .12em; }
+.subspace-root small, .subspace-note { color: var(--text-dim); font: 11px system-ui; }
+.subspace-primary-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(225px, 1fr)); gap: 10px; align-items: start; }
+.subspace-primary { background: rgba(255,255,255,.025); border: 1px solid rgba(120,170,255,.18); border-radius: 10px; overflow: hidden; }
+.subspace-primary.active { border-color: color-mix(in srgb, var(--subspace-color) 65%, #b7d6ff); box-shadow: 0 0 16px color-mix(in srgb, var(--subspace-color) 18%, transparent); }
+.subspace-primary button { width: 100%; display: grid; grid-template-columns: 25px 1fr auto; gap: 8px; align-items: center; padding: 10px; border: 0; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.subspace-primary button:hover { background: rgba(100,150,255,.08); }
+.subspace-node-dot { width: 21px; height: 21px; background: radial-gradient(circle at 35% 28%, color-mix(in srgb, var(--subspace-color) 52%, white), var(--subspace-color) 65%, #101827); border-color: var(--subspace-color); box-shadow: 0 0 10px color-mix(in srgb, var(--subspace-color) 55%, transparent); }
+.subspace-name { font: 800 11px system-ui; letter-spacing: .08em; }
+.subspace-role, .subspace-task { display: block; margin-top: 2px; color: var(--text-dim); font: 10px system-ui; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subspace-state { font: 700 9px system-ui; letter-spacing: .05em; color: #a8c8ff; }
+.subspace-workers { border-top: 1px solid rgba(120,170,255,.1); padding: 5px 8px 8px 42px; }
+.subspace-worker { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(120,170,255,.07); color: var(--text); font: 11px system-ui; }
+.subspace-worker:last-child { border-bottom: 0; }
+.subspace-worker small { color: var(--text-dim); }
+.subspace-worker b { font: 700 9px system-ui; color: #a8c8ff; }
+.subspace-worker.error b { color: #ff9d9d; }.subspace-worker.success b { color: #8fd6a8; }.subspace-worker.cancelled b { color: #f5c518; }
+.subspace-empty { padding: 34px 12px; text-align: center; color: var(--text-dim); font: 12px system-ui; }
 
 /* Knowledge Galaxy: the REAL vault graph as SVG. Static layout computed
    server-side -- no physics loop, because a force simulation on this
@@ -668,6 +767,17 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
   <div id="council-body"></div>
   <div id="council-note">Faces reflect each agent's real runtime state. Only active agents animate.</div>
 </div>
+<div id="subspace-overlay">
+  <div class="ws-bar">
+    <span class="ws-title">Agent Subspace</span>
+    <span id="subspace-summary" style="font:11px system-ui;color:var(--text-dim);"></span>
+    <button class="ws-mini" id="subspace-scope" title="Switch between the whole roster and only mission participants">All agents</button>
+    <button class="ws-mini" id="subspace-summon" title="Actually start every specialist's worker thread. They become alive and idle -- not working.">Summon all</button>
+    <button class="ws-close" id="subspace-close" title="Close">&times;</button>
+  </div>
+  <div id="subspace-body"></div>
+  <div id="subspace-detail">Select a specialist to inspect its live state.</div>
+</div>
 <div id="situation-overlay">
   <div class="ws-bar">
     <span class="ws-title">Situation Room</span>
@@ -791,6 +901,7 @@ body.focus #agent-team-overview { opacity: 0; }
     <div id="awareness-indicators" aria-label="ZENO observation status"></div>
     <div class="spacer"></div>
     <span id="pending-badge">0 pending</span>
+    <button id="website-studio-btn" title="Website Studio">Web Studio</button>
     <button id="fullscreen-btn" title="Fullscreen (F11)">&#9974;</button>
     <button id="settings-btn" title="Settings">&#9881;</button>
   </header>
@@ -945,7 +1056,7 @@ body.focus #agent-team-overview { opacity: 0; }
   </main>
 
   <div id="composer">
-    <div id="mic-indicator" title="Always-on listening status"></div>
+    <button id="mic-indicator" type="button" title="Start listening" aria-label="Start listening" aria-pressed="false"></button>
     <span id="mic-status">Starting...</span>
     <div id="text-composer">
       <input id="input" type="text" placeholder="Talk to ZENO..." autocomplete="off" />
@@ -1501,6 +1612,7 @@ const COMMANDS = [
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map of real links and tags', run: () => openGalaxy() },
   { label: 'Evolution report', hint: 'What ZENO measured about its own performance', run: () => runTurn('Run an evolution report on yourself.') },
   { label: 'Agent Monitor', hint: 'Live worker state, heartbeats, queues, metrics', run: () => openAgentMonitor() },
+  { label: 'Agent Subspace', hint: 'Live ZENO → specialist → worker hierarchy', run: () => openSubspace() },
   { label: 'Council', hint: 'Every specialist’s face, live state from the event bus', run: () => openCouncil() },
   { label: 'Executive Meeting', hint: 'Every specialist reports status in its own voice', run: () => runTurn('Hold an executive meeting — every agent reports status.') },
   { label: 'New mission...', hint: 'Create a tracked long-term goal', run: () => cmdkAsk('Mission name and what success looks like:') },
@@ -1797,9 +1909,65 @@ inputEl.addEventListener('blur', () => { if (!turnActive) orb.setState('idle'); 
 // The one shared turn-runner: text composer, wake-word capture, and any
 // future input path all funnel through this, so "REYES always talks
 // back" is true everywhere, not just on whichever path someone tested.
+// --- turn tracking (state machine + latency timeline) -------------------
+// The browser owns the marks nothing else can observe: when the mic heard
+// speech begin, when endpointing fired, and when audio actually reached the
+// speaker. Those are the ends of the numbers the owner actually feels, so
+// they are reported to the server rather than inferred there.
+//
+// Every call is fire-and-forget. Diagnostics must never delay a turn, and a
+// failed report is silently dropped rather than retried.
+let currentTurnId = '';
+let pendingSpeechMarks = {};   // marks captured before a turn_id existed
+
+function newTurnId() {
+  return (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).replace(/-/g, '').slice(0, 12);
+}
+
+function reportTurn(turnId, body) {
+  if (!turnId) return;
+  try {
+    fetch('/api/turn/mark', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ turn_id: turnId, ...body }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch (_) { /* diagnostics are never load-bearing */ }
+}
+
+// Speech marks happen BEFORE the turn exists (the mic hears you before any
+// request is sent), so they are held with their real timestamps and flushed
+// once the turn opens. Keeping the original timestamp is the whole point --
+// re-stamping them at flush time would measure the flush, not the speech.
+function noteSpeechMark(name) {
+  pendingSpeechMarks[name] = Date.now() / 1000;
+}
+
+function endTurn(turnId) {
+  if (!turnId) return;
+  if (currentTurnId === turnId) currentTurnId = '';
+  try {
+    fetch('/api/turn/end', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ turn_id: turnId }), keepalive: true,
+    }).catch(() => {});
+  } catch (_) { /* the next turn supersedes an unclosed one anyway */ }
+}
+
+function flushSpeechMarks(turnId) {
+  for (const [mark, at] of Object.entries(pendingSpeechMarks)) {
+    reportTurn(turnId, { mark, at });
+  }
+  pendingSpeechMarks = {};
+}
+
 async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
   if (!text || turnActive) return;
   turnActive = true;
+  currentTurnId = newTurnId();
+  const spoken = Object.keys(pendingSpeechMarks).length > 0;
+  flushSpeechMarks(currentTurnId);
+  reportTurn(currentTurnId, { mark: 'stt_final' });
   sendEl.disabled = true;
   inputEl.disabled = true;
   inputEl.placeholder = 'ZENO is thinking...';
@@ -1807,6 +1975,7 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
   showCaption(text, 'user-line'); // live caption of what the user just said, HUD-style
   orb.setState('processing');
   orb.pulse();
+  if (spoken || ambientEnabled) compactMicStatus('THINKING', 'routing your final transcript');
   assistantBubble = null;
   const thinkingBubble = addMessage('assistant', 'thinking…');
 
@@ -1839,7 +2008,8 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, voice_identity: voiceIdentity, voice_identity_proof: voiceIdentityProof }),
+      body: JSON.stringify({ message: text, voice_identity: voiceIdentity, voice_identity_proof: voiceIdentityProof,
+                             turn_id: currentTurnId, turn_kind: spoken ? 'voice' : 'typed' }),
     });
     if (!res.ok || !res.body) {
       thinkingBubble.remove();
@@ -1917,14 +2087,20 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
     }
     if (!sawText) {
       thinkingBubble.remove(); // tool ran but no final text (e.g. error path already handled it)
+      // No speech is coming, so nothing else will ever close this turn.
+      endTurn(currentTurnId);
     } else {
-      speakInBrowser(fullReply); // REYES always talks back, on every path
+      // Keep this managed turn open until browser audio has ended or a
+      // barge-in cancels it. Releasing it early let a new mic clip start a
+      // second turn while ZENO was still speaking.
+      await speakInBrowser(fullReply);
     }
     refreshPending();
   } catch (e) {
     thinkingBubble.remove();
     addMessage('error', 'Connection lost: ' + e);
     orb.setState('error');
+    endTurn(currentTurnId);   // a failed turn has no audio to wait for
   } finally {
     dispatchedAgents.forEach((agentId) => orb.setAgentWorking(agentId, false));
     if (window.zenoCompanion) window.zenoCompanion.setWorking(false);  // mission ring off
@@ -2032,9 +2208,14 @@ async function requestBargeIn() {
   _ttsAudioEl.pause();
   _ttsAudioEl.removeAttribute('src');
   window.speechSynthesis.cancel();
+  // Route through the state machine as well as the interrupt endpoint. That
+  // is what CLOSES the interrupted turn, so its remaining events are
+  // rejected as stale instead of coming back later and re-asserting
+  // SPEAKING after the user has already cut in.
+  try { await fetch('/api/turn/barge-in', { method:'POST' }); } catch (_) { /* best effort */ }
   try { await fetch('/api/intelligence/interrupt', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'cancel'}) }); }
   catch (_) { /* The active turn still has its ordinary timeout/cancel path. */ }
-  finally { bargeInRequested = false; }
+  finally { bargeInRequested = false; currentTurnId = ''; }
 }
 
 async function speakInBrowser(text) {
@@ -2053,6 +2234,8 @@ async function speakInBrowser(text) {
   // ElevenLabs audio that arrived a moment later. There is now no second
   // voice anywhere in this build -- if ElevenLabs can't speak, ZENO stays
   // silent and the caption carries the reply.
+  const speakingTurn = currentTurnId;
+  reportTurn(speakingTurn, { mark: 'tts_requested' });
   try {
     const res = await fetch('/api/tts', {
       method: 'POST',
@@ -2063,9 +2246,15 @@ async function speakInBrowser(text) {
       const url = URL.createObjectURL(await res.blob());
       _ttsAudioEl.src = url;
       orb.setState('speaking');
+      if (ambientEnabled) compactMicStatus('SPEAKING', 'ZENO is responding');
+      reportTurn(speakingTurn, { state: 'SPEAKING', source: 'browser.tts' });
       await new Promise((resolve) => {
         _ttsAudioEl.onended = resolve;
         _ttsAudioEl.onerror = resolve;
+        // `playing` is the first frame that actually reached the speaker --
+        // play() resolving only means playback was accepted, which is a
+        // different (and earlier) moment than the owner hearing anything.
+        _ttsAudioEl.onplaying = () => reportTurn(speakingTurn, { mark: 'first_audio' });
         _ttsAudioEl.play().catch(resolve);
       });
       URL.revokeObjectURL(url);
@@ -2076,8 +2265,15 @@ async function speakInBrowser(text) {
   } catch (e) {
     // Network hiccup: stay silent rather than switching voice mid-sentence.
   }
+  // Audio has finished (or never started). Only the browser knows this
+  // moment, so it is what closes the turn server-side -- the state machine
+  // must not go IDLE while ZENO is still audibly talking.
+  endTurn(speakingTurn);
   if (!turnActive) orb.setState('idle');
-  if (recognitionShouldRun && ambientEnabled) voiceVAD.resumeDetection();
+  if (recognitionShouldRun && ambientEnabled) {
+    voiceVAD.resumeDetection();
+    compactMicStatus('LISTENING', micAudioProved ? 'audio received' : 'waiting for audio');
+  }
 }
 
 // Heuristic, not real NLU: distinguishes "Zeno, open Chrome" (addressing
@@ -2123,8 +2319,68 @@ function findWakeWord(text) {
 // combined text as one finished thought -- and if the person corrected
 // themselves mid-thought ("actually...", "no wait...", "I mean..."),
 // resolve to what they said AFTER the correction, not the whole thing.
-const SETTLE_MS = 1100;
+// --- Smart end-of-speech detection -------------------------------------
+// A fixed silence timer cannot tell "I want you to..." (still thinking)
+// from "open VS Code." (finished). It used to be a flat 1100ms, so a
+// thinking pause mid-sentence got answered as if it were the whole
+// request. Now the wait ADAPTS to how finished the sentence actually
+// sounds: a trailing conjunction or filler buys more time, a complete
+// clause is acted on sooner.
+//
+// This is linguistic endpointing on top of the existing energy VAD --
+// neither alone is enough, and both are honest signals rather than a guess
+// dressed up as certainty.
+const SETTLE_COMPLETE_MS = 700;    // sounds finished -- go sooner
+const SETTLE_DEFAULT_MS  = 1100;   // unchanged default for ordinary speech
+const SETTLE_TRAILING_MS = 2300;   // clearly mid-thought -- wait
+const SETTLE_MS = SETTLE_DEFAULT_MS;   // retained: other code reads this
+
+// Words that cannot end a finished instruction. If speech stops here, the
+// speaker is still assembling the sentence.
+const TRAILING_INCOMPLETE = [
+  'and','but','so','or','then','to','the','a','an','of','for','with','my','your',
+  'that','this','is','are','was','were','be','been','can','could','should','would',
+  'will','shall','do','does','did','have','has','had','if','when','because','which',
+  'want','need','like','try','make','get','put','set','go','open','create','build',
+  'i','you','we','it','me','him','her','them','about','into','from','on','in','at',
+];
+const HESITATION = ['um','uh','erm','eh','ehm','hmm','mm','er','ah','like','well','actually'];
 const CORRECTION_MARKERS = ['actually', 'scratch that', 'i mean', 'no wait', 'wait no', 'no, i mean'];
+
+// Exported for the endpointing test (tests/test_fast_intelligence.py reads
+// these rules out of this file, and window.zenoEndpoint lets the browser
+// test exercise them directly).
+function endpointDelayFor(text) {
+  const clean = String(text || '').toLowerCase().replace(/[^a-z0-9'\s?.!]/g, ' ').trim();
+  if (!clean) return SETTLE_TRAILING_MS;
+  const words = clean.split(/\s+/).filter(Boolean);
+  const last = words[words.length - 1] || '';
+
+  // Trailing filler or hesitation: he paused to think, not to finish.
+  if (HESITATION.includes(last)) return SETTLE_TRAILING_MS;
+  // Trailing function word: the sentence has nowhere to land yet.
+  if (TRAILING_INCOMPLETE.includes(last)) return SETTLE_TRAILING_MS;
+  // A correction was just started ("...no wait") -- the real instruction
+  // has not been said yet.
+  if (CORRECTION_MARKERS.some(m => clean.endsWith(m))) return SETTLE_TRAILING_MS;
+  // A lone word is a fragment UNLESS it is one of the replies that really
+  // does stand alone. "stop" is finished; "what" is someone still talking.
+  if (words.length === 1) {
+    return ['yes','no','stop','wait','cancel','ok','okay','yeah','nah','yep','nope',
+            'thanks','hi','hey','hello','sure','done','continue','go'].includes(words[0])
+      ? SETTLE_COMPLETE_MS : SETTLE_TRAILING_MS;
+  }
+  // Two or more words ending on something substantive is a complete
+  // instruction -- "open Chrome" is finished, and making it wait 2.3s for
+  // no reason is exactly the sluggishness this whole change is about. The
+  // trailing-function-word and hesitation checks above already caught the
+  // genuinely unfinished cases.
+  return SETTLE_COMPLETE_MS;
+}
+window.zenoEndpoint = { endpointDelayFor, SETTLE_COMPLETE_MS, SETTLE_DEFAULT_MS, SETTLE_TRAILING_MS };
+// resolveCorrections is defined below; attached after definition so the
+// mid-sentence-correction behaviour is testable from the browser too.
+
 let listenBuffer = '';
 let settleTimer = null;
 
@@ -2141,19 +2397,28 @@ function resolveCorrections(text) {
   const after = text.slice(bestIdx + bestLen).replace(/^[,.\s]+/, '');
   return after || text; // never resolve to an empty instruction
 }
+window.zenoEndpoint.resolveCorrections = resolveCorrections;
 
 function noteSpeechFragment(chunk) {
+  if (!listenBuffer) noteSpeechMark('speech_started');
   listenBuffer = (listenBuffer + ' ' + chunk).trim();
   if (listenBuffer.length > 12 && !turnActive) {
     micStatusEl.textContent = 'Zeno is listening...';
   }
   if (settleTimer) clearTimeout(settleTimer);
+  // Re-evaluated on EVERY fragment, so the wait tracks the sentence as it
+  // actually develops: "Zeno I want you to..." extends it, "...open VS
+  // Code." shortens it again.
+  noteSpeechMark('speech_finished');
   settleTimer = setTimeout(() => {
+    // The moment endpointing decided he was finished. Everything the owner
+    // experiences as "how fast did ZENO answer" is measured from here.
+    noteSpeechMark('endpoint_detected');
     const combined = resolveCorrections(listenBuffer);
     listenBuffer = '';
     settleTimer = null;
     handleHeard(combined);
-  }, SETTLE_MS);
+  }, endpointDelayFor(listenBuffer));
 }
 
 // --- Persistent Listening ---------------------------------------------
@@ -2365,6 +2630,7 @@ function finishVADRecording(discard = false) {
 async function transcribeVADClip(blob, speakerBlob = null) {
   if (transcriptionActive || !ambientEnabled || blob.size < VAD_MIN_CLIP_BYTES) return;
   transcriptionActive = true;
+  compactMicStatus('TRANSCRIBING', 'sending final speech to STT');
   if (!turnActive) micStatusEl.textContent = 'Transcribing...';
   try {
     const form = new FormData();
@@ -2468,6 +2734,9 @@ function microphoneAvailable() {
 const MIC_DEVICE_STORAGE = 'zeno.selectedMicrophoneId';
 let micRecoveryAttempts = 0, micRecoveryTimer = null, micMeterRaf = 0, micMeterValue = 0;
 let micAudioProved = false, micLastRuntimeReport = 0;
+// One in-flight WebView2 request owns each dashboard capture attempt. A
+// generation makes a late getUserMedia resolution harmless after Stop.
+let micStartPromise = null, micSessionGeneration = 0, micWanted = false;
 
 function selectedMicrophoneId() { return localStorage.getItem(MIC_DEVICE_STORAGE) || ''; }
 function compactMicStatus(status, text, actionRequired = false) {
@@ -2475,6 +2744,11 @@ function compactMicStatus(status, text, actionRequired = false) {
   if (live) live.textContent = status + (text ? ' — ' + text : '');
   micIndicator.classList.toggle('needs-permission', actionRequired);
   micIndicator.classList.toggle('listening', status === 'LISTENING' || status === 'HEARING SPEECH');
+  const active = status === 'LISTENING' || status === 'HEARING SPEECH';
+  micIndicator.setAttribute('aria-pressed', String(active));
+  micIndicator.setAttribute('aria-busy', String(status === 'TRANSCRIBING' || status === 'THINKING' || status === 'SPEAKING'));
+  micIndicator.setAttribute('aria-label', active ? 'Stop listening' : 'Start listening');
+  micIndicator.title = active ? 'Stop listening' : (actionRequired ? 'Enable microphone' : 'Start listening');
 }
 function reportMicRuntime(status, detail = '', audioReceived = false) {
   const body = { status, detail, source: 'dashboard', audio_received: audioReceived,
@@ -2491,6 +2765,13 @@ async function showMicDiagnosis(browserError = '') {
   const query = new URLSearchParams({ browser_error: browserError, permission_state: permission,
     selected_device: selectedMicrophoneId() });
   return (await fetch('/api/microphone/diagnose?' + query)).json();
+}
+function renderMicDiagnosis(d) {
+  const out = document.getElementById('mic-diag-out');
+  if (!out || !d) return;
+  out.innerHTML = `<b style="color:${d.ok ? '#8fd6a8' : 'var(--warn)'}">${escapeHtml(d.summary || '')}</b>`
+    + (d.fix ? `<br>${escapeHtml(d.fix)}` : '')
+    + `<br><span style="opacity:.65">${escapeHtml((d.checks || []).join(' · '))}</span>`;
 }
 function renderMicMeter() {
   micMeterRaf = 0;
@@ -2521,16 +2802,38 @@ function scheduleMicRecovery(detail) {
   }, delay);
 }
 
-async function startAmbientListening(options = {}) {
+function startAmbientListening(options = {}) {
+  micWanted = true;
+  if (ambientEnabled && voiceVAD.mediaStream()) return Promise.resolve(true);
+  if (micStartPromise) return micStartPromise;
+  const generation = ++micSessionGeneration;
+  micStartPromise = openAmbientListening(generation, options).finally(() => {
+    micStartPromise = null;
+    // A stop followed immediately by another Start shares the in-flight
+    // request, then opens one fresh stream after the old request releases.
+    if (micWanted && generation !== micSessionGeneration && !voiceVAD.mediaStream()) {
+      void startAmbientListening({ recovery: true });
+    }
+  });
+  return micStartPromise;
+}
+
+async function openAmbientListening(generation, options = {}) {
   if (!microphoneAvailable()) {
     micStatusEl.textContent = 'This browser cannot capture microphone audio for always-on voice.';
     compactMicStatus('MIC ERROR', 'browser capture unavailable', true);
     void reportMicRuntime('DEVICE_INITIALIZATION_FAILED', 'Browser does not expose getUserMedia or MediaRecorder.');
-    return;
+    return false;
   }
-  recognitionShouldRun = true;
-  ambientEnabled = true;
+  // Capture is not active until getUserMedia returned a live track.
+  compactMicStatus('MIC OFF', 'opening microphone');
   const capabilities = await voiceVAD.start({ deviceId: selectedMicrophoneId() });
+  if (generation !== micSessionGeneration || !micWanted) {
+    // Stop was pressed while the OS request was pending. Never let that
+    // late stream become a second invisible listener.
+    voiceVAD.stop();
+    return false;
+  }
   if (!voiceVAD.mediaStream()) {
     recognitionShouldRun = false;
     ambientEnabled = false;
@@ -2547,14 +2850,18 @@ async function startAmbientListening(options = {}) {
     micStatusEl.textContent = 'Microphone unavailable — checking why…';
     try {
       const d = await showMicDiagnosis(lastMicError);
-      micStatusEl.textContent = d.summary + (d.fix ? ' ' + d.fix : '');
+      // The always-visible bar stays one readable status line. Full repair
+      // instructions belong in the explicit Settings diagnostic panel, not
+      // across the shell where they can overlap browser/permission chrome.
+      micStatusEl.textContent = d.summary || 'Microphone unavailable.';
+      renderMicDiagnosis(d);
       compactMicStatus('MIC ERROR', d.status || 'capture unavailable', true);
       void reportMicRuntime(d.status || 'DEVICE_INITIALIZATION_FAILED', d.summary);
     } catch (e) {
       micStatusEl.textContent = 'Microphone unavailable: ' + (lastMicError || 'unknown error');
       compactMicStatus('MIC ERROR', 'diagnostics unavailable', true);
     }
-    return;
+    return false;
   }
   bindVADHandlers();
   micRecoveryAttempts = 0;
@@ -2562,6 +2869,7 @@ async function startAmbientListening(options = {}) {
     localStorage.setItem(MIC_DEVICE_STORAGE, capabilities.device_id || '');
     void refreshMicrophoneDevices();
   }
+  recognitionShouldRun = true;
   ambientEnabled = true;
   window.__zenoMicActive = true;
   renderAwarenessIndicators();
@@ -2573,9 +2881,12 @@ async function startAmbientListening(options = {}) {
   compactMicStatus('LISTENING', micAudioProved ? 'audio received' : 'waiting for audio');
   void reportMicRuntime('MICROPHONE_READY', 'WebView2 microphone stream is open.', micAudioProved);
   orb.setState('idle');
+  return true;
 }
 
 function stopAmbientListening() {
+  micWanted = false;
+  micSessionGeneration += 1;
   recognitionShouldRun = false;
   ambientEnabled = false;
   window.__zenoMicActive = false;
@@ -2591,7 +2902,7 @@ function stopAmbientListening() {
 }
 
 micIndicator.addEventListener('click', () => {
-  if (ambientEnabled) stopAmbientListening();
+  if (ambientEnabled || micStartPromise) stopAmbientListening();
   else void startAmbientListening();
 });
 
@@ -2989,9 +3300,7 @@ if (_micDiagBtn) _micDiagBtn.addEventListener('click', async () => {
   try {
     const err = (typeof lastMicError === 'string') ? lastMicError : '';
     const d = await showMicDiagnosis(err);
-    out.innerHTML = `<b style="color:${d.ok ? '#8fd6a8' : 'var(--warn)'}">${escapeHtml(d.summary)}</b>`
-      + (d.fix ? `<br>${escapeHtml(d.fix)}` : '')
-      + `<br><span style="opacity:.65">${escapeHtml((d.checks || []).join(' · '))}</span>`;
+    renderMicDiagnosis(d);
   } catch (e) {
     out.textContent = 'Diagnosis unavailable.';
   }
@@ -3442,6 +3751,262 @@ window.zenoCouncil = {
   open: openCouncil, close: closeCouncil, refresh: refreshCouncil,
   speak: councilSpeak, activity: councilAgentActivity,
   animating: () => (facesMod ? facesMod.animatingCount() : 0),
+};
+
+// --- Agent Subspace ---------------------------------------------------
+// This is deliberately a projection of the existing agent Event Bus, not a
+// second agent registry. The only fetch happens when Divine opens the view;
+// after that, real lifecycle events update the small visible graph.
+// showAll: render the WHOLE roster instead of only mission participants.
+// It changes what is DISPLAYED, never what is claimed -- a specialist with
+// no task still reports its real runtime state (idle/standby), because a
+// view where everything says WORKING cannot show what is actually working.
+const subspaceState = { open: false, hierarchy: null, activity: new Map(), expanded: new Set(),
+                        showAll: true, selected: '', timer: null };
+const subspaceOverlay = document.getElementById('subspace-overlay');
+const subspaceBody = document.getElementById('subspace-body');
+
+function subspaceVisualState(type, payload) {
+  if (payload.visual_state) return String(payload.visual_state).toLowerCase();
+  if (type === 'agent.worker_started' || type === 'agent.task_started') return 'working';
+  if (type === 'agent.worker_finished') return payload.outcome === 'cancelled' ? 'cancelled' : 'success';
+  if (type === 'agent.task_finished') return payload.ok === false ? 'error' : 'success';
+  if (type === 'agent.task_queued') return 'waiting';
+  if (type === 'agent.thinking') return 'analyzing';
+  if (type === 'agent.working') return 'working';
+  if (type === 'agent.activated') return 'summoned';
+  return '';
+}
+
+// Whether Subspace is actually on screen. Derived from the DOM rather than
+// a parallel boolean: the two drifted apart, leaving the overlay visibly
+// open while renderSubspace() early-returned and drew nothing.
+function subspaceIsOpen() {
+  return subspaceOverlay.classList.contains('open');
+}
+
+function ingestSubspaceEvent(update) {
+  // Avoid retaining an event history in a hidden overlay. The Event Bus is
+  // durable; this view needs only events observed while it is being viewed.
+  if (!subspaceIsOpen() || !String(update.type || '').startsWith('agent.')) return;
+  const type = update.type || '';
+  const payload = update.payload || {};
+  const state = subspaceVisualState(type, payload);
+  if (!state) return;
+  const parent = String(payload.parent || '').toLowerCase();
+  const agent = String(payload.worker || payload.agent || payload.specialist || '').toLowerCase();
+  if (!agent) return;
+  if (parent) {
+    subspaceState.activity.set(`primary:${parent}`, { kind: 'primary', agent: parent, state: 'delegating', task: payload.task || '' });
+    subspaceState.activity.set(`worker:${parent}:${agent}`, {
+      kind: 'worker', parent, agent, state, task: payload.task || '', detail: payload.detail || '', result: payload.result || ''
+    });
+  } else if (agent !== 'zeno') {
+    subspaceState.activity.set(`primary:${agent}`, { kind: 'primary', agent, state, task: payload.task || payload.result || '' });
+  }
+  renderSubspace();
+}
+
+function renderSubspace() {
+  if (!subspaceIsOpen()) return;
+  const hierarchy = subspaceState.hierarchy;
+  if (!hierarchy) {
+    subspaceBody.innerHTML = '<div class="subspace-empty">Loading the live hierarchy…</div>';
+    return;
+  }
+  const primaryById = new Map((hierarchy.primaries || []).map(p => [p.agent, p]));
+  const active = new Map();
+  for (const entry of subspaceState.activity.values()) {
+    if (entry.kind === 'primary') active.set(entry.agent, entry);
+  }
+  // A runtime task already in progress when Subspace was opened is equally
+  // real, even if its task_started event was emitted a moment earlier.
+  for (const p of hierarchy.primaries || []) {
+    if (['working', 'starting', 'restarting'].includes(String(p.state || '').toLowerCase())) {
+      active.set(p.agent, active.get(p.agent) || { kind: 'primary', agent: p.agent, state: p.state, task: p.current_task || '' });
+    }
+  }
+  // Show-all adds every registered specialist that is not already active,
+  // carrying its REAL runtime state rather than a summoned-looking one.
+  if (subspaceState.showAll) {
+    for (const p of hierarchy.primaries || []) {
+      if (active.has(p.agent)) continue;
+      const alive = p.alive === true;
+      active.set(p.agent, {
+        kind: 'primary', agent: p.agent, roster: true,
+        state: alive ? (String(p.state || 'idle').toLowerCase()) : 'standby',
+        task: p.current_task || '',
+      });
+    }
+  }
+  const entries = [...active.values()].map(a => ({ ...a, data: primaryById.get(a.agent) })).filter(a => a.data);
+  const activeWorkers = [...subspaceState.activity.values()].filter(a => a.kind === 'worker');
+  const busyCount = entries.filter(e => !e.roster).length;
+  const aliveCount = (hierarchy.primaries || []).filter(p => p.alive).length;
+  document.getElementById('subspace-summary').textContent =
+    `${busyCount} active · ${aliveCount}/${hierarchy.agents_total} alive · ${activeWorkers.length} active worker${activeWorkers.length === 1 ? '' : 's'} · ${hierarchy.total_workers} registered · depth ${hierarchy.max_depth}`;
+  if (!entries.length) {
+    subspaceBody.innerHTML = '<div class="subspace-root"><i></i><b>ZENO</b><small>Central commander · no specialist is currently summoned</small></div><div class="subspace-empty">Subspace stays quiet until ZENO delegates a real task. Open a specialist task and its team will appear here through the Event Bus.</div>';
+    return;
+  }
+  const root = '<div class="subspace-root"><i></i><b>ZENO</b><small>Central commander · '
+    + (subspaceState.showAll
+        ? `full roster · ${busyCount} working now`
+        : 'live Event Bus projection')
+    + '</small></div>';
+  const cards = entries.map(entry => {
+    const p = entry.data;
+    const id = String(p.agent);
+    const cfg = AGENTS[id] || { color: '#75a7ff' };
+    const expanded = subspaceState.expanded.has(id);
+    const workerEvents = activeWorkers.filter(w => w.parent === id);
+    const workers = expanded ? (p.workers || []) : (p.workers || []).filter(w => workerEvents.some(e => e.agent === w.name));
+    // Idle roster entries say so plainly rather than borrowing the busy
+    // view's "no detail published", which reads like work with a missing label.
+    const task = entry.task || p.current_task
+      || (entry.roster ? `${p.worker_count} worker${p.worker_count === 1 ? '' : 's'} on standby`
+                       : 'No task detail published');
+    const workerRows = !expanded && !workers.length ? '' : `<div class="subspace-workers">${workers.map(w => {
+      const observed = workerEvents.find(e => e.agent === w.name);
+      const state = observed ? observed.state : String(w.status || 'idle').toLowerCase();
+      const detail = observed ? (observed.task || observed.detail || observed.result || '') : (w.status_detail || '');
+      return `<div class="subspace-worker ${escapeHtml(state)}"><span><strong>${escapeHtml(String(w.name).toUpperCase())}</strong><small>${escapeHtml(w.role || '')}${detail ? ' · ' + escapeHtml(String(detail).slice(0, 100)) : ''}</small></span><b>${escapeHtml(state.toUpperCase())}</b></div>`;
+    }).join('') || '<div class="subspace-note">No worker in this team has been summoned.</div>'}</div>`;
+    // Display status: the server's presence_status() is authoritative for
+    // what the agent IS; a live Event Bus state (thinking/delegating) is
+    // more specific and outranks it only while genuinely in flight.
+    let shown = p.status || 'OFFLINE';
+    if (!entry.roster) {
+      const ev = String(entry.state || '').toLowerCase();
+      if (ev === 'thinking' || ev === 'analyzing') shown = 'THINKING';
+      else if (ev === 'delegating') shown = 'DELEGATING';
+      else if (ev === 'working') shown = 'WORKING';
+      else if (ev === 'error') shown = 'ERROR';
+    }
+    if (workerEvents.some(w => ['working', 'thinking'].includes(w.state))) shown = 'DELEGATING';
+    return `<section class="subspace-primary${entry.roster ? '' : ' active'}" data-status="${escapeHtml(shown)}" style="--subspace-color:${escapeHtml(cfg.color)}"><button type="button" data-subspace-primary="${escapeHtml(id)}" aria-expanded="${expanded}" title="${escapeHtml(p.status_reason || '')}"><i class="subspace-node-dot"></i><span><span class="subspace-name">${escapeHtml((cfg.name || id).toUpperCase())}</span><span class="subspace-role">${escapeHtml(p.role || '')}</span><span class="subspace-task">${escapeHtml(String(task).slice(0, 120))}</span></span><span class="subspace-state">${escapeHtml(shown)}${p.worker_count ? ` +${p.worker_count}` : ''}</span></button>${workerRows}</section>`;
+  }).join('');
+  subspaceBody.innerHTML = root + `<div class="subspace-primary-list">${cards}</div>`;
+  subspaceBody.querySelectorAll('[data-subspace-primary]').forEach(button => button.addEventListener('click', () => {
+    const id = button.dataset.subspacePrimary;
+    if (subspaceState.expanded.has(id)) subspaceState.expanded.delete(id); else subspaceState.expanded.add(id);
+    subspaceState.selected = id;
+    renderSubspace();
+    renderSubspaceDetail(id);
+  }));
+  if (subspaceState.selected) renderSubspaceDetail(subspaceState.selected);
+}
+
+// Every field below is read from the runtime snapshot. "—" means the
+// runtime genuinely has no value, never a placeholder standing in for one.
+function renderSubspaceDetail(id) {
+  const el = document.getElementById('subspace-detail');
+  const h = subspaceState.hierarchy;
+  const p = h && (h.primaries || []).find(x => x.agent === id);
+  if (!p) { el.textContent = 'Select a specialist to inspect its live state.'; return; }
+  const live = subspaceState.activity.get(`primary:${id}`);
+  const activeWorkers = [...subspaceState.activity.values()]
+    .filter(a => a.kind === 'worker' && a.parent === id);
+  const ago = (s) => (s === null || s === undefined) ? '—' : `${s}s ago`;
+  const dash = (v) => (v === '' || v === null || v === undefined) ? '—' : v;
+  const rows = [
+    ['Name', (AGENTS[id] || {}).name || id.toUpperCase()],
+    ['Role', dash(p.role)],
+    ['Status', `<b>${escapeHtml(p.status)}</b> — ${escapeHtml(p.status_reason || '')}`],
+    ['Current task', escapeHtml(dash(live && live.task ? live.task : p.current_task))],
+    ['Parent', 'ZENO'],
+    ['Sub-agents', p.worker_count
+      ? escapeHtml(p.workers.map(w => w.name.toUpperCase()).join(', '))
+        + (activeWorkers.length ? ` <b>(${activeWorkers.length} active)</b>` : '')
+      : '—'],
+    ['Last task', escapeHtml(dash(p.last_task))],
+    ['Last result', escapeHtml(String(dash(p.last_result)).slice(0, 160))],
+    ['Last heartbeat', ago(p.heartbeat_age_s)],
+    ['Last activity', ago(p.last_activity_s_ago)],
+    ['Tasks', `${p.tasks_completed} ok · ${p.tasks_failed} failed · ${p.restarts} restart(s)`],
+  ];
+  if (p.last_error) {
+    rows.push(['Recent error',
+      `<span class="sd-err">${escapeHtml(p.last_error)} (${ago(p.last_error_s_ago)})</span>`]);
+  }
+  el.innerHTML = rows.map(([k, v]) =>
+    `<div class="sd-row"><span>${escapeHtml(k)}</span><span>${v}</span></div>`).join('');
+}
+
+async function openSubspace() {
+  subspaceState.open = true;
+  subspaceOverlay.classList.add('open');
+  subspaceBody.innerHTML = '<div class="subspace-empty">Loading the live hierarchy…</div>';
+  try {
+    const response = await fetch('/api/hierarchy');
+    if (!response.ok) throw Error(`Hierarchy request failed (${response.status})`);
+    subspaceState.hierarchy = await response.json();
+  } catch (error) {
+    subspaceBody.innerHTML = `<div class="subspace-empty">The hierarchy is unavailable: ${escapeHtml(error.message || 'unknown error')}.</div>`;
+    return;
+  }
+  renderSubspace();
+  // Presence needs a poll (a heartbeat going stale emits no event, by
+  // definition). 6s while OPEN and VISIBLE only: no hidden background
+  // polling, and it stops entirely on close.
+  clearInterval(subspaceState.timer);
+  subspaceState.timer = setInterval(async () => {
+    if (document.hidden || !subspaceIsOpen()) return;
+    try {
+      subspaceState.hierarchy = await (await fetch('/api/hierarchy')).json();
+      renderSubspace();
+    } catch (e) { /* transient; next tick retries */ }
+  }, 6000);
+}
+
+function closeSubspace() {
+  subspaceState.open = false;
+  clearInterval(subspaceState.timer);
+  subspaceState.timer = null;
+  subspaceState.selected = '';
+  subspaceState.activity.clear();
+  subspaceState.expanded.clear();
+  subspaceOverlay.classList.remove('open');
+  subspaceBody.replaceChildren();
+}
+document.getElementById('subspace-close').addEventListener('click', closeSubspace);
+
+document.getElementById('subspace-scope').addEventListener('click', (e) => {
+  subspaceState.showAll = !subspaceState.showAll;
+  e.target.textContent = subspaceState.showAll ? 'All agents' : 'Active only';
+  renderSubspace();
+});
+
+// Genuinely starts the worker threads. It does not, and must not, mark
+// anyone as working -- `/api/agents/summon-all` only spawns; the state each
+// agent then reports is its real one.
+document.getElementById('subspace-summon').addEventListener('click', async (e) => {
+  const btn = e.target;
+  btn.disabled = true;
+  btn.textContent = 'Summoning…';
+  try {
+    const r = await fetch('/api/agents/summon-all', { method: 'POST' });
+    const d = await r.json();
+    // Re-fetch so the roster reflects real post-summon runtime state.
+    subspaceState.hierarchy = await (await fetch('/api/hierarchy')).json();
+    renderSubspace();
+    btn.textContent = `${d.agents_alive}/${d.agents_total} alive`;
+    setTimeout(() => { btn.textContent = 'Summon all'; btn.disabled = false; }, 2500);
+  } catch (err) {
+    btn.textContent = 'Summon failed';
+    setTimeout(() => { btn.textContent = 'Summon all'; btn.disabled = false; }, 2500);
+  }
+});
+
+window.zenoSubspace = {
+  open: openSubspace, close: closeSubspace, ingest: ingestSubspaceEvent,
+  summonAll: () => document.getElementById('subspace-summon').click(),
+  setScope: (all) => { subspaceState.showAll = all; renderSubspace(); },
+  // Read-only introspection for diagnosing what the view is actually doing.
+  state: () => ({ open: subspaceIsOpen(), flagOpen: subspaceState.open,
+                  showAll: subspaceState.showAll, selected: subspaceState.selected,
+                  primaries: subspaceState.hierarchy ? subspaceState.hierarchy.primaries.length : null,
+                  activity: [...subspaceState.activity.keys()] }),
 };
 
 // --- Situation Room ---------------------------------------------------
@@ -4138,6 +4703,11 @@ function ensureLiveActivityView() {
   return liveActivityImport;
 }
 void ensureLiveActivityView().then(view => view.refresh());
+document.getElementById('website-studio-btn')?.addEventListener('click', () => {
+  void ensureLiveActivityView().then(view => {
+    view.refresh().finally(() => view.openWebsiteStudio());
+  });
+});
 window.addEventListener('zeno-project-destination-selected', (event) => {
   const project = event.detail || {};
   if (turnActive || !project.name || !project.destination) return;
@@ -4181,8 +4751,25 @@ if (window.EventSource) {
       featureEls.dreamStatus.textContent = String(dream.state || 'DREAM_MODE_IDLE').replace(/_/g, ' ')
         + (dream.detail ? ' · ' + dream.detail : '');
     }
-    if (type === 'project.activity' || type === 'ui.workspace_code') {
+    if (type === 'build.task' || type === 'project.activity' || type === 'ui.workspace_code' || type.startsWith('website.')) {
       void ensureLiveActivityView().then(view => view.consumeEvent(update));
+    }
+    // The conversation state machine is the authority on what ZENO is
+    // doing. The orb REFLECTS it rather than each call site deciding for
+    // itself -- sixteen scattered setState() calls is how SPEAKING and
+    // THINKING ended up fighting each other in the first place.
+    if (type === 'conversation.state') {
+      const p = update.payload || {};
+      if (p.ok && !p.suppressed && !p.rejected) {
+        const visual = {
+          IDLE: 'idle', LISTENING: 'listening', UNDERSTANDING: 'processing',
+          THINKING: 'processing', DEEP_THINKING: 'processing', PLANNING: 'processing',
+          EXECUTING: 'processing', SPEAKING: 'speaking', WAITING: 'idle',
+          ADVISORY: 'speaking', ERROR: 'error',
+        }[p.state];
+        if (visual) orb.setState(visual);
+        window.zenoConversationState = p.state;
+      }
     }
     if (type.startsWith('confirmation.') || type.startsWith('tool.')) refreshPending();
     if (type === 'audio.recognized') showRecognizedAudio(update.payload || {});
@@ -4200,6 +4787,7 @@ if (window.EventSource) {
     if (type === 'desktop.dashboard_hidden' && ambientEnabled) stopAmbientListening();
     if (document.getElementById('agents-overlay').classList.contains('open') && type.startsWith('agent.')) refreshAgentMonitor();
     if (type.startsWith('agent.') && window.agentRing) window.agentRing.lifecycle(update);
+    if (type.startsWith('agent.') && window.zenoSubspace) window.zenoSubspace.ingest(update);
     // Real agent lifecycle events drive the Council faces. Nothing is
     // invented here: if the bus is silent, the faces stay idle. The worker
     // stamps `visual_state` on the event, but we never DEPEND on it -- a

@@ -11,6 +11,20 @@ they never get the `delegate` tool themselves -- no recursive delegation
 chains. Gated tools still route through the Tier 6 confirmation gate the
 same as everywhere else; a sub-agent doesn't get to bypass it.
 
+WORKER TEAMS (2026-08-06)
+The old flat rule here was "no multi-level agents". Divine has since
+authorised exactly ONE further level, so a primary specialist may call its
+own workers via `call_worker` (see `agent_teams.py`):
+
+    DIVINE -> ZENO -> PRIMARY SPECIALIST -> WORKER   (and no deeper)
+
+The rule it replaces still holds in the part that mattered: depth is
+capped in code (`agent_teams.MAX_DEPTH`), a worker cannot call another
+worker, fan-out per task is bounded, and workers reuse this same provider,
+tool registry and confirmation gate rather than getting a parallel one. A
+worker's tool set is a SUBSET of its parent's, so dropping a level can
+never reach a capability the parent lacked.
+
 Deliberately excluded: a "stocks"/trading specialist. Wrapping trade
 execution in a sub-agent doesn't change what it is -- see AGENT.md's
 running list of things REYES won't do regardless of how the request is
@@ -19,10 +33,22 @@ framed.
 
 from __future__ import annotations
 
+import threading
 import time
 
 from reyes_agent import config
 from reyes_agent.tools import GROUP_NAMES, register, run_tool, tool_definitions
+
+# Which specialist is executing on THIS thread, and how many workers it has
+# spent. Thread-local because parallel delegation runs several specialists
+# at once -- a module-level global would let one specialist's worker budget
+# leak into another's, and would let the wrong parent be attributed.
+_active = threading.local()
+_worker_budget = threading.local()
+
+
+def _active_specialist() -> str | None:
+    return getattr(_active, "specialist", None)
 
 ## ZENO Elite AI Team -- the user's own named roster, mapped onto REAL
 ## tools rather than invented capabilities. Two honesty rules held
@@ -84,16 +110,20 @@ _SPECIALISTS: dict[str, dict] = {
         "tools": {"list_processes", "current_activity", "daily_activity_summary", "list_dir", "read_file"},
     },
     "zeal": {
-        "description": "ZEAL -- Creative Intelligence. Image generation, design ideation, branding, content concepts.",
+        "description": "ZEAL -- Creative and Design Intelligence. Branding, logo direction, graphic/UI design critique, image generation and real design assets.",
         "prompt": (
-            "You are ZEAL, ZENO's creative specialist -- generate images, "
-            "draft design/branding ideas and content concepts, save "
-            "creative direction as notes. Say plainly that image "
-            "generation is a free keyless service (Pollinations), not a "
-            "paid design tool, if the user's expectations sound like the "
-            "latter."
+            "You are ZEAL, ZENO's creative and design specialist. Use professional design fundamentals: hierarchy, "
+            "alignment, whitespace, contrast, typography, colour, composition, accessibility and audience fit. For a "
+            "serious logo/identity, establish the business, audience, personality and use context; develop at most three "
+            "genuinely different original directions, never imitate a named company, and test the selected direction in "
+            "monochrome/small scale. For a visual critique, name observed evidence and concrete corrections rather than "
+            "empty praise. When an actual asset is requested, use only available tools and report the real saved path/result; "
+            "an SVG/text master can be written with the project tool, while generated imagery is Pollinations, not Figma, "
+            "Canva, Photoshop or Illustrator. For print, do not call a file print-ready without size, bleed, trim/safe-area "
+            "and colour/export requirements."
         ),
-        "tools": {"generate_image", "write_note", "create_canvas"},
+        "tools": {"generate_image", "write_note", "create_canvas", "write_project_file", "list_project_files",
+                  "take_screenshot", "critique_current_design", "design_capabilities", "learning_mode"},
     },
     "titan": {
         "description": "TITAN -- Business Intelligence. Market research, business tracking, pricing/strategy notes -- analysis only, never spends money.",
@@ -117,13 +147,24 @@ _SPECIALISTS: dict[str, dict] = {
     "apex": {
         "description": "APEX -- Gaming Intelligence. Media/system control and general gaming knowledge -- no FPS tuning or anti-cheat-risking automation.",
         "prompt": (
-            "You are APEX, ZENO's gaming-adjacent specialist. Real scope, "
-            "stated honestly: general gaming knowledge/advice, launching "
-            "games (open_app), and basic media/system control -- there is "
-            "no FPS-optimization or hardware-tuning tool, don't claim to "
-            "have run one. Never automate INPUT into a live multiplayer "
-            "game (aim/movement/actions) -- that is anti-cheat bannable "
-            "and declined regardless of how it's asked."
+            "You are APEX, ZENO's Gaming Commander -- energetic, "
+            "competitive, tactical, calm under pressure. You lead a gaming "
+            "squad (STRIKE, TACTIC, FORGE, PIXEL, SCOUT, REPLAY, ARENA) and "
+            "call them with call_worker when a question needs that narrower "
+            "expert. Real scope, stated honestly: gaming knowledge and "
+            "coaching, launching games (open_app), media/system control, "
+            "MEASURING this machine (system_health/list_processes), "
+            "researching current patches and metas (web_search/get_news), "
+            "and analysing gameplay RECORDINGS Divine gives you "
+            "(understand_video). What you still cannot do: there is no tool "
+            "that edits game config files, changes graphics settings, "
+            "overclocks, or tunes anything -- you diagnose and recommend, "
+            "Divine applies. You cannot see a live match unless a screenshot "
+            "was actually taken; never imply you watched him play. Never "
+            "automate INPUT into a live multiplayer game (aim/movement/"
+            "actions) and never help bypass anti-cheat -- that is bannable "
+            "and declined regardless of how it's asked. If automation would "
+            "risk Divine's account, warn him plainly."
         ),
         "tools": {"current_activity", "media_control", "open_app", "list_processes"},
     },
@@ -211,6 +252,32 @@ _SPECIALISTS: dict[str, dict] = {
         "tools": {"current_activity", "daily_activity_summary", "write_note", "list_memories"},
     },
 }
+
+def _grant_team_tools() -> None:
+    """A commander holds at least what its own workers hold.
+
+    Without this, calling a worker would be a one-level privilege
+    escalation: APEX could reach `web_search` through SCOUT despite not
+    having it itself, which defeats the point of scoping tools per
+    specialist. Doing it by construction (rather than by hand-editing each
+    set) means adding a worker can never silently reopen that hole --
+    `tests/test_agent_teams.py` asserts the invariant either way.
+
+    It also reflects the real intent of the upgrade: a commander whose
+    division genuinely covers a capability should hold it directly, so it
+    can answer simple cases itself instead of paying for a worker turn.
+    """
+    from reyes_agent import agent_teams
+
+    for parent, workers in agent_teams.teams().items():
+        spec = _SPECIALISTS.get(parent)
+        if spec is None:
+            continue
+        for w in workers:
+            spec["tools"] = set(spec["tools"]) | set(w.tools)
+
+
+_grant_team_tools()
 
 _MAX_SUBAGENT_TOOL_ROUNDS = 4
 
@@ -308,6 +375,48 @@ def delegate(specialist: str, task: str) -> str:
     return _run_specialist(specialist, spec, task)
 
 
+@register(
+    name="call_worker",
+    description=(
+        "Call one of YOUR OWN specialist workers for a focused sub-task and get "
+        "its result back. Only available to primary specialists that have a "
+        "team, and only for workers on your own team. Use it when a sub-task "
+        "genuinely needs a narrower expert than you -- not for everything. You "
+        "remain responsible for the final answer: verify what a worker returns, "
+        "challenge it if it conflicts with another worker, and synthesise one "
+        "result for ZENO rather than forwarding raw worker output."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "worker": {"type": "string", "description": "Worker name from your own team."},
+            "task": {"type": "string", "description": "The specific sub-task for that worker."},
+        },
+        "required": ["worker", "task"],
+    },
+    light=True,
+)
+def call_worker(worker: str, task: str) -> str:
+    """Bridge from a primary specialist to one of its workers.
+
+    The parent identity comes from the call stack (`_active_specialist`),
+    never from the model -- otherwise a specialist could name someone
+    else's worker and borrow tools it was not granted.
+    """
+    from reyes_agent import agent_teams
+
+    parent = _active_specialist()
+    if parent is None:
+        return ("Error: call_worker is only available to a primary specialist "
+                "running a delegated task.")
+    used = getattr(_worker_budget, "used", 0)
+    if used >= agent_teams.MAX_WORKERS_PER_TASK:
+        return (f"Error: worker budget exhausted ({agent_teams.MAX_WORKERS_PER_TASK} per "
+                f"task). Synthesise what your workers already returned and answer.")
+    _worker_budget.used = used + 1
+    return agent_teams.run_worker(parent, worker.strip().lower(), task)
+
+
 def _run_specialist(specialist: str, spec: dict, task: str) -> str:
     from reyes_agent.provider import ProviderError, run_turn
     try:
@@ -336,6 +445,44 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
     # here, so the lazy-group optimisation must not narrow them.
     allowed_tools = [t for t in tool_definitions(groups=set(GROUP_NAMES)) if t["name"] in spec["tools"]]
     system = f"{config.SYSTEM_PROMPT}\n\n{spec['prompt']}"
+
+    # Commanders with a worker team get call_worker plus a roster of who they
+    # actually have. The roster is generated from the live team definition
+    # with each worker's REAL capability status, so a specialist cannot call
+    # a worker that isn't operational and then report as if it had run.
+    from reyes_agent import agent_teams
+
+    team = agent_teams.workers_for(specialist)
+    scope_token = None
+    if team:
+        roster = "\n".join(
+            f"  - {w.name}: {w.role} [{agent_teams.capability_of(w)[0]}]" for w in team
+        )
+        system += (
+            f"\n\nYOUR TEAM. You command these workers and may call them with "
+            f"call_worker:\n{roster}\n"
+            f"When the request falls squarely in one worker's lane, CALL THAT "
+            f"WORKER rather than answering from your own general knowledge -- "
+            f"that is what the team is for, and its answer will be better than "
+            f"yours. Answer directly only for quick questions no worker would "
+            f"handle better. Budget: at most "
+            f"{agent_teams.MAX_WORKERS_PER_TASK} worker calls for this task. Workers "
+            f"report to YOU, not to ZENO: verify their output, challenge conflicting "
+            f"recommendations, and return ONE synthesised result. If a worker failed "
+            f"or was unavailable, say so -- never fill in the missing result yourself "
+            f"and present it as the worker's finding. A worker marked UNAVAILABLE or "
+            f"DEGRADED cannot do its full job; report that honestly."
+        )
+        allowed_tools = allowed_tools + [
+            t for t in tool_definitions(groups=set(GROUP_NAMES)) if t["name"] == "call_worker"
+        ]
+        scope_token = agent_teams.enter_primary_scope()
+
+    prev_specialist = getattr(_active, "specialist", None)
+    prev_budget = getattr(_worker_budget, "used", 0)
+    _active.specialist = specialist
+    _worker_budget.used = 0
+
     history: list[dict] = [{"role": "user", "content": task}]
 
     try:
@@ -377,5 +524,12 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
                 )
     except ProviderError as exc:
         return f"Sub-agent '{specialist}' failed: {exc}"
+    finally:
+        # Must unwind even on cancellation, or the next task on this pooled
+        # thread would inherit a stale parent identity and a spent budget.
+        _active.specialist = prev_specialist
+        _worker_budget.used = prev_budget
+        if scope_token is not None:
+            agent_teams.restore_scope(scope_token)
 
     return f"'{specialist}' stopped after too many tool rounds without a final answer."

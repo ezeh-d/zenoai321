@@ -594,6 +594,25 @@ _CAPABILITIES: dict[str, tuple[str, str]] = {
     "mission_resume": ("DEGRADED", "Observable goal, plan, state, files, agents, decisions, blockers and verification can persist locally."),
     "safe_simulation": ("AVAILABLE", "Plans can be previewed without executing tools."),
     "proactive_suggestions": ("DEGRADED", "Existing quiet, opt-in rule-based notices run; no claim of open-ended predictive intelligence."),
+    # Creative Design + Learning uses ZEAL, the existing tool registry and
+    # state database. These entries name actual connected paths and their
+    # gaps, rather than treating a model instruction as proof of a native
+    # design application integration.
+    "graphic_design": ("AVAILABLE", "ZEAL provides design direction; real images and text/SVG project assets use the existing tools."),
+    "logo_design": ("PARTIAL", "Original logo discovery, critique and SVG/text masters are supported; no native vector-editor integration is claimed."),
+    "brand_identity": ("AVAILABLE", "ZEAL can structure original positioning, visual direction and an evidence-backed project asset workflow."),
+    "typography": ("AVAILABLE", "Typography teaching and critique policy cover hierarchy, pairing, readability and spacing."),
+    "colour_theory": ("AVAILABLE", "Colour, contrast and accessibility guidance are available; cultural/contextual judgement remains a design decision."),
+    "layout": ("AVAILABLE", "Hierarchy, alignment, whitespace, grids and composition are covered in design policy and critique."),
+    "ui_ux": ("AVAILABLE", "ZEAL can plan and critique user flows, wireframes, components and accessibility; implementation remains project-tool based."),
+    "image_editing": ("PARTIAL", "ZENO can generate images and critique visible work, but has no verified native pixel-editor automation."),
+    "vector_design": ("PARTIAL", "SVG/text vector masters can be written and verified; no Figma/Illustrator/Inkscape control is claimed."),
+    "creative_direction": ("AVAILABLE", "ZEAL can develop distinct, original visual directions and connect them to real design assets."),
+    "design_education": ("AVAILABLE", "Learning Mode persists explicit progress locally and supports adaptive, exercise-based paths without an idle tutor runtime."),
+    "creator_mode": ("AVAILABLE", "Creator projects reuse the existing agent, project tools, Event Bus and state database; no parallel creative runtime is started."),
+    "mastery_coaching": ("AVAILABLE", "Practical mastery records supplied evidence and weak areas; subjective assessment is clearly labelled and never auto-promotes a learner."),
+    "foodie_mode": ("AVAILABLE", "Recipe, cooking-coach and food-safety guidance use the existing conversation engine; cooking sessions are optional, bounded and Event-Bus visible."),
+    "website_builder": ("AVAILABLE", "Uses the existing managed build, terminal, preview, Activity View and browser paths; website metadata and bounded checkpoints are local and event-driven."),
 }
 
 

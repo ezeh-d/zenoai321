@@ -54,15 +54,22 @@ class BrowserRuntime:
                 return result
 
         # Normal browser operations use multi-second timeouts, but honoring a
-        # short caller deadline is important for cancellation, tests and a
-        # quick UI recovery path.  Keep a tiny floor only to avoid a busy loop.
-        timeout = max(0.05, float(timeout))
+        # short caller deadline is important for cancellation and a quick UI
+        # recovery path. Do not round a caller's deadline up to the polling
+        # interval: a 40 ms deadline used to return around 110 ms on Windows.
+        timeout = max(0.001, float(timeout))
         handle = self._pool.submit(
             invoke, name=name, priority=PRIORITY_MISSION,
             timeout=timeout, with_context=True,
         )
         deadline = time.monotonic() + timeout
-        while not handle.wait(0.05):
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                handle.cancel()
+                raise TimeoutError(f"Browser action '{name}' exceeded {timeout:.3f}s.")
+            if handle.wait(min(0.02, remaining)):
+                break
             if parent is not None:
                 try:
                     parent.check_cancelled()
@@ -72,9 +79,6 @@ class BrowserRuntime:
             # Worker-pool deadlines are cooperative.  This independent wait
             # boundary ensures a malformed/non-Playwright action cannot make
             # the caller (and therefore a request/UI update) wait forever.
-            if time.monotonic() >= deadline:
-                handle.cancel()
-                raise TimeoutError(f"Browser action '{name}' exceeded {timeout:.1f}s.")
         return handle.result()
 
     def close_if_idle(self, max_idle_seconds: float = 1800.0) -> bool:

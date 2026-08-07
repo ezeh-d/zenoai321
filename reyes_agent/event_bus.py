@@ -32,6 +32,7 @@ DESIGN NOTES
 
 from __future__ import annotations
 
+import atexit
 import json
 import queue
 import sqlite3
@@ -174,6 +175,27 @@ def shutdown() -> None:
     flush(5.0)
     if _writer_thread is not None:
         _writer_thread.join(timeout=2.0)
+
+
+@atexit.register
+def _flush_on_exit() -> None:
+    """Last-resort durability net for processes that never boot the kernel.
+
+    `kernel.py` flushes on orderly shutdown, so the web server was always
+    safe. Anything else using the bus directly -- the voice CLI, tests,
+    one-off scripts -- exits with the daemon writer mid-queue, and events
+    published in the final moments are lost silently. Observed 2026-08-06:
+    an `agent.worker_finished` published microseconds before exit never
+    reached state.db, while the same event survived with a 3s delay.
+
+    Deliberately short and non-raising: this runs during interpreter
+    teardown, where a slow or throwing hook is worse than a dropped event.
+    """
+    try:
+        if _persist_queue.unfinished_tasks:
+            flush(1.5)
+    except Exception:  # noqa: BLE001 -- never obstruct interpreter shutdown
+        pass
 
 
 def subscribe() -> queue.Queue:

@@ -28,7 +28,15 @@ def test_new_project_requires_a_destination_before_writing() -> None:
             project_activity._emit = lambda *_args: None
             notification_bus.publish = lambda *_args: None
             result = projects.write_project_file("A new project", "index.html", "<h1>hello</h1>")
-            assert "ask Divine where to save" in result
+            # The guarantee is behavioural: nothing is written without a
+            # destination (asserted below). The message must now drive a
+            # RETRY rather than a hand-off to chat -- the old "ask Divine
+            # where to save it" wording made the model stop and ask even
+            # when the request had already said "on my Desktop", which is
+            # why ZENO described work instead of doing it.
+            assert "NOT SAVED YET" in result
+            assert "destination" in result
+            assert "call write_project_file again" in result.lower()   # retry, not chat
             assert not (config.VAULT_PATH / "02-Projects" / "a-new-project").exists()
             status = project_activity.status()[0]
             assert status["state"] == "WAITING"

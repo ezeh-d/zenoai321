@@ -1,6 +1,15 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+# Same bootstrap as every other module in tests/. Without it this file
+# imports only when the repo root already happens to be on sys.path (e.g.
+# under pytest rootdir discovery), and fails with ModuleNotFoundError when
+# run directly the way the rest of the suite is run.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from reyes_agent.phone_security import PhoneSecurity
 

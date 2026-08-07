@@ -112,14 +112,21 @@ def test_desktop_starts_server_from_background_loader_not_main() -> None:
 def test_provider_failure_isolated_and_does_not_kill_worker() -> None:
     import reyes_agent.provider as provider
 
-    original_runner = provider._RUNNERS[config.MODEL_PROVIDER]
+    # Updated 2026-08-07: run_turn now walks model_router's fallback chain
+    # instead of failing on the single configured provider, so stubbing only
+    # MODEL_PROVIDER let the turn reach a REAL second provider over the
+    # network and blow the 2s budget. Every runner is stubbed so this test
+    # keeps asserting what it is actually about -- that a provider failure
+    # is isolated and the worker survives -- against the new contract.
+    original_runners = dict(provider._RUNNERS)
     original_retries = provider._MAX_RETRY_ATTEMPTS
     pool = ManagedWorkerPool(max_workers=1, max_queue=4, thread_name_prefix="phase22-provider")
 
     def timed_out(*_args):
         raise ProviderError("controlled provider timeout", retryable=False)
 
-    provider._RUNNERS[config.MODEL_PROVIDER] = timed_out
+    for _name in provider._RUNNERS:
+        provider._RUNNERS[_name] = timed_out
     provider._MAX_RETRY_ATTEMPTS = 1
     try:
         handle = pool.submit(lambda: run_turn([{"role": "user", "content": "test"}]), timeout=2)
@@ -131,7 +138,8 @@ def test_provider_failure_isolated_and_does_not_kill_worker() -> None:
             raise AssertionError("Provider timeout unexpectedly succeeded")
         assert pool.metrics()["workers_alive"] == 1
     finally:
-        provider._RUNNERS[config.MODEL_PROVIDER] = original_runner
+        provider._RUNNERS.clear()
+        provider._RUNNERS.update(original_runners)
         provider._MAX_RETRY_ATTEMPTS = original_retries
         pool.shutdown()
 

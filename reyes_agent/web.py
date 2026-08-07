@@ -427,6 +427,11 @@ class ChatRequest(BaseModel):
     message: str
     voice_identity: dict[str, Any] | None = None
     voice_identity_proof: str = ""
+    # Supplied by the browser for voice turns so the latency timeline can
+    # start at the microphone rather than at the HTTP request -- the two are
+    # seconds apart and only the first is what the owner experiences.
+    turn_id: str = ""
+    turn_kind: str = "typed"
 
 
 class HeartbeatRequest(BaseModel):
@@ -588,9 +593,82 @@ def intelligence_simulate(req: SimulationRequest) -> dict[str, Any]:
     return intelligence.simulate_plan(req.goal, req.steps, risk=req.risk, files=req.files)
 
 
+def _open_turn(message: str, requested_id: str = "", *, kind: str = "typed") -> str:
+    """Start a tracked turn: one id shared by the state machine and timeline.
+
+    The browser may supply the id (it starts timing at the microphone, long
+    before the server hears anything). Falls back to a server-side id for
+    typed turns and scripted callers.
+    """
+    try:
+        from reyes_agent import conversation_state, latency
+
+        # A new message while ZENO is still talking IS a barge-in, whether it
+        # was typed or spoken. Handling it here stops the previous turn's
+        # audio and closes it, instead of leaving it orphaned mid-sentence
+        # with its own SPEAKING events arriving against a superseded turn.
+        if conversation_state.current() in {conversation_state.SPEAKING,
+                                            conversation_state.ADVISORY}:
+            conversation_state.barge_in(source="new-message")
+
+        turn_id = conversation_state.begin_turn(requested_id)
+        latency.begin(turn_id, kind=kind, message_preview=message)
+        # A typed turn has no speech endpoint, so the clock starts here.
+        if kind == "typed":
+            latency.mark(turn_id, "stt_final")
+        conversation_state.enter("UNDERSTANDING", source="web", turn_id=turn_id)
+        return turn_id
+    except Exception:  # noqa: BLE001 -- diagnostics never block a conversation
+        return requested_id or ""
+
+
+def _turn_state(turn_id: str, state: str, detail: str = "") -> None:
+    if not turn_id:
+        return
+    try:
+        from reyes_agent import conversation_state
+
+        conversation_state.enter(state, source="web", turn_id=turn_id, detail=detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _finish_turn(turn_id: str) -> None:
+    """The MODEL is done -- but the turn is not over until audio has played.
+
+    Closing the state machine here was wrong and running it proved it: the
+    browser starts TTS only after the reply arrives, so its SPEAKING report
+    landed on an already-finished turn and was (correctly) rejected as
+    stale. The machine then sat at IDLE while ZENO was audibly talking.
+
+    So this records the timeline and leaves the turn OPEN. The browser
+    closes it via /api/turn/end once audio finishes, and a turn that is
+    never closed is superseded by the next `begin_turn`, so nothing leaks.
+    """
+    if not turn_id:
+        return
+    try:
+        from reyes_agent import latency
+
+        latency.finish(turn_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _end_turn(turn_id: str) -> None:
+    if not turn_id:
+        return
+    try:
+        from reyes_agent import conversation_state
+
+        conversation_state.end_turn(turn_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _conversation_turn(
     context, message: str, callbacks: dict[str, Any] | None = None,
-    voice_identity: dict[str, Any] | None = None,
+    voice_identity: dict[str, Any] | None = None, turn_id: str = "",
 ) -> dict[str, Any]:
     """One serialized mutable-history turn, always executed by the worker pool."""
     from reyes_agent.agent import run_agent
@@ -659,15 +737,24 @@ def _conversation_turn(
                         on_tool_result=on_tool_result,
                         on_stage=on_stage,
                         cancel_check=context.check_cancelled,
+                        turn_id=turn_id,
                     )
                 reply = history[-1]["content"]
             except BaseException:
+                # An error is a real conversation state, not just an
+                # exception -- the machine has to see it or the UI is left
+                # showing THINKING forever.
+                _turn_state(turn_id, "ERROR", "the turn failed")
+                # A failed turn has no audio coming, so it ends here rather
+                # than waiting for a browser callback that will never arrive.
+                _end_turn(turn_id)
                 if use_shared_history:
                     del history[turn_start:]
                 raise
             finally:
                 if use_shared_history:
                     trim_history(history)
+                _finish_turn(turn_id)
             return {"reply": reply, "tool_calls": tool_calls}
     finally:
         _lock.release()
@@ -728,8 +815,10 @@ def chat(req: ChatRequest) -> dict[str, Any]:
     from reyes_agent.worker_pool import PRIORITY_BRAIN, get_worker_pool
 
     voice_identity = _validated_voice_identity(req.voice_identity, req.voice_identity_proof)
+    turn_id = _open_turn(message, req.turn_id, kind=req.turn_kind)
     handle = get_worker_pool().submit(
-        _conversation_turn, message, voice_identity=voice_identity, name="chat", priority=PRIORITY_BRAIN,
+        _conversation_turn, message, voice_identity=voice_identity, turn_id=turn_id,
+        name="chat", priority=PRIORITY_BRAIN,
         timeout=config.AI_REQUEST_TIMEOUT_S + 60, with_context=True,
     )
     control.register(handle, label="Conversation", kind="brain")
@@ -762,6 +851,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
     update_situation(recent_command=message, current_task="conversation", current_step="planning")
 
     voice_identity = _validated_voice_identity(req.voice_identity, req.voice_identity_proof)
+    turn_id = _open_turn(message, req.turn_id, kind=req.turn_kind)
 
     def generate():
         from reyes_agent.worker_pool import PRIORITY_BRAIN, get_worker_pool
@@ -784,7 +874,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
                     context, message,
                     {kind: (lambda event, kind=kind: emit(context, event))
                      for kind in ("text", "tool", "tool_result", "stage")},
-                    voice_identity=voice_identity,
+                    voice_identity=voice_identity, turn_id=turn_id,
                 )
             except Exception as exc:  # noqa: BLE001 -- errors are streamed, not hidden
                 try:
@@ -1214,6 +1304,119 @@ def agents_health() -> dict[str, Any]:
     return agent_runtime.health()
 
 
+@app.get("/api/hierarchy")
+def agent_hierarchy() -> dict[str, Any]:
+    """ZENO -> primary specialists -> their workers, with REAL capability
+    status per worker. Backs the Subspace hierarchy view.
+
+    Capability status is computed from the live tool registry on every
+    call, so a worker drawn in Subspace can still report UNAVAILABLE --
+    being visible is explicitly not a claim that it works.
+    """
+    from reyes_agent import agent_runtime, agent_teams
+    from reyes_agent.tools.subagents import _SPECIALISTS
+
+    teams = agent_teams.describe()
+    health = agent_runtime.health()
+    runtime_by_id = {a["agent"]: a for a in health["agents"]}
+
+    primaries = []
+    for agent_id, role in agent_runtime.AGENT_ROLES.items():
+        rt = runtime_by_id.get(agent_id, {})
+        team = teams["parents"].get(agent_id, {"workers": [], "count": 0})
+        status, why = agent_runtime.presence_status(rt) if rt else (
+            agent_runtime.S_OFFLINE, "no runtime snapshot")
+        primaries.append({
+            "agent": agent_id,
+            "role": role,
+            "description": (_SPECIALISTS.get(agent_id) or {}).get("description", ""),
+            "state": rt.get("state", "standby"),
+            # `status` is the single display truth -- see presence_status().
+            "status": status,
+            "status_reason": why,
+            "alive": rt.get("alive", False),
+            "healthy": rt.get("healthy", True),
+            "queue_depth": rt.get("queue_depth", 0),
+            "current_task": rt.get("current_task", ""),
+            "last_task": rt.get("last_task", ""),
+            "last_result": rt.get("last_result", ""),
+            "last_error": rt.get("last_error", ""),
+            "last_error_s_ago": rt.get("last_error_s_ago"),
+            "heartbeat_age_s": rt.get("heartbeat_age_s"),
+            "last_activity_s_ago": rt.get("last_activity_s_ago"),
+            "uptime_s": rt.get("uptime_s", 0),
+            "tasks_completed": rt.get("tasks_completed", 0),
+            "tasks_failed": rt.get("tasks_failed", 0),
+            "restarts": rt.get("restarts", 0),
+            "workers": team["workers"],
+            "worker_count": team["count"],
+        })
+
+    return {
+        "root": "zeno",
+        "owner": "divine",
+        "max_depth": teams["max_depth"],
+        "max_workers_per_task": teams["max_workers_per_task"],
+        "worker_timeout_s": teams["worker_timeout_s"],
+        "primaries": primaries,
+        "total_workers": teams["total_workers"],
+        "status_counts": teams["status_counts"],
+        "agents_alive": health["agents_alive"],
+        "agents_total": health["agents_total"],
+    }
+
+
+@app.post("/api/agents/summon-all")
+def summon_all_agents() -> dict[str, Any]:
+    """Actually spawn every registered specialist's worker thread.
+
+    This makes them genuinely alive -- real threads on their real queues,
+    emitting real heartbeats -- rather than reporting 'standby' until first
+    delegated to. It does NOT mark anyone as working: an agent that is alive
+    with an empty queue is IDLE, and Subspace shows it that way. Making idle
+    agents render as busy would destroy the one thing the view is for.
+
+    Cost is real but small: each worker blocks on its queue when idle. The
+    response reports the measured thread/RAM delta so the trade-off is
+    visible rather than assumed.
+    """
+    import threading as _t
+
+    from reyes_agent import agent_runtime
+
+    def _rss_mb() -> float:
+        try:
+            import psutil
+
+            return psutil.Process().memory_info().rss / (1024 * 1024)
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    before_threads, before_rss = _t.active_count(), _rss_mb()
+    started, already = [], []
+    for agent_id in agent_runtime.AGENT_ROLES:
+        w = agent_runtime.get_worker(agent_id)
+        if w is not None and w.is_alive():
+            already.append(agent_id)
+            continue
+        if agent_runtime.ensure_worker(agent_id) is not None:
+            started.append(agent_id)
+
+    health = agent_runtime.health()
+    return {
+        "started": started,
+        "already_alive": already,
+        "agents_alive": health["agents_alive"],
+        "agents_total": health["agents_total"],
+        "threads_before": before_threads,
+        "threads_after": _t.active_count(),
+        "rss_mb_before": round(before_rss, 1),
+        "rss_mb_after": round(_rss_mb(), 1),
+        "note": ("Alive and idle. None are marked working -- that only happens "
+                 "when a real task is queued to them."),
+    }
+
+
 @app.post("/api/agents/{agent_id}/restart")
 def agent_restart(agent_id: str) -> dict[str, Any]:
     from reyes_agent import agent_runtime
@@ -1399,6 +1602,193 @@ def projects_destination(req: ProjectDestinationRequest) -> dict[str, Any]:
         return {"project": project_activity.select_destination(name, destination)}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+class TurnMarkRequest(BaseModel):
+    """Browser-observed latency marks and conversation states.
+
+    The browser owns the marks nothing else can see -- when the microphone
+    heard speech start, when endpointing fired, when audio actually reached
+    the speaker. Those are the endpoints of the numbers the owner feels, so
+    they cannot be inferred server-side.
+    """
+    turn_id: str
+    mark: str = ""
+    state: str = ""
+    at: float | None = None
+    detail: str = ""
+    source: str = "browser"
+
+
+@app.post("/api/turn/mark")
+def turn_mark(req: TurnMarkRequest) -> dict[str, Any]:
+    from reyes_agent import conversation_state, latency
+
+    if not req.turn_id or len(req.turn_id) > 64:
+        raise HTTPException(400, "A valid turn_id is required.")
+    stored = latency.mark(req.turn_id, req.mark, req.at) if req.mark else False
+    transition = None
+    if req.state:
+        result = conversation_state.enter(
+            req.state.upper(), source=str(req.source or "browser")[:64],
+            turn_id=req.turn_id, detail=req.detail)
+        transition = result.as_dict()
+    return {"marked": stored, "transition": transition}
+
+
+@app.post("/api/turn/end")
+def turn_end(req: TurnMarkRequest) -> dict[str, Any]:
+    """The browser finished playing (or skipped) the reply audio.
+
+    This is what actually closes a turn, because only the browser knows
+    when the owner stopped hearing ZENO.
+    """
+    _end_turn(req.turn_id)
+    from reyes_agent import conversation_state
+
+    return {"state": conversation_state.current()}
+
+
+@app.post("/api/turn/barge-in")
+def turn_barge_in() -> dict[str, Any]:
+    """The user cut in while ZENO was speaking.
+
+    Routed through the state machine so the interrupted turn is closed and
+    its late events cannot re-assert SPEAKING afterwards.
+    """
+    from reyes_agent import conversation_state
+
+    return {"transition": conversation_state.barge_in(source="browser").as_dict()}
+
+
+@app.get("/api/diagnostics/conversation")
+def diagnostics_conversation() -> dict[str, Any]:
+    """Developer diagnostics: current state plus duplicate-listener evidence."""
+    from reyes_agent import conversation_state
+
+    return {"state": conversation_state.snapshot(),
+            "duplicates": conversation_state.duplicate_report()}
+
+
+@app.get("/api/diagnostics/latency")
+def diagnostics_latency(limit: int = 50) -> dict[str, Any]:
+    """Developer diagnostics: the turn timeline and its percentiles."""
+    from reyes_agent import latency
+
+    return {"summary": latency.summary(limit=limit),
+            "recent": latency.recent(limit=10),
+            "marks": list(latency.MARKS)}
+
+
+class BuildTaskRequest(BaseModel):
+    task_id: str = ""
+
+
+@app.get("/api/build/tasks")
+def build_tasks() -> dict[str, Any]:
+    """Live state of real build tasks -- what the Activity panel renders.
+
+    Every field here originates in an executor that observed something:
+    a verified file write, a captured process line, an HTTP response. There
+    is no estimated or simulated progress in this payload.
+    """
+    from reyes_agent import task_engine
+
+    return {"tasks": task_engine.active()}
+
+
+@app.post("/api/build/cancel")
+def build_cancel(req: BuildTaskRequest) -> dict[str, Any]:
+    """Cancel Task button. Stops the work AND the processes it started."""
+    from reyes_agent import task_engine
+
+    task = task_engine.get(req.task_id) if req.task_id else task_engine.latest_open()
+    if task is None:
+        raise HTTPException(404, "No build task is running.")
+    return {"task": task_engine.cancel(task.id, "Cancelled from the Activity panel.")}
+
+
+@app.post("/api/build/open-folder")
+def build_open_folder(req: BuildTaskRequest) -> dict[str, Any]:
+    """Open Folder button -- only ever the task's own output folder."""
+    from reyes_agent import task_engine
+    from reyes_agent.executors import application
+
+    task = task_engine.get(req.task_id) if req.task_id else task_engine.latest_open()
+    if task is None or not task.output_path:
+        raise HTTPException(404, "That build has no output folder yet.")
+    ok, message = application.open_folder(Path(task.output_path))
+    if not ok:
+        raise HTTPException(400, message)
+    return {"ok": True, "message": message, "path": task.output_path}
+
+
+@app.post("/api/build/open-preview")
+def build_open_preview(req: BuildTaskRequest) -> dict[str, Any]:
+    """Open Website button. Refuses if the server is not actually responding."""
+    from reyes_agent import task_engine
+    from reyes_agent.executors import application, preview
+
+    task = task_engine.get(req.task_id) if req.task_id else task_engine.latest_open()
+    if task is None or not task.preview_url:
+        raise HTTPException(404, "That build has no preview server.")
+    responding, detail = preview.probe(task.preview_url)
+    if not responding:
+        raise HTTPException(409, detail)
+    ok, message = application.open_url(task.preview_url)
+    if not ok:
+        raise HTTPException(400, message)
+    return {"ok": True, "message": message, "url": task.preview_url}
+
+
+class WebsiteProjectRequest(BaseModel):
+    location: str
+
+
+@app.get("/api/website/projects")
+def website_projects() -> dict[str, Any]:
+    """Website Studio inventory plus the actual managed preview record."""
+    from reyes_agent import website_builder
+    from reyes_agent.executors import preview
+
+    projects = []
+    for item in website_builder.projects():
+        copy = dict(item)
+        copy["preview"] = preview.for_project(Path(item["location"]))
+        projects.append(copy)
+    return {"projects": projects}
+
+
+@app.post("/api/website/open-folder")
+def website_open_folder(req: WebsiteProjectRequest) -> dict[str, Any]:
+    from reyes_agent import website_builder
+    from reyes_agent.executors import application
+
+    root = website_builder.safe_project_root(Path(req.location).expanduser())
+    ok, message = application.open_folder(root)
+    if not ok:
+        raise HTTPException(400, message)
+    return {"ok": True, "message": message, "path": str(root)}
+
+
+@app.post("/api/website/inspect")
+def website_inspect(req: WebsiteProjectRequest) -> dict[str, Any]:
+    from reyes_agent import website_builder
+
+    root = website_builder.safe_project_root(Path(req.location).expanduser())
+    return {"findings": website_builder.inspect(root)}
+
+
+@app.post("/api/website/visual-inspect")
+def website_visual_inspect(req: WebsiteProjectRequest) -> dict[str, Any]:
+    from reyes_agent import website_builder
+
+    try:
+        return website_builder.visual_inspect(Path(req.location).expanduser())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(504, str(exc)) from exc
 
 
 class NotificationSettingsRequest(BaseModel):

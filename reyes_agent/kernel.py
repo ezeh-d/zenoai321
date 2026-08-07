@@ -193,6 +193,23 @@ class ZenoKernel:
         except Exception:
             pass
         try:
+            # Preview servers and any build subprocess are children of this
+            # process. Stopping them here is what keeps a closed ZENO from
+            # leaving a port bound; the FILES it wrote stay on disk, which
+            # is the whole point of writing them to the Desktop.
+            from reyes_agent import task_engine
+            task_engine.shutdown_all()
+        except Exception:
+            pass
+        try:
+            # Website Studio build/install jobs are subprocesses of this
+            # process. Stopping them here is what prevents a closed ZENO
+            # leaving an `npm install` running against a project folder.
+            from reyes_agent.executors import jobs
+            jobs.shutdown_all()
+        except Exception:
+            pass
+        try:
             from reyes_agent import voice_manager
             voice_manager.shutdown()
         except Exception:

@@ -80,6 +80,10 @@ TOOL_GROUPS: dict[str, str] = {
     "health_center": "intelligence", "remember_relationship": "intelligence",
     "search_relationships": "intelligence", "forget_relationship": "intelligence",
     "save_mission_runtime_state": "intelligence", "load_mission_runtime_state": "intelligence",
+    # Creator/Mastery/Foodie are compact explicit-state entry points. Keeping
+    # them core avoids a discovery round, while their work remains local and
+    # event-driven -- no specialist or background service is started merely
+    # because they are registered.
     # missions: create/list stay core; the rest load on demand
     "get_mission": "missions", "update_mission": "missions",
     "set_mission_objective_done": "missions",
@@ -105,9 +109,26 @@ TOOL_GROUPS: dict[str, str] = {
     # media/creative
     "create_3d_model": "creative", "create_canvas": "creative",
     "create_database_view": "creative", "generate_image": "creative",
+    # `learning_mode` is intentionally CORE: it is one compact entry point
+    # for an explicit owner lesson, while screenshot critique remains lazy.
+    "critique_current_design": "creative",
     # comms detail
     "read_email": "comms", "add_calendar_event": "comms",
     "list_calendar_events": "comms", "cancel_calendar_event": "comms",
+    # Real-execution builds. `build_project` itself stays CORE -- it is the
+    # entry point for every "create/build/save it on my Desktop" request, and
+    # a request that has to spend a round discovering the tool is a request
+    # that gets answered with an explanation instead. The follow-ups load
+    # automatically the moment a build starts (see agent.py).
+    "build_add_files": "build", "build_status": "build",
+    "cancel_build": "build", "build_environment": "build",
+    # Worker teams. Grouped ONLY to keep call_worker out of ZENO's core
+    # payload -- ZENO delegates to a commander, it never calls a commander's
+    # worker itself, so a core schema here would be pure per-turn token cost
+    # (the exact thing that caused the measured lag) for a tool that would
+    # only ever return "not a primary specialist". _run_specialist adds it
+    # explicitly to commanders that actually have a team.
+    "call_worker": "agent_workers",
 }
 GROUP_NAMES = sorted(set(TOOL_GROUPS.values()))
 
@@ -248,6 +269,19 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     if tool is None:
         return f"Error: no tool named '{name}' is registered."
 
+    # A tool call whose arguments were cut off at the model's output limit
+    # (see provider.py). Nothing ran, and saying so plainly is what lets the
+    # model split the work up instead of quietly reporting a build it never
+    # performed.
+    if "__truncated_arguments__" in tool_input:
+        size = tool_input["__truncated_arguments__"]
+        return (
+            f"Error: your call to '{name}' was cut off after {size} characters, so its "
+            "arguments were incomplete and NOTHING RAN. Split the work into smaller "
+            "calls -- for build_project, send the main files first with finish=false, "
+            "then call build_add_files with the task_id for the rest."
+        )
+
     # Voice identity is request-scoped and server-signed. It can protect
     # private retrieval, but never becomes authority for a consequential
     # action: desktop confirmation remains a separate factor.
@@ -300,7 +334,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import blender, browser, calendar, campaign_tools, companion_tools, council_tools, email_tools, intelligence_tools, investing, knowledge_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import blender, browser, build, calendar, campaign_tools, companion_tools, council_tools, design, email_tools, intelligence_tools, investing, knowledge_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

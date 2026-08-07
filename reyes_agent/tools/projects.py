@@ -26,10 +26,14 @@ def _slug(name: str) -> str:
 @register(
     name="write_project_file",
     description=(
-        "Write a file into a project folder -- HTML, CSS, JS, Python, or "
+        "Write a real file into a project folder -- HTML, CSS, JS, Python, or "
         "any text format. For building websites, scripts, or small apps. "
         "Creates the project folder if needed; overwrites the file if it "
-        "already exists at that path."
+        "already exists at that path. When Divine asks you to CREATE or BUILD "
+        "something, call this to actually write the files -- describing the "
+        "code in your reply instead of writing it does not create anything. "
+        "Pass `destination` on the FIRST call whenever his request named a "
+        "location (e.g. 'save it on my Desktop' -> destination=\"Desktop\")."
     ),
     input_schema={
         "type": "object",
@@ -46,9 +50,11 @@ def _slug(name: str) -> str:
             "destination": {
                 "type": "string",
                 "description": (
-                    "Required before creating a NEW project unless Divine already chose one in the Live Activity View. "
-                    "Use Desktop, Documents, ZENO Projects, or a full folder path. "
-                    "Do not guess a destination; ask Divine first."
+                    "Where a NEW project folder is created. Use Desktop, Documents, "
+                    "ZENO Projects, or a full folder path. If Divine's request named "
+                    "a location, pass it here immediately -- he has already told you, "
+                    "so asking again just stalls the task. Ask only when the request "
+                    "named no location and none was chosen in the Live Activity View."
                 ),
             },
         },
@@ -80,10 +86,20 @@ def write_project_file(project_name: str, filename: str, content: str, destinati
                 project_dir = legacy_dir
             else:
                 project_activity.request_destination(project_name)
+                # This used to say "ask Divine where to save it", which the
+                # model correctly obeyed -- it stopped and asked, so a request
+                # that had ALREADY named a location ("save it on my Desktop")
+                # produced conversation and zero files. That was the single
+                # biggest cause of ZENO describing work instead of doing it.
+                # The destination handshake still stands; it is now an
+                # instruction to RETRY the call, not to hand off to chat.
                 return (
-                    f"Before creating '{project_name}', ask Divine where to save it: "
-                    "Desktop, Documents, ZENO Projects, or another full folder path. "
-                    "No project files were created."
+                    f"NOT SAVED YET -- '{project_name}' needs a destination. Call "
+                    f"write_project_file again with destination set, in this same "
+                    f"turn: destination=\"Desktop\" | \"Documents\" | \"ZENO Projects\" "
+                    f"| a full folder path. If Divine's request already named a "
+                    f"location (e.g. \"on my Desktop\"), use it now and do NOT ask "
+                    f"him again. Only ask if the request genuinely named none."
                 )
         project_activity.begin(project_name, project_dir)
     except (OSError, ValueError) as exc:

@@ -26,6 +26,88 @@ XAI_MODEL = os.environ.get("XAI_MODEL", "grok-4-latest").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest").strip()
 
+def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+# Source-only Website Studio history. Dependencies and generated output are
+# excluded by the checkpoint executor. These defaults cover normal React/Vite
+# source trees while keeping a mistaken huge folder from consuming the host.
+WEBSITE_CHECKPOINT_MAX_FILES = _bounded_env_int("WEBSITE_CHECKPOINT_MAX_FILES", 750, 150, 1_000)
+WEBSITE_CHECKPOINT_MAX_MB = _bounded_env_int("WEBSITE_CHECKPOINT_MAX_MB", 12, 2, 25)
+
+# Output cap per model turn. This used to be 600, chosen to bound worst-case
+# generation time on the assumption that "replies are meant to be short
+# anyway". That holds for conversation and was the single hardest blocker on
+# action, for two compounding reasons measured 2026-08-07 against the
+# NovaBank acceptance prompt:
+#
+#   * A tool call carrying the contents of index.html is thousands of
+#     tokens. A truncated call is not a short call -- its JSON no longer
+#     parses, so the arguments collapsed to {} and the build silently never
+#     happened.
+#   * Gemini counts internal reasoning against this same budget. At 600 AND
+#     at 8192 the turn came back `finish_reason=length` having emitted
+#     ZERO characters: the whole allowance went to thinking, so ZENO
+#     produced an empty reply and no tool call at all. That is what "it
+#     talks instead of doing" looked like from the inside.
+#
+# At 32768 the same prompt returns a complete build_project call (~53k
+# characters of arguments) with a clean `finish_reason=stop`. Streaming
+# means a high cap costs nothing until it is used -- the first token
+# arrives at the same moment either way, and the model still stops when it
+# is done. `reasoning_effort` is NOT an alternative here: Gemini's
+# OpenAI-compatible endpoint rejects it with a 400.
+try:
+    MAX_OUTPUT_TOKENS = max(600, int(os.environ.get("MAX_OUTPUT_TOKENS", "32768")))
+except ValueError:
+    MAX_OUTPUT_TOKENS = 32768
+
+# Website Builder uses the existing managed build/preview path. These flags
+# only govern that integration; they never turn on unrelated ZENO services.
+WEBSITE_BUILDER_ENABLED = os.environ.get("WEBSITE_BUILDER_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+WEB_VISUAL_INSPECTION = os.environ.get("WEB_VISUAL_INSPECTION", "true").strip().lower() not in {"0", "false", "no", "off"}
+WEB_VERSIONING = os.environ.get("WEB_VERSIONING", "true").strip().lower() not in {"0", "false", "no", "off"}
+# Automatic repair of generated projects. Only deterministic, non-destructive
+# repairs ever run unattended (see executors/build_check.py); anything needing
+# real code comprehension is reported for ZENO to fix deliberately.
+WEBSITE_AUTO_FIX = os.environ.get("WEBSITE_AUTO_FIX", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _seconds(name: str, default: int, low: int = 10, high: int = 3600) -> int:
+    try:
+        return max(low, min(high, int(os.environ.get(name, str(default)))))
+    except ValueError:
+        return default
+
+
+# Per-KIND timeouts for Website Studio jobs. These bound the JOB, never
+# ZENO: long commands run as background jobs (executors/jobs.py), so a
+# 10-minute install occupies a subprocess, not the assistant.
+WEB_BUILD_TIMEOUT_SECONDS = _seconds("WEB_BUILD_TIMEOUT_SECONDS", 300)
+WEB_INSTALL_TIMEOUT_SECONDS = _seconds("WEB_INSTALL_TIMEOUT_SECONDS", 600)
+WEB_TEST_TIMEOUT_SECONDS = _seconds("WEB_TEST_TIMEOUT_SECONDS", 300)
+try:
+    # Hard-capped in build_check regardless of what is configured -- an
+    # unbounded repair loop is how a build turns into an infinite rewrite.
+    WEBSITE_MAX_FIX_ATTEMPTS = max(0, min(5, int(os.environ.get("WEBSITE_MAX_FIX_ATTEMPTS", "5"))))
+except ValueError:
+    WEBSITE_MAX_FIX_ATTEMPTS = 5
+# Where generated sites live when the owner names no location. Deliberately
+# OUTSIDE the ZENO installation and vault: a generated project that can reach
+# ZENO's own source is a stability risk, and `website_builder.safe_project_root`
+# refuses those paths outright. Not a hardcoded absolute path -- it follows the
+# real Documents folder unless the owner overrides it.
+# None when unset, NOT Path("") -- an empty Path is "." (the current working
+# directory, i.e. inside ZENO), which is exactly the location this setting
+# exists to avoid.
+_website_workspace_raw = os.environ.get("WEBSITE_WORKSPACE_PATH", "").strip()
+WEBSITE_WORKSPACE_PATH = Path(_website_workspace_raw).expanduser() if _website_workspace_raw else None
+
 # Local/offline fallback -- no key needed, just a running `ollama serve`.
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b").strip()
@@ -427,4 +509,61 @@ call is correct here because the answer requires reading actual data.
 - User: "open notepad" -> call open_app. Tool call is correct here \
 because the user explicitly asked for that action.
 If the user's message doesn't name a file, note, app, or action, that's \
-your signal no tool is needed."""
+your signal no tool is needed.
+
+Questions vs. actions -- sort every request into one of three before you \
+reply:
+1. A QUESTION wants an explanation. Answer it. No tool.
+2. An ACTION wants something to change on this computer. Do it with a \
+tool, then report what actually happened.
+3. BOTH wants the thing done and explained. Do it first, explain second.
+Verbs that mean ACTION: create, build, make, generate, set up, save, \
+write, open, edit, change, move, rename, install, run, launch, start, \
+preview, test, delete. If {USER_NAME} says any of those about something \
+on his machine, he is asking for a real change, not a description of one. \
+"Create a banking website and save it on my Desktop" is an ACTION -- the \
+correct response begins with a tool call, not with code in the chat.
+
+Building anything -- websites, apps, scripts, folders of files: call \
+build_project. It really creates the folder, writes and verifies every \
+file, runs the project commands, starts a local server, opens the \
+browser, checks the page responded, and shows every step live in the \
+Activity panel while it happens. Pass the COMPLETE contents of every \
+file; a placeholder or "// rest of the code here" produces a broken \
+project. Pass the destination {USER_NAME} named ("on my Desktop" -> \
+destination="Desktop") -- he has already told you, so asking again just \
+stalls the job. If the project is too big for one call, pass finish=false \
+and continue with build_add_files using the returned task_id. NEVER \
+answer a build request by pasting the code into chat and telling him \
+where to save it: that creates nothing, and it is the single thing you \
+must stop doing.
+
+What build_project needs no permission for, because it is local, \
+reversible and inside the project folder it just made: creating the \
+folder, writing files into it, installing ordinary project dependencies, \
+running a local dev server, opening the result, and fixing errors in code \
+it wrote. What still stops and asks, every time: deleting {USER_NAME}'s \
+files, overwriting an unrelated existing project, administrator commands, \
+publishing or deploying anything to the internet, sending messages, \
+uploading files, purchases, money movement, and passwords or credentials. \
+If the tool result says a command was refused rather than run, say that \
+plainly and offer to run it with his approval -- never report it as done.
+
+Read the build result before you speak. It says COMPLETED, FAILED or \
+CANCELLED, gives the real saved path, and lists every verification check \
+that passed or failed. Report that, including failures. If it FAILED, say \
+what failed and what you'll do about it -- do not describe a working \
+website that isn't. When it COMPLETED, tell him plainly what was built, \
+the exact folder it is in, and that it's open in his browser.
+
+Missing tools are stated, never worked around silently. If the result \
+says Node.js or npm is not installed, say so and offer the plain \
+HTML/CSS/JavaScript version (which needs neither) or offer to walk him \
+through installing it. Never pretend a dependency exists.
+
+Anything involving banks, payments, cards or accounts is built as an \
+obviously fictional demonstration: sample accounts, sample transactions, \
+a login that accepts no real credentials, and a visible note on the page \
+saying it is a demo. Never imitate a real financial institution, never \
+build a page that sends what someone types into it anywhere, and never \
+wire up a real transaction."""

@@ -1,4 +1,17 @@
-"""Offline coverage for owner-taught workflow recording and replay."""
+"""Offline coverage for owner-taught workflow recording and replay.
+
+FOREGROUND ISOLATION
+`WorkflowEngine._verify_step` verifies a `focus` step by asking
+`activity_monitor.foreground_app()` what is REALLY in front, and raises
+WorkflowNeedsInput(retry_step=True) when it does not match. That is correct
+production behaviour -- it is why ZENO will not keep clicking into the
+wrong window -- but it made this "offline" module depend on whatever app
+happened to be focused on the developer's desktop, so replay tests passed
+or failed depending on which window had focus at that moment (observed
+2026-08-06: the same test yielding index 0 and index 2 on consecutive
+runs). The stub below makes that input explicit and deterministic. It
+patches only the observation, never the verification logic.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from reyes_agent import permissions
+from reyes_agent import activity_monitor, permissions
 from reyes_agent.workflow_engine import (
     MODES,
     TEACH_MODE_PAUSED,
@@ -25,6 +38,15 @@ from reyes_agent.workflow_engine import (
     WORKFLOW_WAITING_FOR_INPUT,
     WorkflowEngine,
 )
+
+
+def set_foreground(app: str) -> None:
+    """Control what _verify_step observes as the focused application."""
+    activity_monitor.foreground_app = lambda: (app, f"{app} window")
+
+
+# Default: whatever a test focuses is what is in front, so replay proceeds.
+set_foreground("chrome")
 
 
 class FakeRecorder:
@@ -113,9 +135,11 @@ def test_replay_stops_for_input_then_resumes_from_the_next_step() -> None:
         }
         (root / "demo.json").write_text(json.dumps(workflow), encoding="utf-8")
         engine = make_engine(root)
+        set_foreground("chrome")     # step 0 focuses chrome and verifies against it
         engine._run_job(FakeContext(), "demo", 0)  # exact managed-task body, no desktop action involved
         assert engine.status()["mode"] == WORKFLOW_WAITING_FOR_INPUT
         assert engine.status()["index"] == 2
+        set_foreground("winword.exe")  # the owner switched apps before resuming
         engine._run_job(FakeContext(), "demo", 2)
         assert engine.status()["mode"] == WORKFLOW_COMPLETED
 
