@@ -8,6 +8,9 @@ an accurate transcript.
 
 from __future__ import annotations
 
+import logging
+import time
+
 from deepgram import DeepgramClient
 
 from reyes_agent import config
@@ -18,6 +21,7 @@ class STTError(Exception):
 
 
 _client: DeepgramClient | None = None
+_LOG = logging.getLogger(__name__)
 
 
 def _get_client() -> DeepgramClient:
@@ -34,14 +38,25 @@ def transcribe_result(wav_bytes: bytes) -> dict[str, str | float | None]:
     if not wav_bytes:
         return {"transcript": "", "confidence": None}
     client = _get_client()
+    started = time.monotonic()
+    _LOG.info("speech transcription started bytes=%d", len(wav_bytes))
     try:
         resp = client.listen.v1.media.transcribe_file(
             request=wav_bytes,
             model=config.DEEPGRAM_MODEL,
             smart_format=True,
             punctuate=True,
+            # The SDK's request timeout interrupts the actual httpx call.
+            # A worker deadline alone cannot stop a synchronous SDK request.
+            request_options={
+                # Leave a small margin for the worker/browser to receive and
+                # cleanly render the provider timeout response.
+                "timeout_in_seconds": max(1, config.TRANSCRIBE_TIMEOUT_SECONDS - 2),
+                "max_retries": 0,
+            },
         )
     except Exception as exc:  # noqa: BLE001 -- surfaced to the caller, never crashes the loop
+        _LOG.warning("speech transcription failed after %.3fs: %s", time.monotonic() - started, type(exc).__name__)
         raise STTError(str(exc)) from exc
 
     try:
@@ -53,7 +68,9 @@ def transcribe_result(wav_bytes: bytes) -> dict[str, str | float | None]:
             confidence = None
         if confidence is not None and not 0.0 <= confidence <= 1.0:
             confidence = None
-        return {"transcript": str(alternative.transcript or ""), "confidence": confidence}
+        transcript = str(alternative.transcript or "")
+        _LOG.info("speech transcription finished duration_s=%.3f chars=%d", time.monotonic() - started, len(transcript))
+        return {"transcript": transcript, "confidence": confidence}
     except (AttributeError, IndexError) as exc:
         raise STTError("No transcript came back in the response.") from exc
 

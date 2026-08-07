@@ -1032,9 +1032,9 @@ def transcribe_audio(audio: UploadFile = File(...), speaker_audio: UploadFile | 
 
     handle = get_worker_pool().submit(
         transcribe_job, name="voice-transcribe", priority=PRIORITY_VOICE,
-        timeout=90, with_context=True,
+        timeout=config.TRANSCRIBE_TIMEOUT_SECONDS + 2, with_context=True,
     )
-    return _background_result(handle, 95)
+    return _background_result(handle, config.TRANSCRIBE_TIMEOUT_SECONDS + 4)
 
 
 @app.post("/api/voice-turn")

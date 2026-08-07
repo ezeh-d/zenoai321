@@ -17,7 +17,10 @@ def test_vad_requests_browser_audio_processing_and_bounds_its_work() -> None:
     assert "echoCancellation: true" in source
     assert "autoGainControl: true" in source
     assert "const POLL_MS = 50" in source
-    assert "const HANGOVER_MS = 700" in source
+    assert "endSilenceMs: 700" in source
+    assert "minSpeechMs: 120" in source
+    assert "const CALIBRATION_RATE = 0.16" in source
+    assert "export function recalibrate()" in source
     assert "export function mediaStream()" in source
     assert "export function pauseDetection()" in source
 
@@ -29,8 +32,11 @@ def test_listener_records_the_processed_stream_not_web_speech() -> None:
     assert 'import * as voiceVAD from "/static/vad.js?v=1"' in source
     assert "voiceVAD.mediaStream()" in active
     assert "new MediaRecorder(stream" in active
-    assert "const VAD_MAX_CLIP_MS = 15_000" in source
+    assert "let VAD_MAX_CLIP_MS = 12_000" in source
+    assert "TRANSCRIBE_TIMEOUT_MS = 12_000" in source
     assert "fetch('/api/transcribe'" in active
+    assert "signal: controller.signal" in active
+    assert "ignored a short noise spike" in active
     assert "SpeechRecognition" not in active
 
 
@@ -49,7 +55,7 @@ def test_transcription_endpoint_is_bounded_and_does_not_run_an_agent_turn() -> N
     assert "_read_audio_upload(audio)" in endpoint
     assert 'name="voice-transcribe"' in endpoint
     assert "priority=PRIORITY_VOICE" in endpoint
-    assert "timeout=90" in endpoint
+    assert "timeout=config.TRANSCRIBE_TIMEOUT_SECONDS + 2" in endpoint
     assert "_conversation_turn" not in endpoint
 
 

@@ -2174,8 +2174,31 @@ let transcriptionActive = false;
 let vadHandlersBound = false;
 let lastVoiceIdentity = null;
 let lastVoiceIdentityProof = '';
-const VAD_MAX_CLIP_MS = 15_000;
+let VAD_MAX_CLIP_MS = 12_000;
+let TRANSCRIBE_TIMEOUT_MS = 12_000;
 const VAD_MIN_CLIP_BYTES = 1_200;
+let speechSettingsPromise = null;
+
+function loadSpeechSettings() {
+  if (speechSettingsPromise) return speechSettingsPromise;
+  speechSettingsPromise = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+      const response = await fetch('/api/speech/capabilities', { signal: controller.signal });
+      const payload = await response.json();
+      const settings = payload.settings || {};
+      voiceVAD.configure(settings);
+      VAD_MAX_CLIP_MS = Number(settings.max_utterance_ms) || VAD_MAX_CLIP_MS;
+      TRANSCRIBE_TIMEOUT_MS = Number(settings.transcribe_timeout_ms) || TRANSCRIBE_TIMEOUT_MS;
+    } catch (_error) {
+      voiceVAD.configure({});
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  return speechSettingsPromise;
+}
 
 // Chrome/Edge/WebView2 expose the OS's higher-quality "Online (Natural)"
 // neural voices alongside the flat default ones, but only via this list
@@ -2330,9 +2353,9 @@ function findWakeWord(text) {
 // This is linguistic endpointing on top of the existing energy VAD --
 // neither alone is enough, and both are honest signals rather than a guess
 // dressed up as certainty.
-const SETTLE_COMPLETE_MS = 700;    // sounds finished -- go sooner
-const SETTLE_DEFAULT_MS  = 1100;   // unchanged default for ordinary speech
-const SETTLE_TRAILING_MS = 2300;   // clearly mid-thought -- wait
+const SETTLE_COMPLETE_MS = 250;    // VAD already observed the configured silence window
+const SETTLE_DEFAULT_MS  = 450;    // short semantic debounce, not a second endpoint timer
+const SETTLE_TRAILING_MS = 1100;   // clearly mid-thought -- allow one extra phrase
 const SETTLE_MS = SETTLE_DEFAULT_MS;   // retained: other code reads this
 
 // Words that cannot end a finished instruction. If speech stops here, the
@@ -2486,10 +2509,21 @@ function isStandbyPhrase(text) {
   return STANDBY_PHRASES.some((p) => t === p || t.endsWith(' ' + p) || t.startsWith(p + ' '));
 }
 
+function isMicrophoneRecalibration(text) {
+  return /\b(?:recalibrate|calibrate|adjust)\s+(?:the\s+)?(?:microphone|mic|listening sensitivity)\b/i.test(text);
+}
+
 async function handleHeard(transcript) {
   transcript = transcript.trim();
   if (!transcript) return;
   if (looksLikeSelfEcho(transcript)) return;  // ZENO hearing itself
+  if (isMicrophoneRecalibration(transcript)) {
+    voiceVAD.recalibrate();
+    micStatusEl.textContent = 'Recalibrating to the room noise...';
+    await speakInBrowser('Microphone sensitivity adjusted.');
+    setListeningUi(listeningMode ? 'listening' : 'standby');
+    return;
+  }
   if (!_ttsAudioEl.paused) void requestBargeIn();
   // Preserve a real non-echo correction while the prior managed turn is
   // cancelled. The runTurn finally block starts it only after that turn has
@@ -2628,15 +2662,22 @@ function finishVADRecording(discard = false) {
 }
 
 async function transcribeVADClip(blob, speakerBlob = null) {
-  if (transcriptionActive || !ambientEnabled || blob.size < VAD_MIN_CLIP_BYTES) return;
+  if (transcriptionActive || !ambientEnabled) return;
+  if (blob.size < VAD_MIN_CLIP_BYTES) {
+    micStatusEl.textContent = listeningMode ? 'Listening -- just talk, no wake word needed' : 'Always listening -- say "Zeno"...';
+    compactMicStatus('LISTENING', 'ignored a short noise spike');
+    return;
+  }
   transcriptionActive = true;
   compactMicStatus('TRANSCRIBING', 'sending final speech to STT');
   if (!turnActive) micStatusEl.textContent = 'Transcribing...';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TRANSCRIBE_TIMEOUT_MS);
   try {
     const form = new FormData();
     form.append('audio', blob, 'zeno-command.webm');
     if (speakerBlob && speakerBlob.size) form.append('speaker_audio', speakerBlob, 'zeno-speaker.wav');
-    const response = await fetch('/api/transcribe', { method: 'POST', body: form });
+    const response = await fetch('/api/transcribe', { method: 'POST', body: form, signal: controller.signal });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
       // A failed provider stays isolated from the listener and never starts
@@ -2648,6 +2689,8 @@ async function transcribeVADClip(blob, speakerBlob = null) {
     }
     const transcript = String(result.transcript || '').trim();
     if (!transcript || !ambientEnabled) return;
+    compactMicStatus('PROCESSING', 'finalizing what you said');
+    micStatusEl.textContent = 'Processing what you said...';
     // Preserve Deepgram's actual final-alternative confidence when supplied.
     // Missing confidence stays unknown; it is never made up client-side.
     lastSpeechRaw = transcript;
@@ -2668,13 +2711,20 @@ async function transcribeVADClip(blob, speakerBlob = null) {
     noteSpeechFragment(transcript);
   } catch (error) {
     if (ambientEnabled) {
-      micStatusEl.textContent = 'Microphone connection interrupted. Listening continues.';
-      void reportMicRuntime('BACKEND_CONNECTION_FAILED', 'Could not reach ZENO speech-to-text service.');
+      const timedOut = error && error.name === 'AbortError';
+      micStatusEl.textContent = timedOut
+        ? 'Transcription timed out. Listening again.'
+        : 'Microphone connection interrupted. Listening continues.';
+      void reportMicRuntime(timedOut ? 'STT_FAILED' : 'BACKEND_CONNECTION_FAILED',
+        timedOut ? 'Speech-to-text exceeded its configured timeout.' : 'Could not reach ZENO speech-to-text service.');
     }
   } finally {
+    clearTimeout(timeout);
     transcriptionActive = false;
-    if (ambientEnabled && !turnActive && !settleTimer) {
-      micStatusEl.textContent = listeningMode ? 'Listening -- just talk, no wake word needed' : 'Always listening -- say "Zeno"...';
+    if (ambientEnabled && !turnActive) {
+      micStatusEl.textContent = settleTimer
+        ? 'Processing what you said...'
+        : (listeningMode ? 'Listening -- just talk, no wake word needed' : 'Always listening -- say "Zeno"...');
       compactMicStatus('LISTENING', micAudioProved ? 'audio received' : 'waiting for audio');
     }
   }
@@ -2716,10 +2766,18 @@ function bindVADHandlers() {
   if (vadHandlersBound) return;
   vadHandlersBound = true;
   voiceVAD.onSpeechStart(() => {
+    console.info('[ZENO speech] speech detected');
     compactMicStatus('HEARING SPEECH', 'capturing command');
     startVADRecording();
   });
-  voiceVAD.onSpeechEnd(() => {
+  voiceVAD.onSpeechEnd((detail) => {
+    if (detail && detail.accepted === false) {
+      console.info('[ZENO speech] short noise spike ignored');
+      compactMicStatus('LISTENING', 'ignored a short noise spike');
+      finishVADRecording(true);
+      return;
+    }
+    console.info('[ZENO speech] silence detected; finalizing utterance');
     compactMicStatus('PROCESSING', 'transcribing');
     finishVADRecording(false);
   });
@@ -2825,6 +2883,7 @@ async function openAmbientListening(generation, options = {}) {
     void reportMicRuntime('DEVICE_INITIALIZATION_FAILED', 'Browser does not expose getUserMedia or MediaRecorder.');
     return false;
   }
+  await loadSpeechSettings();
   // Capture is not active until getUserMedia returned a live track.
   compactMicStatus('MIC OFF', 'opening microphone');
   const capabilities = await voiceVAD.start({ deviceId: selectedMicrophoneId() });

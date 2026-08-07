@@ -30,12 +30,18 @@
 
 const POLL_MS = 50;              // 20Hz -- plenty for speech onset/offset
 const FFT_SIZE = 256;
-const NOISE_ADAPT_UP = 0.0005;   // noise floor rises slowly (room got louder)
+const NOISE_ADAPT_UP = 0.005;    // track a changed room in seconds, not minutes
 const NOISE_ADAPT_DOWN = 0.02;   // and falls quickly (a burst ended)
-const OPEN_FACTOR = 2.2;         // speech starts: RMS above floor * this
-const CLOSE_FACTOR = 1.4;        // speech ends: hysteresis, lower bar
 const MIN_FLOOR = 0.0035;        // never trust a floor below sensor noise
-const HANGOVER_MS = 700;         // pauses shorter than this stay "speaking"
+const CALIBRATION_RATE = 0.16;
+const DEFAULT_SETTINGS = Object.freeze({
+  minSpeechMs: 120,
+  endSilenceMs: 700,
+  calibrationMs: 750,
+  openFactor: 2.4,
+  closeFactor: 1.45,
+});
+let speechSettings = { ...DEFAULT_SETTINGS };
 
 let ctx = null;
 let stream = null;
@@ -51,6 +57,8 @@ let pcmSampleRate = 0;
 let noiseFloor = 0.01;
 let speaking = false;
 let lastVoiceAt = 0;
+let speechStartedAt = 0;
+let calibratingUntil = 0;
 let currentRms = 0;
 let appliedSettings = null;
 let startError = "";
@@ -61,9 +69,9 @@ let stopping = false;
 
 const listeners = { start: [], end: [], level: [], stopped: [] };
 
-function emit(kind) {
+function emit(kind, detail = undefined) {
   for (const fn of listeners[kind]) {
-    try { fn(); } catch (e) { /* a listener must not break detection */ }
+    try { fn(detail); } catch (e) { /* a listener must not break detection */ }
   }
 }
 
@@ -145,6 +153,7 @@ export async function start(options = {}) {
   // speakers would create the very feedback echo cancellation exists to fix.
   buffer = new Uint8Array(analyser.fftSize);
 
+  recalibrate();
   resume();
   if (!visibilityListenerAttached) {
     document.addEventListener("visibilitychange", () => {
@@ -180,6 +189,16 @@ function tick() {
     try { fn(rms); } catch (_e) { /* a meter must never break capture */ }
   }
 
+  const now = performance.now();
+  // A short startup/recalibration window learns a fan or room hum quickly
+  // and deliberately cannot open the speech gate. This prevents ambient
+  // noise from becoming one max-length utterance immediately after startup.
+  if (now < calibratingUntil) {
+    noiseFloor += (rms - noiseFloor) * CALIBRATION_RATE;
+    if (noiseFloor < MIN_FLOOR) noiseFloor = MIN_FLOOR;
+    return;
+  }
+
   // Adapt the noise floor only while NOT speaking, so a long sentence can't
   // drag the floor up and deafen the detector mid-utterance.
   if (!speaking) {
@@ -188,25 +207,54 @@ function tick() {
     if (noiseFloor < MIN_FLOOR) noiseFloor = MIN_FLOOR;
   }
 
-  const now = performance.now();
-  const openAt = Math.max(noiseFloor * OPEN_FACTOR, MIN_FLOOR * OPEN_FACTOR);
-  const closeAt = Math.max(noiseFloor * CLOSE_FACTOR, MIN_FLOOR * CLOSE_FACTOR);
+  const openAt = Math.max(noiseFloor * speechSettings.openFactor, MIN_FLOOR * speechSettings.openFactor);
+  const closeAt = Math.max(noiseFloor * speechSettings.closeFactor, MIN_FLOOR * speechSettings.closeFactor);
 
   if (!speaking && rms > openAt) {
+    // Record immediately so the first syllable is not clipped. At the end,
+    // callers receive whether the voiced portion met minSpeechMs and discard
+    // keyboard clicks or other tiny spikes without sending them to STT.
     speaking = true;
+    speechStartedAt = now;
     lastVoiceAt = now;
     emit("start");
   } else if (speaking) {
     if (rms > closeAt) {
       lastVoiceAt = now;          // still talking (hysteresis band)
-    } else if (now - lastVoiceAt > HANGOVER_MS) {
+    } else if (now - lastVoiceAt > speechSettings.endSilenceMs) {
+      const speechMs = Math.max(0, lastVoiceAt - speechStartedAt);
       speaking = false;           // real end of utterance, not a word gap
-      emit("end");
+      emit("end", { accepted: speechMs >= speechSettings.minSpeechMs, speech_ms: speechMs });
     }
   }
 }
 
 export function isSpeaking() { return speaking; }
+
+function boundedNumber(value, fallback, low, high) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(low, Math.min(high, parsed)) : fallback;
+}
+
+/** Apply the server's bounded speech policy before opening the stream. */
+export function configure(options = {}) {
+  speechSettings = {
+    minSpeechMs: boundedNumber(options.min_speech_ms, DEFAULT_SETTINGS.minSpeechMs, 50, 500),
+    endSilenceMs: boundedNumber(options.end_silence_ms, DEFAULT_SETTINGS.endSilenceMs, 400, 1500),
+    calibrationMs: boundedNumber(options.calibration_ms, DEFAULT_SETTINGS.calibrationMs, 250, 2000),
+    openFactor: boundedNumber(options.open_factor, DEFAULT_SETTINGS.openFactor, 1.4, 4),
+    closeFactor: boundedNumber(options.close_factor, DEFAULT_SETTINGS.closeFactor, 1.1, 3),
+  };
+  return { ...speechSettings };
+}
+
+/** Relearn the current ambient floor without opening another microphone. */
+export function recalibrate() {
+  if (speaking) { speaking = false; emit("end"); }
+  speechStartedAt = 0;
+  noiseFloor = Math.max(MIN_FLOOR, currentRms || MIN_FLOOR);
+  calibratingUntil = performance.now() + speechSettings.calibrationMs;
+}
 
 export function onSpeechStart(fn) {
   listeners.start.push(fn);
@@ -316,6 +364,8 @@ export function stop() {
   usedFallbackDevice = false;
   currentRms = 0;
   noiseFloor = 0.01;
+  speechStartedAt = 0;
+  calibratingUntil = 0;
 }
 
 /** Honest report: what the browser actually applied, and what is measured. */
@@ -338,7 +388,12 @@ export function capabilities() {
       speaking: speaking,
       rms: Number(currentRms.toFixed(4)),
       noise_floor: Number(noiseFloor.toFixed(4)),
-      open_threshold: Number((noiseFloor * OPEN_FACTOR).toFixed(4)),
+      open_threshold: Number((noiseFloor * speechSettings.openFactor).toFixed(4)),
+      close_threshold: Number((noiseFloor * speechSettings.closeFactor).toFixed(4)),
+      min_speech_ms: speechSettings.minSpeechMs,
+      end_silence_ms: speechSettings.endSilenceMs,
+      calibration_ms: speechSettings.calibrationMs,
+      calibrating: performance.now() < calibratingUntil,
       poll_hz: Math.round(1000 / POLL_MS),
       note: "Energy + adaptive floor + hysteresis + hangover. Not a neural "
           + "VAD: it cannot reliably tell a person from a TV playing speech.",

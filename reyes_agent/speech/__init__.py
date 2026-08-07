@@ -226,6 +226,8 @@ def wake_word() -> PhraseWakeWord:
 
 def capabilities() -> dict:
     """Exactly what is real right now. No optimistic reporting."""
+    from reyes_agent import config
+
     try:
         from reyes_agent import speaker_identity
 
@@ -242,8 +244,17 @@ def capabilities() -> dict:
                                 "voice worker before wake-word or command handling."},
         "vad": {"engine": _vad.name, "implemented": getattr(_vad, "real", False),
                 "runs_in": getattr(_vad, "runs_in", "unknown"),
-                "note": "Adaptive energy floor, hysteresis and hangover. It cannot "
+                "note": "Calibrated adaptive energy floor, minimum-duration rejection, hysteresis and hangover. It cannot "
                         "reliably distinguish a person from TV speech."},
+        "settings": {
+            "min_speech_ms": round(config.MIN_SPEECH_SECONDS * 1000),
+            "end_silence_ms": round(config.END_SILENCE_SECONDS * 1000),
+            "max_utterance_ms": round(config.MAX_UTTERANCE_SECONDS * 1000),
+            "transcribe_timeout_ms": config.TRANSCRIBE_TIMEOUT_SECONDS * 1000,
+            "calibration_ms": round(config.MIC_NOISE_CALIBRATION_SECONDS * 1000),
+            "open_factor": config.MIC_VAD_OPEN_FACTOR,
+            "close_factor": config.MIC_VAD_CLOSE_FACTOR,
+        },
         "echo_cancellation": {"implemented": True,
                               "note": "Requested on ZENO's browser MediaStream. The UI "
                                       "reports the browser's actual applied setting."},

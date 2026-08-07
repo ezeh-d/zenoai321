@@ -34,6 +34,14 @@ def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(maximum, value))
 
 
+def _bounded_env_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 # Source-only Website Studio history. Dependencies and generated output are
 # excluded by the checkpoint executor. These defaults cover normal React/Vite
 # source trees while keeping a mistaken huge folder from consuming the host.
@@ -147,6 +155,18 @@ VAULT_PATH = Path(os.environ.get("VAULT_PATH", str(PROJECT_ROOT / "REYES"))).exp
 # their own seams in reyes_agent/voice/.
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_MODEL = os.environ.get("DEEPGRAM_MODEL", "nova-3").strip()
+# One short, processed utterance should never hold a voice worker for the
+# general 90-second model deadline. These settings are also exposed through
+# /api/speech/capabilities so both WebView microphone owners use one policy.
+MIN_SPEECH_SECONDS = _bounded_env_float("MIN_SPEECH_SECONDS", 0.12, 0.05, 0.5)
+END_SILENCE_SECONDS = _bounded_env_float("END_SILENCE_SECONDS", 0.7, 0.4, 1.5)
+MAX_UTTERANCE_SECONDS = _bounded_env_float("MAX_UTTERANCE_SECONDS", 12.0, 4.0, 30.0)
+TRANSCRIBE_TIMEOUT_SECONDS = _bounded_env_int("TRANSCRIBE_TIMEOUT_SECONDS", 12, 5, 45)
+MIC_NOISE_CALIBRATION_SECONDS = _bounded_env_float(
+    "MIC_NOISE_CALIBRATION_SECONDS", 0.75, 0.25, 2.0
+)
+MIC_VAD_OPEN_FACTOR = _bounded_env_float("MIC_VAD_OPEN_FACTOR", 2.4, 1.4, 4.0)
+MIC_VAD_CLOSE_FACTOR = _bounded_env_float("MIC_VAD_CLOSE_FACTOR", 1.45, 1.1, 3.0)
 
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "sapi").strip().lower()
 
