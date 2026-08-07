@@ -39,6 +39,36 @@ from reyes_agent import config
 
 app = FastAPI(title=config.ASSISTANT_NAME)
 
+# --- remote access (optional, off unless configured) ---------------------
+# CORS did not exist anywhere in this app before now, which was fine while
+# the phone page was same-origin. The planned split -- app.zenoassitant.com
+# calling api.zenoassitant.com -- makes it mandatory.
+#
+# The allow-list comes from remote_access.domains and is EMPTY until a domain
+# is configured, so this adds no reachable surface by itself. It is never a
+# wildcard: `allow_credentials=True` with `*` is rejected by browsers anyway,
+# and reaching for `*` is how people end up turning credentials off instead.
+try:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from reyes_agent.remote_access import domains as _domains
+
+    _allowed = _domains.allowed_origins()
+    if _allowed:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=_allowed,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type", "Authorization", "X-Zeno-CSRF"],
+            max_age=600,
+        )
+    from reyes_agent.remote_access.api import router as _remote_router
+
+    app.include_router(_remote_router)
+except Exception:  # noqa: BLE001 -- remote access must never block ZENO booting
+    pass
+
 # Browser-provided JSON is never sufficient evidence that its speaker is the
 # owner.  The /api/transcribe worker creates a short-lived, server-signed
 # proof for the identity it actually measured, and /api/chat verifies it
@@ -2262,7 +2292,30 @@ async def phone_events(websocket: WebSocket) -> None:
     """Small authenticated event feed; revocation is checked at every beat."""
     from reyes_agent import event_bus
     from reyes_agent.phone_security import get_phone_security
+    from reyes_agent.remote_access import domains, policy
+
+    # ORIGIN CHECK. A WebSocket upgrade is not protected by CORS -- the
+    # browser performs it regardless of origin -- so without this any page
+    # the owner visits could open a socket that rides on the ambient session
+    # cookie. Same-origin (no Origin header, e.g. the local phone page or a
+    # native client) is allowed; a cross-origin upgrade must be on the
+    # allow-list.
+    origin = websocket.headers.get("origin", "")
+    if origin and not domains.is_allowed_origin(origin):
+        await websocket.close(code=4403)
+        return
+    # Reconnect storms are bounded per client.
+    client = websocket.client.host if websocket.client else "unknown"
+    if not policy.check_rate("ws_connect", client).allowed:
+        await websocket.close(code=4429)
+        return
+
+    # A Bearer token is accepted so a cross-origin companion (whose
+    # SameSite=strict cookie would never be sent) can connect at all.
     token = websocket.cookies.get("zeno_phone_session", "")
+    header = websocket.headers.get("authorization", "")
+    if not token and header.lower().startswith("bearer "):
+        token = header[7:].strip()
     try:
         session = get_phone_security().session(token)
     except PermissionError:
