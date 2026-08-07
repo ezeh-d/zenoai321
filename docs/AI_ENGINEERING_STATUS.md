@@ -28,20 +28,12 @@ overwrite.
 ## ACTIVE WORK
 
 **Agent:** CLAUDE
-**Task:** Remote Access subsystem — domain/CORS, policy, gateway, /api/v1
-**Files (claimed):**
-- `reyes_agent/remote_access/` (new package — all files)
-- `docs/MOBILE_API.md` (new)
-- `docs/AI_ENGINEERING_STATUS.md`
-- `.env.example` (remote-access keys only)
+**Task:** — (Remote Access phase 1 landed; files released)
+**Status:** IDLE — files below are now free for CODEX
 
-**Will also need short, announced edits to** (shared — will keep minimal and
-commit immediately so CODEX is never blocked):
-- `reyes_agent/web.py` — mount the v1 router + CORS middleware
-- `reyes_agent/config.py` — domain/remote flags
-
-**Started:** 2026-08-07
-**Status:** ACTIVE
+**Released by CLAUDE (safe to edit):**
+`reyes_agent/remote_access/*`, `docs/MOBILE_API.md`, `.env.example`,
+`tests/test_remote_access.py`
 
 ---
 
@@ -50,12 +42,17 @@ commit immediately so CODEX is never blocked):
 **Files:** —
 **Status:** —
 
-Suggested parallel work that does **not** touch CLAUDE's claimed files:
-- `tests/test_remote_*.py` — auth attack cases, pairing abuse, WS reconnect
-- Security review of existing `reyes_agent/phone_security.py` (CLAUDE is
-  reusing it, not editing it)
-- Website Studio regression tests
-- Performance/idle-CPU checks
+Highest-value parallel work now that phase 1 is committed:
+- **Attack-test the new surface.** Put them in
+  `tests/test_remote_security.py` so we do not collide with
+  `tests/test_remote_access.py` (CLAUDE's). Worth hitting: session fixation,
+  replayed `request_id`, Bearer vs cookie CSRF asymmetry, `Origin: null`,
+  WebSocket upgrade with a revoked session mid-stream, pairing brute force
+  across rotating identities.
+- Review `reyes_agent/remote_access/gateway.py` — it calls
+  `web._conversation_turn` through the worker pool. Confirm a remote request
+  cannot starve the local chat path under load.
+- The phase21 browser-runtime timing flake (see ISSUES).
 
 ---
 
@@ -75,6 +72,23 @@ scoped process-tree cancellation; dependency-aware rollback via manifests
 **Summary:** `website_builder.py` metadata/checkpoints/`safe_project_root`,
 `coding.repair_project` bounded static repair with rollback, visual inspect,
 Website Studio panel wiring.
+
+**Agent:** CODEX
+**Task:** Mini Orb wake commands
+**Commit:** `1d61af9 fix(voice): run Mini Orb wake commands`
+**Reviewed by:** CLAUDE — `test_voice_handoff.py` 3/3 green after my remote
+changes; no interaction with the remote layer.
+
+**Agent:** CLAUDE
+**Task:** Remote Access phase 1 — domain/CORS/policy/gateway/API
+**Commits:** `6779063`, `6f14f2e`, `ca5700a`
+**Tests:** `tests/test_remote_access.py` 22/22; full suite **317 passed,
+0 failed** after the regression fix.
+**Verified end-to-end** against a live server on a spare port: pair →
+session → "Hello ZENO" → real reply from the same brain (12s) → FINANCIAL
+and SENSITIVE refused 403 → read-only views → disallowed website action
+refused → revoked device 401 immediately → reconnect → audit carries no
+token.
 
 ---
 
@@ -97,24 +111,37 @@ leaves ZENO mute.
 **Found by:** CLAUDE
 **Suggested owner:** OWNER
 
-**Issue:** No CORS middleware exists anywhere in `web.py`. Fine while the
-phone page is same-origin; becomes a hard blocker the moment
-`app.zenoassitant.com` calls `api.zenoassitant.com`.
-**Severity:** HIGH for the domain objective
-**Found by:** CLAUDE
-**Suggested owner:** CLAUDE (in progress)
+**RESOLVED (6f14f2e, CLAUDE):** no CORS anywhere; `/ws/phone` did not check
+`Origin`; no rate limiting. All three fixed and covered by
+`tests/test_remote_access.py`.
 
-**Issue:** `/ws/phone` does not validate the `Origin` header. Any origin can
-attempt a WebSocket upgrade with a stolen/ambient cookie.
-**Severity:** HIGH (security)
+**Issue:** `SameSite=strict` on `zeno_phone_session` means a browser will
+never send it from `app.zenoassitant.com` to `api.zenoassitant.com`. Worked
+around by accepting `Authorization: Bearer` for the same session token — the
+companion must use the header, not the cookie. Documented in MOBILE_API.md.
+**Severity:** MEDIUM (design constraint, not a defect)
 **Found by:** CLAUDE
-**Suggested owner:** CLAUDE (in progress)
+**Suggested owner:** — (accepted; revisit only if a same-site deployment is chosen)
 
-**Issue:** No rate limiting anywhere — pairing, login and command endpoints
-are brute-forceable.
-**Severity:** HIGH (security)
+**Issue:** Sessions expire at 30 minutes with no refresh-token rotation; the
+phone must redo a WebAuthn assertion. Acceptable but worth revisiting.
+**Severity:** LOW
 **Found by:** CLAUDE
-**Suggested owner:** CLAUDE (in progress)
+**Suggested owner:** CLAUDE (phase 2)
+
+**Issue:** `app.routes` is not a flat endpoint list once a router is
+included — an `_IncludedRouter` with no `.path` appears. Broke
+`test_workflow_engine`. Fixed in ca5700a by reading `app.openapi()["paths"]`.
+Anything new that inspects routes should do the same.
+**Severity:** LOW (test-only; no production code iterates app.routes)
+**Found by:** CLAUDE (self-caused, caught by full regression)
+**Suggested owner:** — (resolved)
+
+**Issue:** The owner's desktop ZENO (pid held on :8765) runs the code from
+before this session. The remote API is only present after a restart.
+**Severity:** INFO
+**Found by:** CLAUDE
+**Suggested owner:** OWNER
 
 ---
 
