@@ -88,6 +88,28 @@ def _seconds(name: str, default: int, low: int = 10, high: int = 3600) -> int:
 # Per-KIND timeouts for Website Studio jobs. These bound the JOB, never
 # ZENO: long commands run as background jobs (executors/jobs.py), so a
 # 10-minute install occupies a subprocess, not the assistant.
+# --- Remote access / mobile companion -----------------------------------
+# The owner's real domain. Deliberately NOT used to change DNS or deploy
+# anything -- it only tells ZENO which origins to trust. Every remote
+# feature is opt-in and defaults OFF: enabling the assistant must never
+# silently open a network surface.
+ZENO_PUBLIC_DOMAIN = os.environ.get("ZENO_PUBLIC_DOMAIN", "").strip().lower()
+ZENO_APP_ORIGIN = os.environ.get("ZENO_APP_ORIGIN", "").strip().rstrip("/")
+ZENO_API_ORIGIN = os.environ.get("ZENO_API_ORIGIN", "").strip().rstrip("/")
+
+
+def _flag(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+REMOTE_ACCESS_ENABLED = _flag("REMOTE_ACCESS_ENABLED")
+REMOTE_API_ENABLED = _flag("REMOTE_API_ENABLED", "true")
+REMOTE_WEBSOCKET_ENABLED = _flag("REMOTE_WEBSOCKET_ENABLED", "true")
+REMOTE_PAIRING_ENABLED = _flag("REMOTE_PAIRING_ENABLED", "true")
+REMOTE_PASSKEY_ENABLED = _flag("REMOTE_PASSKEY_ENABLED", "true")
+# Localhost origins are allowed ONLY here. Production never gets them.
+REMOTE_DEV_MODE = _flag("REMOTE_DEV_MODE")
+
 WEB_BUILD_TIMEOUT_SECONDS = _seconds("WEB_BUILD_TIMEOUT_SECONDS", 300)
 WEB_INSTALL_TIMEOUT_SECONDS = _seconds("WEB_INSTALL_TIMEOUT_SECONDS", 600)
 WEB_TEST_TIMEOUT_SECONDS = _seconds("WEB_TEST_TIMEOUT_SECONDS", 300)
