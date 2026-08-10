@@ -164,6 +164,21 @@ def run_agent(
         if website_nudge:
             system += "\n" + website_nudge
 
+    # Claude's bounded situational/anticipation layer reuses sensors ZENO
+    # already owns. Both calls are cached and best-effort: context can make a
+    # reply more useful, but must never become a new dependency for replying.
+    try:
+        from reyes_agent import anticipation, awareness
+
+        awareness_nudge = awareness.directive()
+        if awareness_nudge:
+            system += "\n" + awareness_nudge
+        anticipation_nudge = anticipation.directive()
+        if anticipation_nudge:
+            system += "\n" + anticipation_nudge
+    except Exception:  # noqa: BLE001 -- optional context must never block a turn
+        pass
+
     # A FAST turn that genuinely needs more room is a routing miss, not a
     # user-visible failure: the budget extends once to the full DEEP limit
     # rather than reporting "stuck in a loop". Misrouting costs a little

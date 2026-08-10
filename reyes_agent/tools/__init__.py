@@ -80,6 +80,7 @@ TOOL_GROUPS: dict[str, str] = {
     "health_center": "intelligence", "remember_relationship": "intelligence",
     "search_relationships": "intelligence", "forget_relationship": "intelligence",
     "save_mission_runtime_state": "intelligence", "load_mission_runtime_state": "intelligence",
+    "current_situation_report": "intelligence", "learned_patterns": "intelligence",
     # Creator/Mastery/Foodie are compact explicit-state entry points. Keeping
     # them core avoids a discovery round, while their work remains local and
     # event-driven -- no specialist or background service is started merely
@@ -334,7 +335,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import blender, browser, build, calendar, campaign_tools, companion_tools, council_tools, design, email_tools, intelligence_tools, investing, knowledge_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, companion_tools, council_tools, design, email_tools, intelligence_tools, investing, knowledge_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so
