@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 from reyes_agent import config
 from reyes_agent.provider import ProviderError, run_turn
-from reyes_agent.tools import run_tool, tool_definitions
+from reyes_agent.tools import TOOLS, run_tool, tool_definitions
 from reyes_agent.tools.memory import system_prompt_block
 
 # A tool round is one "model asks for a tool -> we run it -> feed result
@@ -87,12 +87,12 @@ def run_agent(
     # provider preference; it never answers and never blocks. A FAST turn is
     # not a dumber turn -- it is the same brain with a shorter leash, which is
     # what keeps "hey" from costing eight tool rounds.
+    latest = next((m.get("content", "") for m in reversed(history)
+                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
     decision = None
     try:
         from reyes_agent import cognition, task_engine
 
-        latest = next((m.get("content", "") for m in reversed(history)
-                       if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
         if latest:
             decision = cognition.route(latest, has_active_task=task_engine.latest_open() is not None)
     except Exception:  # noqa: BLE001 -- routing is an optimisation, never a gate
@@ -127,11 +127,27 @@ def run_agent(
     _mark("intent_ready")
     thinking_state = "DEEP_THINKING" if decision and decision.path == "DEEP" else "THINKING"
 
-    # Recalled facts are plain prompt text, not a tool schema -- costs
-    # nothing extra on Ollama's constrained decoding, so every provider
-    # gets "remembers me" even though only cloud providers can currently
-    # write new facts (remember/forget are gated behind tools like everything else).
-    system = config.SYSTEM_PROMPT + system_prompt_block()
+    # One trace observes this existing loop; it is not a second scheduler or
+    # planner. Failures in telemetry/memory never cost the user a reply.
+    trace = None
+    try:
+        from reyes_agent.execution_lifecycle import ExecutionTrace, Stage
+
+        trace = ExecutionTrace(latest, correlation_id=turn_id)
+        trace.enter(Stage.RETRIEVE_MEMORY)
+    except Exception:  # noqa: BLE001
+        trace = None
+
+    # Relevant memory only. The previous implementation injected every
+    # durable fact into every turn, causing prompt growth and irrelevant
+    # context. Living Memory remains the fallback and authority.
+    try:
+        from reyes_agent.memory import get_memory_manager
+
+        memory_context = get_memory_manager().context_for(latest)
+    except Exception:  # noqa: BLE001
+        memory_context = system_prompt_block()
+    system = config.SYSTEM_PROMPT + memory_context
     if decision is not None:
         from reyes_agent import cognition, creator_mode, design_intelligence, foodie_intelligence, humour, instinct, learning_mode, website_builder
 
@@ -139,6 +155,16 @@ def run_agent(
         # whether there is something genuinely worth pointing out. Kept tight
         # on purpose -- prompt length is latency on every single turn.
         system += "\n\n" + cognition.prompt_directive(decision)
+        try:
+            from reyes_agent import agents
+            from reyes_agent.agents import router as agent_router
+
+            delegation = agents.decide(latest, decision)
+            delegation_nudge = agent_router.directive(delegation)
+            if delegation_nudge:
+                system += "\n" + delegation_nudge
+        except Exception:  # noqa: BLE001 -- Phase 1 adapter remains optional
+            pass
         nudge = instinct.turn_directive(decision, latest)
         if nudge:
             system += "\n" + nudge
@@ -192,6 +218,12 @@ def run_agent(
             cancel_check()
         if on_stage:
             on_stage("planning")
+        if trace is not None:
+            try:
+                from reyes_agent.execution_lifecycle import Stage
+                trace.enter(Stage.PLAN, round=round_index)
+            except Exception:
+                pass
         # First round is the model thinking about the request; later rounds
         # are it reacting to tool results, which is planning, not fresh
         # thought. Naming them differently is what makes the state readable.
@@ -207,10 +239,18 @@ def run_agent(
             if on_text:
                 on_text(chunk)
 
-        turn = run_turn(
-            history, system=system, tools=tools, on_text=_timed_on_text,
-            cancel_check=cancel_check, task_kind=task_kind,
-        )
+        try:
+            turn = run_turn(
+                history, system=system, tools=tools, on_text=_timed_on_text,
+                cancel_check=cancel_check, task_kind=task_kind,
+            )
+        except Exception as exc:
+            if trace is not None:
+                try:
+                    trace.fail(f"{type(exc).__name__}: {exc}")
+                except Exception:
+                    pass
+            raise
 
         if not turn.wants_tool:
             if on_stage:
@@ -218,6 +258,19 @@ def run_agent(
             if turn.text.strip():
                 _mark("first_sentence_ready")
             history.append({"role": "assistant", "content": turn.text})
+            if trace is not None:
+                try:
+                    verification = trace.verification()
+                    from reyes_agent.memory import get_memory_manager
+
+                    decisions = get_memory_manager().consider_turn(
+                        latest, turn.text, verified=bool(verification.get("verified") and trace.evidence))
+                    trace.finish(stored=any(item.durable for item in decisions))
+                except Exception:
+                    try:
+                        trace.finish(stored=False)
+                    except Exception:
+                        pass
             # Bounded, process-local recent-joke history only.  A failure in
             # this optional personality aid must never prevent a reply.
             try:
@@ -256,7 +309,7 @@ def run_agent(
         if len(delegate_calls) < 2:
             delegate_calls = []
 
-        results: dict[str, str] = {}
+        results: dict[str, object] = {}
 
         if delegate_calls:
             if on_stage:
@@ -267,6 +320,15 @@ def run_agent(
                     cancel_check()
                 if on_tool_call:
                     on_tool_call(tc.name, tc.input, tc.id)
+                if trace is not None:
+                    tool = TOOLS.get(tc.name)
+                    results[f"__autonomy__{tc.id}"] = trace.selected_tool(
+                        tc.name, requires_confirmation=bool(tool and tool.requires_confirmation))
+                    try:
+                        from reyes_agent.execution_lifecycle import Stage
+                        trace.enter(Stage.EXECUTE, tool=tc.name, agent=True)
+                    except Exception:
+                        pass
             # Reuse the bounded runtime rather than making a fresh executor
             # (and fresh OS threads) for every delegated turn. The enclosing
             # chat worker occupies one slot; the pool deliberately retains
@@ -293,6 +355,8 @@ def run_agent(
                     tc = pending.pop(handle)
                     result = handle.result()
                     results[tc.id] = result
+                    if trace is not None:
+                        trace.observed(tc.name, result, results.get(f"__autonomy__{tc.id}", {}))  # type: ignore[arg-type]
                     if on_tool_result:
                         on_tool_result(tc.name, result, tc.id)
 
@@ -305,6 +369,16 @@ def run_agent(
                     cancel_check()
                 if on_tool_call:
                     on_tool_call(tc.name, tc.input, tc.id)
+                autonomy = {}
+                if trace is not None:
+                    tool = TOOLS.get(tc.name)
+                    autonomy = trace.selected_tool(
+                        tc.name, requires_confirmation=bool(tool and tool.requires_confirmation))
+                    try:
+                        from reyes_agent.execution_lifecycle import Stage
+                        trace.enter(Stage.EXECUTE, tool=tc.name)
+                    except Exception:
+                        pass
                 result = run_tool(tc.name, tc.input)
                 # Widen the toolset for the remainder of this turn. Done
                 # here rather than inside the tool because the tool list is
@@ -327,6 +401,8 @@ def run_agent(
                 if on_tool_result:
                     on_tool_result(tc.name, result, tc.id)
                 results[tc.id] = result
+                if trace is not None:
+                    trace.observed(tc.name, result, autonomy)
 
         if on_stage:
             on_stage("verifying")
@@ -340,6 +416,8 @@ def run_agent(
                 }
             )
 
+    if trace is not None:
+        trace.fail(f"tool round limit reached ({max_rounds})")
     raise ProviderError(
         f"Stopped after {max_rounds} tool calls in a row without a final answer "
         "-- it may be stuck in a loop."

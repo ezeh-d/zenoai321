@@ -74,6 +74,34 @@ def search_memories(query: str) -> str:
     return "\n".join(f"{r['id']}: {r['content']}" for r in records) if records else "No matching active memories."
 
 
+@register(name="memory_backend_status", description="Show selective-memory policy, Mem0 availability, and Living Memory fallback health.",
+          input_schema={"type": "object", "properties": {}})
+def memory_backend_status() -> str:
+    import json
+    from reyes_agent.memory import get_memory_manager
+
+    return json.dumps(get_memory_manager().status(), default=str)
+
+
+@register(name="memory_migration_preview", description="Preview indexing legacy Living Memory into Mem0 without changing or deleting anything.",
+          input_schema={"type": "object", "properties": {}})
+def memory_migration_preview() -> str:
+    import json
+    from reyes_agent.memory import get_memory_manager
+
+    return json.dumps(get_memory_manager().migration_preview(), default=str)
+
+
+@register(name="memory_migrate_to_mem0", description="Index bounded copies of Living Memory records into configured Mem0; never deletes the originals.",
+          input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+          requires_confirmation=True)
+def memory_migrate_to_mem0(limit: int = 500) -> str:
+    import json
+    from reyes_agent.memory import get_memory_manager
+
+    return json.dumps(get_memory_manager().migrate_legacy(dry_run=False, limit=limit), default=str)
+
+
 @register(name="memory_versions", description="Show immutable version history for one living memory.",
           input_schema={"type": "object", "properties": {"memory_id": {"type": "string"}}, "required": ["memory_id"]})
 def memory_versions(memory_id: str) -> str:

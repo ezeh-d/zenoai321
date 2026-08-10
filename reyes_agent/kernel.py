@@ -215,6 +215,21 @@ class ZenoKernel:
         except Exception:
             pass
         try:
+            from reyes_agent.wake import get_wake_engine
+            get_wake_engine().stop()
+        except Exception:
+            pass
+        try:
+            from reyes_agent.tools.mcp import get_mcp_manager
+            get_mcp_manager().shutdown()
+        except Exception:
+            pass
+        try:
+            from reyes_agent.devices import get_device_manager
+            get_device_manager().shutdown()
+        except Exception:
+            pass
+        try:
             from reyes_agent import event_bus
             event_bus.flush(event_flush_timeout)
             event_bus.shutdown()

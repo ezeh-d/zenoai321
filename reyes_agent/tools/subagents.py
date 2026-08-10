@@ -90,10 +90,14 @@ _SPECIALISTS: dict[str, dict] = {
             "write_project_file -- a real website needs actual "
             "index.html/style.css/script.js files, not a markdown note "
             "describing one. Say plainly what you built and where it was "
-            "saved."
+            "saved. For repository diagnosis or a bounded repair, prefer "
+            "coding_inspect/coding_execute when the optional Open Interpreter "
+            "backend is available. It is a specialist tool, never ZENO's brain; "
+            "if unavailable, use your existing gated file/command tools."
         ),
         "tools": {"write_project_file", "list_project_files", "write_note", "read_file", "list_dir",
-                   "run_command", "create_3d_model"},
+                   "run_command", "create_3d_model", "coding_inspect", "coding_execute",
+                   "mcp_status", "mcp_read", "mcp_action"},
     },
     "stark": {
         "description": "STARK -- Cybersecurity & Infrastructure Intelligence. Monitors system health, explains errors, reviews configuration -- defensive only.",

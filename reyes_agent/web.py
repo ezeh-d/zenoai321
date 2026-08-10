@@ -152,6 +152,8 @@ async def _no_cache(request, call_next):
 
 _boot_state: dict[str, Any] = {"phase": "starting", "started_at": 0.0, "errors": []}
 _boot_lock = threading.Lock()
+_boot_required = frozenset({"core", "executive", "services"})
+_boot_completed: set[str] = set()
 _event_loop_probe_stop: Any = None
 _event_loop_probe_task: Any = None
 
@@ -162,6 +164,19 @@ def _set_boot_phase(phase: str, error: Exception | None = None) -> None:
         _boot_state["updated_at"] = time.time()
         if error is not None:
             _boot_state["errors"].append(f"{type(error).__name__}: {error}")
+
+
+def _complete_boot_stage(stage: str, phase: str, error: Exception | None = None) -> None:
+    """Advance startup monotonically regardless of worker completion order."""
+    with _boot_lock:
+        _boot_completed.add(stage)
+        if error is not None:
+            _boot_state["errors"].append(f"{type(error).__name__}: {error}")
+        if _boot_required <= _boot_completed:
+            _boot_state["phase"] = "ready_degraded" if _boot_state["errors"] else "ready"
+        else:
+            _boot_state["phase"] = phase
+        _boot_state["updated_at"] = time.time()
 
 
 def _boot_core() -> None:
@@ -179,9 +194,9 @@ def _boot_core() -> None:
         from reyes_agent.kernel import get_kernel
 
         get_kernel().register_agents(list(agent_runtime.AGENT_ROLES))
-        _set_boot_phase("core_ready")
+        _complete_boot_stage("core", "core_ready")
     except Exception as exc:  # noqa: BLE001 -- window/status remain usable
-        _set_boot_phase("core_degraded", exc)
+        _complete_boot_stage("core", "core_degraded", exc)
 
 
 def _boot_background_services() -> None:
@@ -228,7 +243,7 @@ def _boot_background_services() -> None:
 
     with _boot_lock:
         _boot_state["background_services"] = started
-    _set_boot_phase("ready")
+    _complete_boot_stage("services", "services_ready")
 
 
 def _boot_executive_runtime() -> None:
@@ -245,9 +260,9 @@ def _boot_executive_runtime() -> None:
         # boot status, without contacting a provider or generating audio.
         del agent, model_router, permissions
         voice_manager.registry()
-        _set_boot_phase("executive_ready")
+        _complete_boot_stage("executive", "executive_ready")
     except Exception as exc:  # noqa: BLE001
-        _set_boot_phase("executive_degraded", exc)
+        _complete_boot_stage("executive", "executive_degraded", exc)
 
 
 @app.on_event("startup")
@@ -259,6 +274,7 @@ async def _on_startup() -> None:
 
     with _boot_lock:
         _boot_state.update({"phase": "http_ready", "started_at": time.time(), "errors": []})
+        _boot_completed.clear()
     kernel = get_kernel()
     # Stage 1 owns only the cheap local runtime primitives.  The desktop
     # shell can render before this server is even reachable; this handler
@@ -582,6 +598,39 @@ def status() -> dict[str, Any]:
     }
 
 
+@app.get("/api/health")
+def central_health() -> dict[str, Any]:
+    """One real, on-demand health surface. It starts no polling loop."""
+    from reyes_agent import system_health
+
+    return system_health.snapshot()
+
+
+@app.get("/api/wake/status")
+def wake_status() -> dict[str, Any]:
+    from reyes_agent.wake import get_wake_engine
+
+    return get_wake_engine().status()
+
+
+@app.post("/api/wake/detect")
+def wake_detect(request: Request, audio: UploadFile = File(...)) -> dict[str, Any]:
+    """Score one VAD-approved PCM clip locally before any cloud STT call."""
+    _require_desktop_mic_token(request)
+    from reyes_agent.wake import get_wake_engine
+
+    try:
+        data = _read_audio_upload(audio)
+        return get_wake_engine().detect_wav(data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        # Fault isolation: caller may use the conventional STT fallback.
+        return {"configured": get_wake_engine().status()["backend"]["state"] == "READY",
+                "detected": False, "confidence": 0.0,
+                "reason": "wake_backend_failed", "error": f"{type(exc).__name__}: {exc}"}
+
+
 @app.get("/api/intelligence/situation")
 def intelligence_situation() -> dict[str, Any]:
     from reyes_agent import intelligence
@@ -625,9 +674,9 @@ def intelligence_capabilities() -> dict[str, Any]:
 
 @app.get("/api/intelligence/health")
 def intelligence_health() -> dict[str, Any]:
-    from reyes_agent import intelligence
+    from reyes_agent import system_health
 
-    return intelligence.health()
+    return system_health.snapshot()
 
 
 @app.post("/api/intelligence/simulate")
@@ -722,6 +771,26 @@ def _conversation_turn(
     from reyes_agent import speaker_identity
 
     callbacks = callbacks or {}
+    realtime_session = None
+    wake_engine = None
+    if voice_identity is not None:
+        try:
+            from reyes_agent.voice import realtime_session
+            from reyes_agent.wake import get_wake_engine
+
+            wake_engine = get_wake_engine()
+
+            if realtime_session.is_standby(message):
+                realtime_session.end("owner standby phrase")
+                wake_engine.standby()
+                _finish_turn(turn_id)
+                _end_turn(turn_id)
+                return {"reply": "Standing by.", "tool_calls": []}
+            realtime_session.start()
+            realtime_session.touch()
+            wake_engine.begin_processing()
+        except Exception:  # noqa: BLE001 -- local voice fallback still works
+            realtime_session = None
     try:
         from reyes_agent import intelligence
 
@@ -799,9 +868,19 @@ def _conversation_turn(
                 if use_shared_history:
                     trim_history(history)
                 _finish_turn(turn_id)
+            if realtime_session is not None:
+                try:
+                    realtime_session.touch(turn=True)
+                except Exception:
+                    pass
             return {"reply": reply, "tool_calls": tool_calls}
     finally:
         _lock.release()
+        if wake_engine is not None:
+            try:
+                wake_engine.finish_processing()
+            except Exception:
+                pass
 
 
 def _background_result(handle, timeout: float) -> Any:

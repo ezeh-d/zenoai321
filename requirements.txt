@@ -9,6 +9,7 @@ pydantic-settings>=2.0
 python-dotenv>=1.0
 requests>=2.31
 psutil>=5.9
+mcp>=2.0
 
 # --- Phone Companion security (passkeys and desktop QR pairing) ---
 webauthn>=3.0
@@ -39,6 +40,8 @@ comtypes>=1.4 ; sys_platform == "win32"
 
 # --- Optional extras (uncomment or use: python install.py --all) ---
 # openwakeword>=0.6      # low-CPU always-on wake word (recommended)
+# mem0ai>=1.0            # optional semantic long-term-memory index
+# open-interpreter       # optional TOSIN coding specialist; install separately and keep approval on
 # pytesseract            # screen OCR / vision (also install the Tesseract binary)
 # opencv-python          # image locate on screen
 # duckduckgo-search>=6.0 # nicer web search results

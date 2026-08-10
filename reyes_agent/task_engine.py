@@ -554,7 +554,18 @@ def complete(task_id: str, *, keep_running: bool = True) -> dict[str, Any] | Non
     if result_state != COMPLETED or not keep_running:
         _run_closers(task)
     _emit("completed" if result_state == COMPLETED else "failed", task)
-    return snapshot(task)
+    result = snapshot(task)
+    if result_state == COMPLETED:
+        # Only verified completions reach durable memory. The Memory Manager
+        # queues consolidation on the existing bounded pool, so embedding or
+        # Mem0 work cannot block this executor or the GUI.
+        try:
+            from reyes_agent.memory import get_memory_manager
+
+            get_memory_manager().consider_verified_task(result)
+        except Exception:  # noqa: BLE001 -- task success cannot depend on memory
+            pass
+    return result
 
 
 def shutdown_all() -> None:

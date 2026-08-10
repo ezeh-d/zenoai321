@@ -35,6 +35,33 @@ class Tool:
 TOOLS: dict[str, Tool] = {}
 
 
+def _audit_safe(value: Any, *, depth: int = 0) -> Any:
+    """Bound and redact persisted diagnostics without changing tool inputs."""
+    if depth > 4:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        out = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 80:
+                out["..."] = "[TRUNCATED]"
+                break
+            label = str(key)
+            if any(marker in label.casefold() for marker in ("password", "passwd", "secret", "token", "api_key", "apikey", "cookie", "credential", "private_key")):
+                out[label] = "[REDACTED]"
+            else:
+                out[label] = _audit_safe(item, depth=depth + 1)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_audit_safe(item, depth=depth + 1) for item in value[:80]]
+    if isinstance(value, str):
+        try:
+            from reyes_agent.memory.privacy import redact
+            return redact(value, limit=4000)
+        except Exception:
+            return value[:4000]
+    return value
+
+
 def register(
     name: str,
     description: str,
@@ -102,6 +129,8 @@ TOOL_GROUPS: dict[str, str] = {
     # admin/diagnostics
     "list_plugins": "admin", "trust_plugin": "admin", "revoke_plugin": "admin",
     "voice_diagnostics": "admin", "permission_status": "admin",
+    "memory_backend_status": "admin", "memory_migration_preview": "admin",
+    "memory_migrate_to_mem0": "admin",
     "list_capabilities": "admin", "vault_structure_report": "admin",
     "reindex_vault": "admin", "list_scheduled_checks": "admin",
     "cancel_scheduled_check": "admin", "schedule_check": "admin",
@@ -123,6 +152,11 @@ TOOL_GROUPS: dict[str, str] = {
     # automatically the moment a build starts (see agent.py).
     "build_add_files": "build", "build_status": "build",
     "cancel_build": "build", "build_environment": "build",
+    # Phase 2 specialists and external tool bus stay out of the default
+    # provider payload. Their entry points load only for relevant turns.
+    "coding_inspect": "coding", "coding_execute": "coding",
+    "mcp_status": "mcp", "mcp_discover": "mcp", "mcp_read": "mcp", "mcp_action": "mcp",
+    "device_status": "devices", "device_observe": "devices", "device_execute": "devices",
     # Worker teams. Grouped ONLY to keep call_worker out of ZENO's core
     # payload -- ZENO delegates to a commander, it never calls a commander's
     # worker itself, so a core schema here would be pure per-turn token cost
@@ -186,14 +220,16 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
                 record_latency("browser", duration)
         except Exception:  # noqa: BLE001
             pass
-        audit.log("tool_run", tool=tool.name, input=tool_input, result=result)
+        safe_input = _audit_safe(tool_input)
+        safe_result = _audit_safe(result)
+        audit.log("tool_run", tool=tool.name, input=safe_input, result=safe_result)
         # The next-intelligence layer records an intentionally bounded action
         # history and current observable task.  It never becomes a second
         # executor; this remains the one gated tool path.
         try:
             from reyes_agent import intelligence
 
-            intelligence.record_tool_execution(tool.name, tool_input, str(result))
+            intelligence.record_tool_execution(tool.name, safe_input, str(safe_result))
             intelligence.update_situation(current_task=tool.name, current_step="completed")
         except Exception:  # noqa: BLE001 -- action history cannot break a tool
             pass
@@ -206,8 +242,8 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
             "tool.completed",
             payload={
                 "tool": tool.name,
-                "input": tool_input,
-                "result": (result or "")[:500],
+                "input": safe_input,
+                "result": str(safe_result or "")[:500],
                 "duration_ms": int(duration * 1000),
             },
             source="tools",
@@ -225,7 +261,7 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
                 record_latency("browser", duration)
         except Exception:  # noqa: BLE001
             pass
-        audit.log("tool_error", tool=tool.name, input=tool_input, error=str(exc))
+        audit.log("tool_error", tool=tool.name, input=_audit_safe(tool_input), error=_audit_safe(str(exc)))
         try:
             from reyes_agent import intelligence
 
@@ -270,6 +306,17 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     if tool is None:
         return f"Error: no tool named '{name}' is registered."
 
+    # Permission state applies to EVERY declared capability, not only tools
+    # which also happened to set requires_confirmation=True. Previously a
+    # cautious-profile capability could say CONFIRM while a read-looking
+    # tool ran immediately because only the tool flag was consulted here.
+    from reyes_agent import permissions
+
+    permission_state = permissions.check(name)
+    if permission_state == permissions.BLOCKED:
+        capability = permissions.capability_for_tool(name) or name
+        return f"Blocked: capability '{capability}' is disabled by ZENO's permission policy. Nothing ran."
+
     # A tool call whose arguments were cut off at the model's output limit
     # (see provider.py). Nothing ran, and saying so plainly is what lets the
     # model split the work up instead of quietly reporting a build it never
@@ -304,7 +351,8 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     from reyes_agent.confidence import decide_tool
 
     confidence = decide_tool(name, requires_confirmation=tool.requires_confirmation)
-    must_confirm = tool.requires_confirmation or confidence.requires_confirmation or voice_requires_confirmation
+    must_confirm = (tool.requires_confirmation or confidence.requires_confirmation
+                    or voice_requires_confirmation or permission_state == permissions.CONFIRM)
 
     if (must_confirm and _autonomy_allows(name) and not confidence.requires_confirmation
             and not voice_requires_confirmation):
@@ -335,7 +383,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, companion_tools, council_tools, design, email_tools, intelligence_tools, investing, knowledge_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

@@ -2181,6 +2181,9 @@ let vadRecorder = null;
 let vadChunks = [];
 let vadMaxClipTimer = null;
 let discardVADClip = false;
+// null = not probed yet; false = use the existing Deepgram phrase fallback;
+// true = locally reject non-wake speech before any cloud request.
+let localWakeConfigured = null;
 let transcriptionActive = false;
 let vadHandlersBound = false;
 let lastVoiceIdentity = null;
@@ -2691,6 +2694,27 @@ async function transcribeVADClip(blob, speakerBlob = null) {
     const token = await desktopMicToken();
     const headers = {};
     if (token) headers['X-Zeno-Mic-Token'] = token;
+    if (!listeningMode && speakerBlob && speakerBlob.size && localWakeConfigured !== false) {
+      try {
+        const wakeForm = new FormData();
+        wakeForm.append('audio', speakerBlob, 'zeno-wake.wav');
+        const wakeResponse = await fetch('/api/wake/detect', {
+          method: 'POST', headers, body: wakeForm, signal: controller.signal,
+        });
+        const wake = await wakeResponse.json().catch(() => ({}));
+        localWakeConfigured = Boolean(wake.configured);
+        if (wakeResponse.ok && localWakeConfigured && !wake.detected) {
+          micStatusEl.textContent = 'Standing by — say "Zeno" to wake me';
+          compactMicStatus('LISTENING', 'non-wake speech filtered locally');
+          return;
+        }
+        // A configured backend failure deliberately falls through to the
+        // existing STT phrase detector. One optional feature cannot silence
+        // ZENO's established wake path.
+      } catch (_wakeError) {
+        // Conventional STT remains the failure-isolated fallback.
+      }
+    }
     const response = await fetch('/api/transcribe', { method: 'POST', headers, body: form, signal: controller.signal });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {

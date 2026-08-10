@@ -3009,3 +3009,30 @@ The measured cold standalone context cost was 744.59 ms awareness + 35.15 ms
 anticipation under 90% RAM pressure; the combined cached path was 0.019 ms.
 This work stays on the managed AI/background path and never blocks the GUI
 message loop.
+
+## Phase 2 external integration contracts (2026-08-10)
+
+The authoritative Phase 2 rule is **adapters observe and reuse the existing
+kernel; they do not create a second runtime**. `memory/manager.py` is the only
+new memory coordinator, with Living Memory canonical and Mem0 optional.
+`wake/engine.py` never owns a device; WebView2 remains the sole microphone
+owner. `execution_lifecycle.py` records the existing `agent.run_agent` loop
+and does not schedule work. `devices/manager.py` has one local Windows device
+and serializes foreground control. `tools/mcp/manager.py` is the only external
+tool-bus manager; servers must exist in `07-System/mcp/servers.json`, be named
+in `ZENO_MCP_ALLOWLIST`, and pass trust/capability validation.
+
+Keep all external packages lazy except the installed MCP SDK. Never enable
+Mem0, Open Interpreter, an MCP server or an external Phase 1 adapter merely
+because its package is importable. Mem0 migration is copy-only. Open
+Interpreter is TOSIN's specialist, uses non-interactive `exec`, never uses a
+shell or auto-run, and must remain inside the coding workspace roots. MCP
+structured content and tool audits must pass through secret redaction. Wake
+detection must reuse the Mini Orb PCM stream; adding PyAudio/sounddevice here
+would recreate the duplicate-listener/permission problem.
+
+The health source is `system_health.snapshot()` exposed at `/api/health`; it
+is evaluated on request and must not grow a polling thread. Optional inactive
+systems are `STANDBY`/`DISABLED`, not falsely `ONLINE`. The explicit deployment
+limits are: no custom ZENO openWakeWord model, no Mem0 package/config, no Open
+Interpreter executable and no production MCP servers on the audited machine.

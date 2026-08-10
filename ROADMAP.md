@@ -775,6 +775,90 @@ awareness fusion measured 744.59 ms and anticipation learning 35.15 ms on a
 90% RAM machine; both run on a managed background turn, not the GUI thread,
 and their combined cached path measured 0.019 ms.
 
+---
+
+## External intelligence foundation — PHASE 2 STEPS 6–10 — READY WITH LIMITATIONS (2026-08-10)
+
+Phase 1 (`f00505c`) was audited before integration. Its LiveKit, Microsoft
+Agent Framework, CUA, OmniParser and browser-use seams remain lazy and retain
+the existing conventional voice, bounded agent runtime, UI Automation and
+Playwright fallbacks. One false-success path in deterministic computer control
+was corrected: a queued, blocked or failed tool result is no longer returned
+as a successful device action.
+
+**Memory:** `reyes_agent/memory/` now provides one selective memory manager
+over canonical Living Memory, a bounded session store and an optional lazy
+Mem0 semantic index. Stable preferences, explicitly requested context and
+verified project/agent lessons may become durable; secrets, raw large inputs
+and temporary status do not. Retrieval happens before planning, is relevance
+ranked and bounded, and the Mem0 call has a 1.5-second managed timeout. Legacy
+records can be previewed and copied into Mem0 without deleting the originals.
+Mem0 is not installed or enabled on this machine, so Living Memory is the
+tested live backend.
+
+**Wake word:** `reyes_agent/wake/` implements one deterministic state machine,
+energy VAD, cooldown, consecutive-hit filtering and a lazy openWakeWord ONNX
+adapter. It consumes 16 kHz PCM from the already-authorized Mini Orb WebView2
+stream and never opens a second microphone. The package is installed, but no
+trusted custom ZENO model is configured; local ZENO/Hey ZENO/Yo ZENO scoring
+therefore reports `MODEL_NOT_CONFIGURED` and the existing VAD-bounded Deepgram
+phrase fallback remains active. This is an explicit incomplete deployment
+item, not reported as local detection.
+
+**Coding specialist and MCP:** TOSIN owns the optional Open Interpreter exec
+adapter. It is workspace-contained, shell-free, permission classified,
+time-bounded, output-capped at 1 MiB and never uses auto-run; the executable is
+not installed here, so existing confirmed file/command tools remain its live
+fallback. MCP 2.0 is now a core dependency. The central bus uses an explicit
+allowlist plus trust and capability declarations, copies only named
+environment variables, supports `CONNECTED`/`DISCONNECTED`/`DEGRADED`/`FAILED`,
+caps concurrency at two and opens finite stdio sessions only on a real call.
+A real local MCP 2.0 discovery/call/redaction round trip passes; no production
+server is configured or trusted automatically.
+
+**Device/lifecycle/health:** one `local-windows` device adapter wraps the
+existing Phase 1 hybrid controller with a per-device foreground lock. Future
+device types are interface values only; there is no distributed daemon. One
+observable execution trace now covers understand → retrieve → plan → select →
+execute → observe → verify → store → respond, with explicit autonomy levels
+0–4 and at most two recorded recovery attempts. Capability policy is enforced
+for every registered tool, actual monetary actions remain structurally
+blocked, and structured `ok=false` results cannot become verification
+evidence. `/api/health` is an on-demand truth API with no monitor thread.
+
+**Measured verification:** 26 Phase 2 contract tests pass, including the real
+MCP stdio round trip and out-of-order startup completion; the final complete
+41-file standalone suite passed in 169.7 seconds. A live Playwright
+cycle opened `https://example.com` in 9.64 seconds cold, read the rendered page
+in 168 ms and closed the saved context. Staged backend startup changed from
+2,612.7 ms to 2,600.9 ms in the final post-change restart. A startup race found
+under pressure was fixed: the last-finishing core worker can no longer regress
+`ready` back to `executive_ready`. A real Gemini reply completed in 14.77
+seconds and its ElevenLabs generation in 5.79 seconds. No new scheduler,
+permanent poller, agent worker, browser process or microphone owner is created
+by Phase 2 while idle.
+
+**Known limits:** this 8 GiB machine was at 83% system CPU and 89% RAM during
+the normal-workload sample. The complete ZENO/WebView2 tree measured 10.08%
+CPU, 607.3 MiB and 189 threads over ten seconds; 8.95% was WebView2 and 4.61%
+was its GPU process. Those visual costs pre-exist this lazy backend phase and
+remain above the desired isolated target. Mem0, Open Interpreter and a custom
+ZENO wake model are not deployed. LiveKit, Microsoft Agent Framework,
+OmniParser and browser-use are also not installed/enabled; their tested
+fallbacks remain active. See `PHASE2_INTEGRATION_REPORT.md` for the complete
+architecture, dependency, test and deployment record.
+
+After the live provider/TTS run, system RAM reached 94% and the event-loop
+probe recorded delays from 211 ms to 1.31 seconds. A live all-thread capture
+found the server main thread idle in Windows IOCP, all four bounded workers
+waiting on an empty queue, the scheduler waiting on its condition and no lock,
+future, provider or tool held on the event loop. Ten status probes ranged from
+36 ms to 16.8 seconds during the same machine-wide paging episode. This is
+not claimed fixed or attributed to a Python deadlock; isolated-machine
+validation remains required.
+
+### JARVIS verification and limits (continued from the JARVIS section above Phase 2)
+
 **Verification:** all 39 standalone regression files passed in 159.5 seconds;
 Python compilation, JavaScript syntax and `git diff --check` passed. This
 includes 16 awareness honesty tests, 5 awareness/JARVIS integration tests, 6
