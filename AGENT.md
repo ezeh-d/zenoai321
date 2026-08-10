@@ -3036,3 +3036,30 @@ is evaluated on request and must not grow a polling thread. Optional inactive
 systems are `STANDBY`/`DISABLED`, not falsely `ONLINE`. The explicit deployment
 limits are: no custom ZENO openWakeWord model, no Mem0 package/config, no Open
 Interpreter executable and no production MCP servers on the audited machine.
+
+## Phase 3 advanced capability contracts (2026-08-10)
+
+`phase3_flags.py` is the source of truth for 25 integration decisions and
+flags; `phase3.py` registers heavy integrations as dormant Stage 3 services
+under the existing kernel. Do not start an integration because its package is
+importable. `ZENO_EPISODIC_MEMORY_ENABLED` is the global capture kill switch.
+Screenpipe and ActivityWatch remain mutually exclusive, loopback-only context
+providers with sensitive-window filtering.
+
+`models/gateway.py` is a facade over the existing measured router, not another
+executor. `provider.py` remains the single model call seam and now supports a
+configured OpenAI provider alongside Anthropic, Gemini, xAI and opt-in Ollama.
+Do not instantiate LiteLLM as a parallel client unless the existing provider
+seam is deliberately migrated and its tests are retained.
+
+Every registered tool still reaches `tools.run_tool`; the Phase 3 policy layer
+wraps the existing permissions authority and may only make it stricter.
+Financial transfer, purchase, credential and security-disabling actions are
+DENY. An observed Digital DNA pattern is never a preference, permission or
+automation until the owner explicitly confirms it.
+
+The working temporal graph preserves validity history rather than overwriting
+contradictions. Docling, Graphiti, Sherpa, OpenHands, Screenpipe, ActivityWatch,
+phone, Home Assistant, E2B, external tracing, pywinauto, OPA and n8n are not
+deployed on this machine and must be reported DISABLED/PARTIAL. See
+`PHASE3_ADVANCED_CAPABILITIES_REPORT.md` for the measured handoff.

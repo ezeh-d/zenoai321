@@ -74,6 +74,62 @@ def test_worker_pool_retries_and_cancels_pending_work() -> None:
     pool.shutdown()
 
 
+def test_worker_metrics_identify_failures_without_leaking_messages() -> None:
+    pool = ManagedWorkerPool(max_workers=1, max_queue=4, thread_name_prefix="phase21-metrics")
+
+    def fail() -> None:
+        raise RuntimeError("private-provider-response")
+
+    handle = pool.submit(fail, name="diagnostic-probe")
+    try:
+        handle.result(2)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("The controlled failure unexpectedly completed.")
+
+    metrics = pool.metrics()
+    recent = metrics["recent_failures"]
+    assert len(recent) == 1
+    assert recent[0]["name"] == "diagnostic-probe"
+    assert recent[0]["exception_type"] == "RuntimeError"
+    assert "private-provider-response" not in str(metrics)
+    pool.shutdown()
+
+
+def test_notification_listener_backs_off_and_never_overlaps() -> None:
+    from reyes_agent import notification_listener as listener
+
+    original = (
+        listener._consecutive_failures,
+        listener._retry_after,
+        listener._last_error_log,
+    )
+    try:
+        listener._consecutive_failures = 0
+        listener._retry_after = 0.0
+        listener._last_error_log = time.monotonic()
+        assert listener._begin_attempt() is True
+        assert listener._begin_attempt() is False
+        listener._api_gate.release()
+
+        listener._record_failure(TimeoutError("controlled"))
+        health = listener.health()
+        assert health["consecutive_failures"] == 1
+        assert 0 < health["retry_in_s"] <= 30.0
+        assert listener._begin_attempt() is False
+
+        listener._retry_after = 0.0
+        assert listener._begin_attempt() is True
+        listener._api_gate.release()
+        listener._record_success()
+        assert listener.health()["retry_in_s"] == 0.0
+    finally:
+        listener._consecutive_failures = original[0]
+        listener._retry_after = original[1]
+        listener._last_error_log = original[2]
+
+
 def test_scheduler_prevents_overlapping_periodic_runs() -> None:
     pool = ManagedWorkerPool(max_workers=2, max_queue=8, thread_name_prefix="phase21-scheduler")
     scheduler = BackgroundScheduler()
@@ -99,7 +155,12 @@ def test_scheduler_prevents_overlapping_periodic_runs() -> None:
     scheduler_module.get_worker_pool = lambda: pool
     try:
         scheduler.schedule("slow", slow_tick, interval=0.01)
-        time.sleep(0.16)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            with lock:
+                if runs >= 2:
+                    break
+            time.sleep(0.01)
         scheduler.cancel("slow")
     finally:
         scheduler_module.get_worker_pool = original

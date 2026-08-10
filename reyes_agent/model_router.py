@@ -43,12 +43,12 @@ TASK_KINDS = ("general", "coding", "research", "vision", "reasoning", "offline")
 
 _DEFAULT_ROUTES: dict[str, tuple[str, ...]] = {
     # preference order; first AVAILABLE provider wins
-    "coding":    ("anthropic", "xai", "gemini", "ollama"),
-    "reasoning": ("anthropic", "xai", "gemini", "ollama"),
-    "research":  ("gemini", "anthropic", "xai", "ollama"),
-    "vision":    ("gemini", "anthropic", "xai"),
+    "coding":    ("anthropic", "openai", "xai", "gemini", "ollama"),
+    "reasoning": ("anthropic", "openai", "xai", "gemini", "ollama"),
+    "research":  ("gemini", "openai", "anthropic", "xai", "ollama"),
+    "vision":    ("gemini", "openai", "anthropic", "xai"),
     "offline":   ("ollama",),
-    "general":   ("gemini", "anthropic", "xai", "ollama"),
+    "general":   ("gemini", "openai", "anthropic", "xai", "ollama"),
 }
 
 
@@ -123,6 +123,7 @@ def available_providers() -> dict[str, bool]:
     """Which providers have real credentials configured right now."""
     return {
         "anthropic": bool(config.ANTHROPIC_API_KEY),
+        "openai": bool(config.OPENAI_API_KEY),
         "xai": bool(config.XAI_API_KEY),
         "gemini": bool(config.GEMINI_API_KEY),
         # Ollama needs no key. It remains opt-in so machines without the
@@ -292,6 +293,7 @@ def explain() -> dict:
         "active_provider": config.MODEL_PROVIDER,
         "active_model": {
             "anthropic": config.ANTHROPIC_MODEL,
+            "openai": config.OPENAI_MODEL,
             "gemini": config.GEMINI_MODEL,
             "xai": config.XAI_MODEL,
             "ollama": config.OLLAMA_MODEL,

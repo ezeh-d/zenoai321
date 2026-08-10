@@ -64,6 +64,9 @@ chrome_profile/
 # Local databases and indexes that should not be committed
 *.sqlite-journal
 *.db-journal
+*.sqlite3-wal
+*.sqlite3-shm
+REYES/07-System/phase3_graph.sqlite3
 *.sqlite
 
 # Local model binaries

@@ -28,6 +28,14 @@ from reyes_agent import config
 
 _DB_PATH = config.VAULT_PATH / "07-System" / "heartbeat" / "state.db"
 _POLL_INTERVAL_S = 8
+_WINRT_TIMEOUT_S = 2.0
+_MAX_BACKOFF_S = 300.0
+_MAX_ERROR_LOG_BYTES = 256 * 1024
+_api_gate = threading.Lock()
+_health_lock = threading.Lock()
+_consecutive_failures = 0
+_retry_after = 0.0
+_last_error_log = 0.0
 
 
 def _connect() -> sqlite3.Connection:
@@ -70,7 +78,13 @@ async def _poll_once(speak_fn) -> None:
     if listener.get_access_status() != 1:  # ALLOWED
         return
 
-    notifs = await listener.get_notifications_async(NotificationKinds.TOAST)
+    # The WinRT operation has been observed hanging long enough to exhaust a
+    # managed-worker deadline in a console-free WebView host.  wait_for keeps
+    # this optional awareness feature from starving voice/model work.
+    notifs = await asyncio.wait_for(
+        listener.get_notifications_async(NotificationKinds.TOAST),
+        timeout=_WINRT_TIMEOUT_S,
+    )
     for n in notifs:
         if _already_seen(n.id):
             continue
@@ -126,7 +140,10 @@ async def _baseline() -> None:
     listener = UserNotificationListener.current
     if listener.get_access_status() != 1:
         return
-    notifs = await listener.get_notifications_async(NotificationKinds.TOAST)
+    notifs = await asyncio.wait_for(
+        listener.get_notifications_async(NotificationKinds.TOAST),
+        timeout=_WINRT_TIMEOUT_S,
+    )
     for n in notifs:
         _mark_seen(n.id)
 
@@ -145,23 +162,91 @@ def _log_error(exc: Exception) -> None:
 
     log_path = config.VAULT_PATH / "07-System" / "logs" / "notification_listener_errors.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    if log_path.exists() and log_path.stat().st_size >= _MAX_ERROR_LOG_BYTES:
+        backup = log_path.with_suffix(".log.1")
+        try:
+            backup.unlink(missing_ok=True)
+            log_path.replace(backup)
+        except OSError:
+            # Logging must never turn an optional notification failure into a
+            # worker failure. If rotation is unavailable, truncate safely.
+            try:
+                log_path.write_text("", encoding="utf-8")
+            except OSError:
+                return
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
         f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
 
 
+def _begin_attempt() -> bool:
+    """Enter the one WinRT call allowed at a time, respecting backoff."""
+    with _health_lock:
+        if time.monotonic() < _retry_after:
+            return False
+    return _api_gate.acquire(blocking=False)
+
+
+def _record_success() -> None:
+    global _consecutive_failures, _retry_after
+    with _health_lock:
+        _consecutive_failures = 0
+        _retry_after = 0.0
+
+
+def _record_failure(exc: Exception) -> None:
+    global _consecutive_failures, _retry_after, _last_error_log
+    now = time.monotonic()
+    with _health_lock:
+        _consecutive_failures += 1
+        # One bad WinRT call is enough to back off. Repeated failures increase
+        # the quiet period to five minutes without creating another thread.
+        delay = min(_MAX_BACKOFF_S, 30.0 * (2 ** min(_consecutive_failures - 1, 4)))
+        _retry_after = now + delay
+        should_log = now - _last_error_log >= 60.0
+        if should_log:
+            _last_error_log = now
+    if should_log:
+        try:
+            _log_error(exc)
+        except OSError:
+            pass
+
+
+def health() -> dict[str, object]:
+    """Small local diagnostic; no WinRT call and no sensitive content."""
+    with _health_lock:
+        retry_in = max(0.0, _retry_after - time.monotonic())
+        return {
+            "consecutive_failures": _consecutive_failures,
+            "retry_in_s": round(retry_in, 1),
+            "winrt_timeout_s": _WINRT_TIMEOUT_S,
+            "call_active": _api_gate.locked(),
+        }
+
+
 def _baseline_once() -> None:
+    if not _begin_attempt():
+        return
     try:
         asyncio.run(_baseline())
+        _record_success()
     except Exception as exc:  # noqa: BLE001 -- optional Windows API may be unavailable
-        _log_error(exc)
+        _record_failure(exc)
+    finally:
+        _api_gate.release()
 
 
 def _poll() -> None:
+    if not _begin_attempt():
+        return
     try:
         asyncio.run(_poll_once(_speak))
+        _record_success()
     except Exception as exc:  # noqa: BLE001 -- one bad poll must not stop future polls
-        _log_error(exc)
+        _record_failure(exc)
+    finally:
+        _api_gate.release()
 
 
 def start_background() -> None:

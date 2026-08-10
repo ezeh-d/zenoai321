@@ -89,6 +89,7 @@ class AgentTurn:
 OnText = Callable[[str], None]
 
 _anthropic_client: Any = None
+_openai_client: Any = None
 _xai_client: Any = None
 _gemini_client: Any = None
 _ollama_client: Any = None
@@ -127,6 +128,19 @@ def _get_anthropic_client() -> Any:
             max_retries=0,
         )
     return _anthropic_client
+
+
+def _get_openai_client() -> Any:
+    global _openai_client
+    if _openai_client is None:
+        if not config.OPENAI_API_KEY:
+            raise ProviderError("No OPENAI_API_KEY set. Add one to .env, then restart.")
+        kwargs = {"api_key": config.OPENAI_API_KEY,
+                  "timeout": float(config.AI_REQUEST_TIMEOUT_S), "max_retries": 0}
+        if config.OPENAI_BASE_URL:
+            kwargs["base_url"] = config.OPENAI_BASE_URL
+        _openai_client = _openai_module().OpenAI(**kwargs)
+    return _openai_client
 
 
 def _get_xai_client() -> Any:
@@ -427,6 +441,26 @@ def _run_xai(
         raise ProviderError(f"Model provider returned an error: {exc.message}") from exc
 
 
+def _run_openai(
+    history: list[dict], system: str, tools: list[dict], on_text: OnText | None
+) -> AgentTurn:
+    sdk = _openai_module()
+    try:
+        return _run_openai_compatible(
+            _get_openai_client(), config.OPENAI_MODEL, history, system, tools, on_text
+        )
+    except sdk.AuthenticationError as exc:
+        raise ProviderError("That OPENAI_API_KEY was rejected. Check it in .env.") from exc
+    except sdk.RateLimitError as exc:
+        raise ProviderError("OpenAI rate limited the request; falling back.", retryable=True) from exc
+    except sdk.APIConnectionError as exc:
+        raise ProviderError("Couldn't reach OpenAI. Check your connection.", retryable=True) from exc
+    except sdk.NotFoundError as exc:
+        raise ProviderError(f"Model '{config.OPENAI_MODEL}' was not found.") from exc
+    except sdk.APIStatusError as exc:
+        raise ProviderError(f"OpenAI returned an error: {exc.message}") from exc
+
+
 def _run_gemini(
     history: list[dict], system: str, tools: list[dict], on_text: OnText | None
 ) -> AgentTurn:
@@ -476,6 +510,7 @@ def _run_ollama(
 
 _RUNNERS = {
     "anthropic": _run_anthropic,
+    "openai": _run_openai,
     "xai": _run_xai,
     "gemini": _run_gemini,
     "ollama": _run_ollama,

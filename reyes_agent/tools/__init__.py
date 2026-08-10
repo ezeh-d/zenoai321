@@ -157,6 +157,10 @@ TOOL_GROUPS: dict[str, str] = {
     "coding_inspect": "coding", "coding_execute": "coding",
     "mcp_status": "mcp", "mcp_discover": "mcp", "mcp_read": "mcp", "mcp_action": "mcp",
     "device_status": "devices", "device_observe": "devices", "device_execute": "devices",
+    "episodic_search": "phase3", "read_document_structured": "phase3",
+    "knowledge_graph_query": "phase3", "knowledge_graph_remember": "phase3",
+    "engineering_backends": "phase3", "mobile_device_status": "phase3",
+    "sandbox_status": "phase3",
     # Worker teams. Grouped ONLY to keep call_worker out of ZENO's core
     # payload -- ZENO delegates to a commander, it never calls a commander's
     # worker itself, so a core schema here would be pure per-turn token cost
@@ -210,7 +214,9 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
 
     try:
         started = time.time()
-        result = tool.func(**tool_input)
+        from reyes_agent.observability import span
+        with span("tool.execute", attributes={"tool": tool.name, "input": _audit_safe(tool_input)}):
+            result = tool.func(**tool_input)
         duration = time.time() - started
         try:
             from reyes_agent.performance_monitor import record_latency
@@ -306,6 +312,16 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     if tool is None:
         return f"Error: no tool named '{name}' is registered."
 
+    # Contextual Phase 3 policy does not replace permissions.py; it is the
+    # constitution facade over that same authority and adds immutable critical
+    # action denial. Every registered tool reaches this point.
+    from reyes_agent.security.policy import CONFIRM as POLICY_CONFIRM
+    from reyes_agent.security.policy import DENY as POLICY_DENY
+    from reyes_agent.security.policy import decide as policy_decide
+    policy = policy_decide(name)
+    if policy.effect == POLICY_DENY:
+        return f"Blocked: {policy.reason}. Nothing ran."
+
     # Permission state applies to EVERY declared capability, not only tools
     # which also happened to set requires_confirmation=True. Previously a
     # cautious-profile capability could say CONFIRM while a read-looking
@@ -351,7 +367,8 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     from reyes_agent.confidence import decide_tool
 
     confidence = decide_tool(name, requires_confirmation=tool.requires_confirmation)
-    must_confirm = (tool.requires_confirmation or confidence.requires_confirmation
+    must_confirm = (tool.requires_confirmation or policy.effect == POLICY_CONFIRM
+                    or confidence.requires_confirmation
                     or voice_requires_confirmation or permission_state == permissions.CONFIRM)
 
     if (must_confirm and _autonomy_allows(name) and not confidence.requires_confirmation
@@ -383,7 +400,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, profile_tools, projects, rag, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, phase3_tools, profile_tools, projects, rag, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

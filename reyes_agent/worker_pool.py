@@ -405,6 +405,21 @@ class ManagedWorkerPool:
     def metrics(self) -> dict[str, Any]:
         with self._metrics_lock:
             finished = self._completed + self._failed + self._cancelled + self._timed_out
+            # Keep diagnostics useful without leaking exception messages, which
+            # may contain provider responses, paths, or credentials.  The
+            # bounded deque already limits retained handles; expose only the
+            # ten newest unsuccessful task identities and exception classes.
+            recent_failures: list[dict[str, Any]] = []
+            for handle in reversed(self._recent):
+                if handle.state not in {FAILED, TIMED_OUT}:
+                    continue
+                item = handle.snapshot()
+                item["exception_type"] = (
+                    type(handle.exception).__name__ if handle.exception is not None else ""
+                )
+                recent_failures.append(item)
+                if len(recent_failures) >= 10:
+                    break
             return {
                 "workers": self.max_workers,
                 "workers_alive": sum(t.is_alive() for t in self._threads),
@@ -418,6 +433,7 @@ class ManagedWorkerPool:
                 "cancelled": self._cancelled,
                 "timed_out": self._timed_out,
                 "retries": self._retries,
+                "recent_failures": recent_failures,
                 "average_duration_ms": round(self._total_duration * 1000 / finished, 1)
                 if finished else 0.0,
             }

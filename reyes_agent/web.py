@@ -300,6 +300,10 @@ async def _on_startup() -> None:
         start=lambda: __import__("reyes_agent.workflow_engine", fromlist=["get_workflow_engine"]).get_workflow_engine(),
         stop=lambda: __import__("reyes_agent.workflow_engine", fromlist=["get_workflow_engine"]).get_workflow_engine().shutdown(),
     )
+    # Metadata-only registration: optional Phase 3 adapters remain dormant
+    # until their flag is enabled and a real request explicitly activates one.
+    from reyes_agent.phase3 import register_with_kernel
+    register_with_kernel()
     # Give the HTTP shell one clean scheduling window before creating the
     # specialist threads/restoring session state. The desktop splash hands the
     # user to this shell immediately; core work then starts in the background.
@@ -604,6 +608,13 @@ def central_health() -> dict[str, Any]:
     from reyes_agent import system_health
 
     return system_health.snapshot()
+
+
+@app.get("/api/phase3/status")
+def phase3_status() -> dict[str, Any]:
+    """Real feature/availability state; starts no optional service."""
+    from reyes_agent.phase3 import status
+    return status()
 
 
 @app.get("/api/wake/status")

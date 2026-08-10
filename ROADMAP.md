@@ -870,3 +870,46 @@ Marvel artwork, dialogue, hardware or an impersonated voice. JARVIS remains
 OFFLINE until actually delegated (by design). Its first cold context fusion can
 add under one second to a background AI turn on this pressured machine; it
 does not block rendering and subsequent cached reads are effectively free.
+
+---
+
+## Phase 3 — Advanced capabilities foundation · READY WITH LIMITATIONS (2026-08-10)
+
+Phase 3 adds one lazy integration catalogue, capability-aware model facade,
+OpenAI routing, a contextual policy constitution, local redacted tracing,
+explicit episodic-provider privacy, a working temporal fact graph, structured
+document chunking, engineering/device/sandbox facades and optional external
+service adapters. It reuses the existing kernel, worker pool, scheduler, Event
+Bus, provider executor, Living Memory, workflow engine, permissions and single
+microphone owner. No second scheduler, provider client, Event Bus or audio
+listener was created.
+
+Heavy capabilities are registered as dormant Stage 3 services and default
+off. Screenpipe/ActivityWatch capture also requires the independent
+`ZENO_EPISODIC_MEMORY_ENABLED` kill switch. The agent loads seven advanced tool
+schemas only for relevant document/history/device/sandbox requests; ordinary
+turns gain only the compact truthful `phase3_status` entry point.
+
+Verified: 30 Phase 3 contracts, 38 Phase 1 integrations, 26 Phase 2 contracts,
+15 Phase 21 and 9 Phase 22 tests pass. A live Gemini turn called the new status
+tool and reported the real 5/25 enabled count. Local Ollama returned
+`LOCAL_OK`. The restarted app reached staged backend READY in 2.652 s with
+four workers, queue zero and no boot error; Mini Orb was the only visible ZENO
+window. Isolated Phase 3 import cost 15.26 ms, 112 KiB and no thread.
+The final complete repository run passed 42/42 standalone files in 156.1 s.
+A validation-discovered `voice.stt` module-shadowing regression was corrected
+before that clean run.
+
+The final live worker audit also caught Windows notification WinRT calls
+exceeding their managed deadlines and contending with voice transcription.
+Those awaits are now two-second bounded, non-overlapping and circuit-backed;
+their error log rotates. Six post-restart notification cycles completed with
+zero failures, zero timeouts and zero overlaps while all four workers remained
+available and the Mini Orb host reported responding.
+
+Honest status: external Screenpipe, ActivityWatch, Graphiti, Docling, Sherpa,
+OpenHands, mobile, smart-home, observability-exporter, OPA and n8n deployments
+were not present, so adapters are not called production-ready. Host-to-HTTP
+startup still measured about 8.3 s and the existing WebView2 tree remains the
+dominant process cost under 88% system RAM. Full details are in
+`PHASE3_ADVANCED_CAPABILITIES_REPORT.md`.

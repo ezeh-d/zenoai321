@@ -90,10 +90,23 @@ def snapshot() -> dict[str, Any]:
         except Exception as exc:
             return "DEGRADED", f"Phase 1 integration import failed: {type(exc).__name__}: {exc}", None
 
+    def advanced_services():
+        from reyes_agent.phase3 import status
+        data = status()
+        failed = sum(1 for item in data["services"]
+                     if item["state"] == "DEGRADED" and item["enabled"])
+        state = "DEGRADED" if failed else "ONLINE"
+        return state, (
+            f"{data['enabled']}/{data['total']} enabled; "
+            f"{failed} enabled service(s) degraded; no polling."
+        ), {"enabled": data["enabled"], "total": data["total"], "degraded": failed,
+            "states": {item["key"]: item["state"] for item in data["services"]}}
+
     for name, operation in (
         ("ZENO CORE", core), ("VOICE", voice), ("MEMORY", memory), ("WAKE WORD", wake),
         ("VISION/COMPUTER", integrations), ("BROWSER", browser), ("AGENTS", agents),
         ("CODING SPECIALIST", coding), ("MCP", mcp), ("LOCAL WINDOWS DEVICE", devices),
+        ("ADVANCED SERVICES", advanced_services),
     ):
         check(name, operation)
 

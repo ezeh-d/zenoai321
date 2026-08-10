@@ -101,6 +101,18 @@ def run_agent(
     max_rounds = decision.max_tool_rounds if decision else MAX_TOOL_ROUNDS
     task_kind = decision.model_kind if decision else "general"
 
+    # Load the compact advanced group only for a request that can use it.
+    # This is a local keyword gate, not another model call, and avoids the
+    # historical all-tools payload regression on ordinary conversation.
+    try:
+        from reyes_agent.phase3 import relevant_request
+        if relevant_request(latest):
+            enabled_groups.add("phase3")
+            if config.MODEL_PROVIDER != "ollama":
+                tools = tool_definitions(groups=enabled_groups)
+    except Exception:
+        pass
+
     # --- observers ---------------------------------------------------------
     # Both are strictly best-effort: a broken diagnostic must never cost the
     # user a reply, so every call goes through these two helpers.
@@ -148,6 +160,22 @@ def run_agent(
     except Exception:  # noqa: BLE001
         memory_context = system_prompt_block()
     system = config.SYSTEM_PROMPT + memory_context
+
+    # Episodic context is queried only when explicitly enabled and the user is
+    # asking about prior computer activity. It runs in this managed agent turn,
+    # never on the GUI thread, and contributes only bounded privacy-filtered
+    # matches instead of continuously feeding screen history to a model.
+    try:
+        from reyes_agent.phase3 import episodic_request
+        if episodic_request(latest):
+            from reyes_agent.context.episodic import get_provider
+            episode = get_provider().query(latest, limit=8)
+            if episode.get("ok") and episode.get("items"):
+                compact = [f"- {item.get('application', '')}: {item.get('title', '')} — {item.get('text', '')[:300]}"
+                           for item in episode["items"][:8]]
+                system += "\n\nRelevant private episodic context (use only for this request):\n" + "\n".join(compact)
+    except Exception:
+        pass
     if decision is not None:
         from reyes_agent import cognition, creator_mode, design_intelligence, foodie_intelligence, humour, instinct, learning_mode, website_builder
 
