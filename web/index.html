@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZENO — AI operating assistant</title>
+<meta name="description" content="ZENO is a Windows AI operating assistant. It hears, sees, remembers, plans, acts and verifies — on your machine.">
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#13171c; --line:#222831; --text:#e7ecf2;
+    --muted:#93a0b0; --accent:#4da3ff; --ok:#31c48d; --warn:#f0a63a; --off:#6b7686;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f7f9fc; --panel:#fff; --line:#e2e8f0; --text:#111826;
+           --muted:#5b6675; --accent:#0b69d4; --off:#98a2b3; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:940px;margin:0 auto;padding:0 20px}
+  header{padding:64px 0 40px;text-align:center}
+  h1{font-size:clamp(2.2rem,6vw,3.4rem);margin:0 0 12px;letter-spacing:-.02em}
+  .tag{color:var(--muted);font-size:1.1rem;margin:0 auto;max-width:34rem}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;
+       background:var(--off);vertical-align:middle}
+  .dot.online{background:var(--ok)} .dot.degraded{background:var(--warn)}
+  #banner{margin:26px auto 0;max-width:38rem;padding:12px 16px;border-radius:10px;
+          border:1px solid var(--line);background:var(--panel);color:var(--muted);
+          font-size:.95rem}
+  h2{font-size:1.25rem;margin:44px 0 14px}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(215px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .name{font-size:.76rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+  .card .val{font-size:1.05rem;margin-top:5px;font-weight:600}
+  .card .sub{font-size:.85rem;color:var(--muted);margin-top:3px}
+  ul.plain{list-style:none;padding:0;margin:0}
+  ul.plain li{padding:9px 0;border-bottom:1px solid var(--line);display:flex;
+              justify-content:space-between;gap:14px;align-items:baseline}
+  ul.plain li:last-child{border-bottom:0}
+  .muted{color:var(--muted)} .small{font-size:.9rem}
+  footer{margin:60px 0 40px;padding-top:22px;border-top:1px solid var(--line);
+         color:var(--muted);font-size:.88rem}
+  code{background:var(--panel);border:1px solid var(--line);border-radius:5px;
+       padding:1px 6px;font-size:.87em}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<!-- Written at build time by scripts/build-config.js. PUBLIC values only:
+     anything reachable from browser JavaScript is readable by anyone. -->
+<script src="/zeno-config.js"></script>
+<div class="wrap">
+
+<header>
+  <h1>ZENO</h1>
+  <p class="tag">A Windows AI operating assistant. It hears, sees, remembers, plans,
+     acts and verifies — on your own machine.</p>
+  <div id="banner"><span class="dot" id="dot"></span><span id="banner-text">Checking whether ZENO is reachable…</span></div>
+</header>
+
+<h2>System</h2>
+<div class="grid" id="systems">
+  <div class="card"><div class="name">Core</div><div class="val" data-k="core">—</div>
+    <div class="sub">the desktop process</div></div>
+  <div class="card"><div class="name">Voice</div><div class="val" data-k="voice">—</div>
+    <div class="sub">wake word and speech run locally</div></div>
+  <div class="card"><div class="name">Memory</div><div class="val" data-k="memory">—</div>
+    <div class="sub">stays on your machine</div></div>
+  <div class="card"><div class="name">Missions</div><div class="val" data-k="missions">—</div>
+    <div class="sub">survive a restart</div></div>
+  <div class="card"><div class="name">Skills</div><div class="val" data-k="skills">—</div>
+    <div class="sub">only run once you approve them</div></div>
+  <div class="card"><div class="name">Vision</div><div class="val" data-k="vision">—</div>
+    <div class="sub">accessibility first, models second</div></div>
+</div>
+
+<h2>What this page is not</h2>
+<ul class="plain small">
+  <li><span>Your computer</span><span class="muted">stays on your desk. This page cannot reach it.</span></li>
+  <li><span>Commands</span><span class="muted">there is no endpoint here that runs anything</span></li>
+  <li><span>Your files, voice and memory</span><span class="muted">never leave the machine to render this</span></li>
+  <li><span>Status shown above</span><span class="muted">read-only, and blank when ZENO is off</span></li>
+</ul>
+
+<h2>How it works</h2>
+<ul class="plain">
+  <li><span>Hears</span><span class="muted small">local wake word, local speech, barge-in</span></li>
+  <li><span>Sees</span><span class="muted small">the accessibility tree first — ground truth in well under a second</span></li>
+  <li><span>Acts</span><span class="muted small">cheapest reliable technique first; it never invents a coordinate</span></li>
+  <li><span>Verifies</span><span class="muted small">every completed step is backed by something it actually observed</span></li>
+  <li><span>Recovers</span><span class="muted small">bounded retries, then it stops and says so</span></li>
+</ul>
+
+<footer>
+  ZENO runs on your Windows machine. This page is a public status and
+  documentation surface only — it holds no credentials and exposes no way to
+  control anything. When the desktop is off, it says so.
+</footer>
+
+</div>
+
+<script>
+(function () {
+  // Where the desktop ZENO lives. Overridden at build time by
+  // window.ZENO_CONFIG (see zeno-config.js), which is PUBLIC by definition:
+  // anything embedded in browser JavaScript is readable by anyone.
+  var cfg = (window.ZENO_CONFIG || {});
+  var base = cfg.apiBaseUrl || "http://127.0.0.1:8765";
+
+  var dot = document.getElementById("dot");
+  var text = document.getElementById("banner-text");
+
+  function set(key, value, sub) {
+    var el = document.querySelector('[data-k="' + key + '"]');
+    if (!el) return;
+    el.textContent = value;
+    if (sub) { var s = el.parentElement.querySelector(".sub"); if (s) s.textContent = sub; }
+  }
+
+  function offline(why) {
+    dot.className = "dot";
+    text.textContent = "ZENO CORE OFFLINE — " + why +
+      ". This page still works; it simply has nothing to report.";
+    ["core","voice","memory","missions","skills","vision"].forEach(function (k) {
+      set(k, "offline");
+    });
+  }
+
+  function online(data) {
+    var degraded = (data.overall || "").toUpperCase() === "DEGRADED";
+    dot.className = "dot " + (degraded ? "degraded" : "online");
+    text.textContent = degraded
+      ? "ZENO is running, with some subsystems degraded."
+      : "ZENO is running on your machine.";
+    set("core", data.core || (degraded ? "degraded" : "online"));
+    set("voice", data.voice || "unknown");
+    set("memory", data.memory || "unknown");
+    set("missions", (data.missions_active != null ? data.missions_active : 0) + " active");
+    set("skills", (data.skills_approved != null ? data.skills_approved : 0) + " approved");
+    set("vision", data.vision || "standby");
+  }
+
+  // A failure here is the normal case, not an error: most visitors are not
+  // the owner and cannot reach a machine on someone else's network.
+  var done = false;
+  var timer = setTimeout(function () {
+    if (!done) { done = true; offline("no response"); }
+  }, 3500);
+
+  fetch(base + "/api/v1/public-status", { mode: "cors", cache: "no-store" })
+    .then(function (r) { if (!r.ok) throw new Error("status " + r.status); return r.json(); })
+    .then(function (data) {
+      if (done) return;
+      done = true; clearTimeout(timer); online(data || {});
+    })
+    .catch(function (err) {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      offline("not reachable from this browser");
+    });
+})();
+</script>
+</body>
+</html>

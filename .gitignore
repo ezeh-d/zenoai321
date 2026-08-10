@@ -84,3 +84,6 @@ gui old/data/
 # Personal vault and the runtime artefacts kept inside it.
 REYES/
 REYES (4)/
+
+# Generated at build time by scripts/build-config.js (Netlify runs this).
+web/zeno-config.js

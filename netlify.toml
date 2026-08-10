@@ -1,0 +1,38 @@
+# ZENO public web surface.
+#
+# This deploys a STATIC site and nothing else. There is deliberately no
+# functions directory and no proxy to the desktop machine: the brief is
+# explicit that no public endpoint may control the owner's computer, and the
+# simplest way to guarantee that is to have no server-side code here at all.
+#
+# No secrets belong in this file. It is committed to git. Anything the page
+# needs at runtime is public by definition, because it ends up in browser
+# JavaScript where anyone can read it. Private values go in Netlify's
+# environment-variable UI and are used only at BUILD time.
+
+[build]
+  publish = "web"
+  command = "node scripts/build-config.js"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Direct navigation to a nested route must serve the app rather than 404.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src *; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
+
+[[headers]]
+  for = "/zeno-config.js"
+  [headers.values]
+    Cache-Control = "no-store"
