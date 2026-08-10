@@ -353,6 +353,207 @@ def test_barge_in_goes_through_the_existing_state_machine() -> None:
         session.reset()
 
 
+# --- input isolation -----------------------------------------------------
+
+def test_zeno_will_not_take_the_pointer_while_the_owner_is_using_it() -> None:
+    from reyes_agent.computer import input_guard
+
+    original = input_guard.owner_idle_seconds
+    try:
+        input_guard.owner_idle_seconds = lambda: 0.2      # owner just typed
+        grant = input_guard.may_take_control()
+        assert grant.allowed is False
+        assert "working" in grant.reason or "mouse" in grant.reason
+
+        # ...but an explicit instruction from the owner still wins.
+        assert input_guard.may_take_control(override=True).allowed is True
+
+        input_guard.owner_idle_seconds = lambda: 60.0     # owner is away
+        assert input_guard.may_take_control().allowed is True
+    finally:
+        input_guard.owner_idle_seconds = original
+        input_guard.reset()
+
+
+def test_a_blocked_step_is_reported_as_waiting_not_as_failure() -> None:
+    """The owner being busy is not the plan being wrong."""
+    from reyes_agent.computer import agentic, input_guard
+
+    original = input_guard.owner_idle_seconds
+    try:
+        input_guard.owner_idle_seconds = lambda: 0.1
+        outcome = agentic.run("type something", [{"action": "type", "text": "hello"}])
+        assert outcome.ok is False
+        assert outcome.blocked_on_owner is True, "must be distinguishable from a failed step"
+        assert outcome.steps and outcome.steps[0].blocked_on_owner is True
+    finally:
+        input_guard.owner_idle_seconds = original
+        input_guard.reset()
+
+
+def test_revoking_control_stops_further_input() -> None:
+    from reyes_agent.computer import input_guard
+
+    original = input_guard.owner_idle_seconds
+    try:
+        input_guard.owner_idle_seconds = lambda: 60.0
+        assert input_guard.may_take_control().allowed is True
+        input_guard.revoke("owner said stop")
+        assert input_guard.may_take_control().allowed is False
+        # An override must NOT resurrect a revoked run.
+        assert input_guard.may_take_control(override=True).allowed is False
+    finally:
+        input_guard.owner_idle_seconds = original
+        input_guard.reset()
+
+
+def test_observing_is_never_blocked_by_the_owner_being_busy() -> None:
+    """Looking costs the owner nothing; only input does."""
+    from reyes_agent.computer import agentic, input_guard
+
+    original = input_guard.owner_idle_seconds
+    try:
+        input_guard.owner_idle_seconds = lambda: 0.0
+        step = agentic.act("observe")
+        assert step.ok is True and step.blocked_on_owner is False
+    finally:
+        input_guard.owner_idle_seconds = original
+        input_guard.reset()
+
+
+# --- accessibility coverage ---------------------------------------------
+
+def test_an_unreadable_window_is_not_reported_as_an_empty_one() -> None:
+    """The bug this prevents: 'Calculator has no buttons'."""
+    from reyes_agent.vision import coverage
+    from reyes_agent.vision.elements import Scene
+
+    for state in (coverage.MINIMIZED, coverage.SUSPENDED, coverage.OPAQUE, coverage.SLOW):
+        scene = Scene(window="Calculator")
+        scene.coverage = coverage.Coverage(state, "because reasons", "do this")
+        assert scene.reliable is False
+        summary = scene.summary()
+        assert "could not properly read" in summary
+        assert "do this" in summary, "a diagnosis without a remedy is not useful"
+        assert "exposes no readable elements" not in summary
+
+
+def test_coverage_never_calls_a_busy_window_opaque() -> None:
+    """A window that published 4300 elements is slow, not featureless."""
+    from reyes_agent.vision import coverage
+
+    verdict = coverage.assess(0, 0, 0, enumerate_s=30.0, reported_total=4300)
+    assert verdict.state == coverage.SLOW
+    assert verdict.worth_ocr is False, "OCR cannot fix an app that is merely slow"
+    assert "4300" in verdict.reason
+
+
+def test_a_healthy_window_is_trusted() -> None:
+    from reyes_agent.vision import coverage
+
+    verdict = coverage.assess(0, 120, 80)
+    assert verdict.trustworthy is True and verdict.state == coverage.GOOD
+
+
+def test_a_missing_element_admits_when_the_read_was_bad() -> None:
+    """'Not on screen' is a claim about the world; only make it when we looked."""
+    from reyes_agent.computer import agentic, input_guard
+    from reyes_agent.vision import coverage, scene_state
+
+    original_idle = input_guard.owner_idle_seconds
+    original_current = scene_state.current
+    blind = _scene()
+    blind.window = "Calculator"
+    blind.coverage = coverage.Coverage(coverage.SUSPENDED, "it is suspended",
+                                       "bring it to the foreground")
+    try:
+        input_guard.owner_idle_seconds = lambda: 60.0
+        scene_state.current = lambda **_: blind
+        step = agentic.act("click", "Seven")
+        assert step.ok is False
+        assert "may well be there" in step.detail
+        assert "foreground" in step.detail
+    finally:
+        input_guard.owner_idle_seconds = original_idle
+        scene_state.current = original_current
+        input_guard.reset()
+
+
+def test_zeno_can_read_what_a_text_box_contains_not_just_its_name() -> None:
+    """A field's Name is its label; its Value is what the owner typed.
+
+    Verified live against Notepad: the typed text appears ONLY in the Value
+    pattern. Reading Name alone reported an empty document that was not.
+    """
+    from reyes_agent.vision.elements import Element
+
+    box = Element(type="edit", label="Search", value="quarterly report")
+    assert "Search" in box.describe() and "quarterly report" in box.describe()
+    assert box.as_dict()["value"] == "quarterly report"
+
+
+def test_focus_is_a_real_action_because_coverage_prescribes_it() -> None:
+    """Diagnosing 'bring it to the foreground' is useless without a way to."""
+    from reyes_agent.computer import agentic, input_guard, window
+
+    assert hasattr(window, "activate") and hasattr(window, "find_by_title")
+
+    original = input_guard.owner_idle_seconds
+    try:
+        input_guard.owner_idle_seconds = lambda: 60.0
+        step = agentic.act("focus", "a window that does not exist at all")
+        assert step.ok is False and "no open window matching" in step.detail
+
+        # Yanking a window forward while the owner types is as rude as
+        # taking the mouse, so it answers to the same guard.
+        input_guard.owner_idle_seconds = lambda: 0.1
+        busy = agentic.act("focus", "Notepad")
+        assert busy.blocked_on_owner is True
+    finally:
+        input_guard.owner_idle_seconds = original
+        input_guard.reset()
+
+
+def test_throwing_away_unsaved_work_needs_approval() -> None:
+    """Found by running a real GUI task, not by reading the code."""
+    from reyes_agent.computer import safety
+
+    for label in ("Don't save", "Dont save", "Close without saving", "Discard changes"):
+        allowed, risk = safety.gate("click", label)
+        assert allowed is False and risk.tier == safety.APPROVAL, label
+    # ...without turning every ordinary button into a prompt.
+    for label in ("Save", "Save as...", "OK", "Cancel"):
+        allowed, _risk = safety.gate("click", label)
+        assert allowed is True, label
+
+
+def test_input_is_never_sent_to_a_window_we_did_not_read() -> None:
+    """Coordinates grounded in window A must not be typed into window B."""
+    from reyes_agent.computer import agentic, input_guard
+    from reyes_agent.vision import parser, scene_state
+
+    original_idle = input_guard.owner_idle_seconds
+    original_current = scene_state.current
+    original_fg = parser.foreground_handle
+
+    stale = _scene()
+    stale.window = "The window I read"
+    stale.window_handle = 111111
+    try:
+        input_guard.owner_idle_seconds = lambda: 60.0
+        scene_state.current = lambda **_: stale
+        parser.foreground_handle = lambda: 222222        # owner alt-tabbed
+        step = agentic.act("type", text="a private sentence")
+        assert step.ok is False
+        assert step.focus_moved is True
+        assert "focus moved" in step.detail
+    finally:
+        input_guard.owner_idle_seconds = original_idle
+        scene_state.current = original_current
+        parser.foreground_handle = original_fg
+        input_guard.reset()
+
+
 # --- isolation -----------------------------------------------------------
 
 def test_no_subsystem_raises_into_the_caller() -> None:

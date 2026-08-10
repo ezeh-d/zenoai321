@@ -24,13 +24,14 @@ from __future__ import annotations
 # put `agentic` first and it tried to reach back into a package that was
 # still half-initialised.
 from reyes_agent.computer import safety, verification          # no intra-package deps
-from reyes_agent.computer import deterministic                 # no intra-package deps
-from reyes_agent.computer import agentic                       # needs the two above
+from reyes_agent.computer import deterministic, input_guard    # no intra-package deps
+from reyes_agent.computer import window                        # no intra-package deps
+from reyes_agent.computer import agentic                       # needs the four above
 from reyes_agent.computer import controller                    # needs agentic
 from reyes_agent.vision import screen_capture as screenshot
 
-__all__ = ["agentic", "controller", "deterministic", "safety", "verification",
-           "screenshot", "run", "observe", "status"]
+__all__ = ["agentic", "controller", "deterministic", "input_guard", "safety",
+           "verification", "window", "screenshot", "run", "observe", "status"]
 
 run = controller.run
 observe = controller.observe

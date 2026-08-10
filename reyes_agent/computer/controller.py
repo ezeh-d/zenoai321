@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from reyes_agent.computer import agentic, deterministic, safety
+from reyes_agent.computer import agentic, deterministic, input_guard, safety
 
 FAST, AGENTIC = "FAST", "AGENTIC"
 
@@ -91,8 +91,10 @@ def status() -> dict[str, Any]:
         "limits": {"max_steps": agentic.MAX_STEPS, "deadline_s": agentic.DEADLINE_S,
                    "max_no_change": agentic.MAX_NO_CHANGE},
         "risk_tiers": list(safety.TIERS),
+        "input_guard": input_guard.status(),
         "note": ("Deterministic commands never touch the screen. Agentic steps are "
                  "grounded against real elements -- coordinates are never invented -- "
                  "and payments, credential changes and security settings are refused "
-                 "outright rather than gated."),
+                 "outright rather than gated. ZENO will not take the pointer while "
+                 "you are actively using it, and always puts it back."),
     }

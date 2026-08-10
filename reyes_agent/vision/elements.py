@@ -51,6 +51,10 @@ class Element:
     enabled: bool = True
     automation_id: str = ""
     depth: int = 0
+    # What the control CONTAINS, as opposed to what it is called. A text box
+    # is named "Search" forever while its value is what the owner typed --
+    # without this ZENO can see the box but not read it.
+    value: str = ""
 
     @property
     def center(self) -> tuple[int, int]:
@@ -64,13 +68,15 @@ class Element:
     def as_dict(self) -> dict[str, Any]:
         return {"type": self.type, "label": self.label, "position": list(self.position),
                 "interactive": self.interactive, "confidence": round(self.confidence, 3),
-                "source": self.source, "enabled": self.enabled,
+                "source": self.source, "enabled": self.enabled, "value": self.value,
                 "automation_id": self.automation_id, "center": list(self.center)}
 
     def describe(self) -> str:
         left, top, width, height = self.position
         state = "" if self.enabled else " (disabled)"
-        return f"{self.type} '{self.label}'{state} at ({left},{top}) {width}x{height}"
+        content = f" containing {self.value[:120]!r}" if self.value else ""
+        return (f"{self.type} '{self.label}'{state}{content} "
+                f"at ({left},{top}) {width}x{height}")
 
 
 @dataclass
@@ -85,17 +91,26 @@ class Scene:
     duration_ms: int = 0
     truncated: bool = False
     error: str = ""
+    # Whether this parse can be believed. Set by the parser via
+    # `vision.coverage`; None means it was never assessed.
+    coverage: Any = None
 
     @property
     def interactive(self) -> list[Element]:
         return [e for e in self.elements if e.interactive and e.enabled]
+
+    @property
+    def reliable(self) -> bool:
+        """False when we know we are looking at a shell, not the window."""
+        return bool(self.coverage is None or self.coverage.trustworthy)
 
     def as_dict(self) -> dict[str, Any]:
         return {"window": self.window, "source": self.source,
                 "element_count": len(self.elements),
                 "interactive_count": len(self.interactive),
                 "duration_ms": self.duration_ms, "truncated": self.truncated,
-                "error": self.error,
+                "error": self.error, "reliable": self.reliable,
+                "coverage": self.coverage.as_dict() if self.coverage else None,
                 "elements": [e.as_dict() for e in self.elements]}
 
     def summary(self, limit: int = 25) -> str:
@@ -103,6 +118,18 @@ class Scene:
         an action can target."""
         if self.error:
             return f"Could not read the screen: {self.error}"
+
+        # An unreliable scan must never be reported as an empty window --
+        # that is how the loop concludes a control "is not there" when it is
+        # simply not being published.
+        if not self.reliable:
+            note = (f"I could not properly read '{self.window}': {self.coverage.reason}. "
+                    f"To fix it: {self.coverage.remedy}.")
+            if self.elements:
+                note += (f" (Only {len(self.elements)} element(s) came back, so treat "
+                         "anything below as incomplete.)")
+            return note
+
         if not self.elements:
             return f"'{self.window}' exposes no readable elements."
         lines = [f"Window: {self.window} ({len(self.elements)} elements, "

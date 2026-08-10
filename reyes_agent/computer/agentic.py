@@ -23,12 +23,15 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from reyes_agent import vision
-from reyes_agent.computer import safety, verification
+from reyes_agent.computer import input_guard, safety, verification, window
 
 MAX_STEPS = 12
 DEADLINE_S = 90.0
 MAX_NO_CHANGE = 3          # consecutive actions that changed nothing on screen
 SETTLE_S = 0.6             # let the GUI repaint before observing
+
+# Actions that seize the real mouse/keyboard. `observe` does not.
+_SENDS_INPUT = frozenset({"click", "type", "key"})
 
 
 @dataclass
@@ -40,11 +43,15 @@ class Step:
     detail: str = ""
     risk: str = ""
     changed: bool = False
+    blocked_on_owner: bool = False
+    focus_moved: bool = False
     at: float = field(default_factory=time.time)
 
     def as_dict(self) -> dict[str, Any]:
         return {"action": self.action, "target": self.target, "ok": self.ok,
-                "detail": self.detail, "risk": self.risk, "changed": self.changed}
+                "detail": self.detail, "risk": self.risk, "changed": self.changed,
+                "blocked_on_owner": self.blocked_on_owner,
+                "focus_moved": self.focus_moved}
 
 
 @dataclass
@@ -53,11 +60,13 @@ class Outcome:
     steps: list[Step] = field(default_factory=list)
     reason: str = ""
     needs_approval: str = ""
+    blocked_on_owner: bool = False
     observations: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "reason": self.reason,
                 "needs_approval": self.needs_approval,
+                "blocked_on_owner": self.blocked_on_owner,
                 "steps": [s.as_dict() for s in self.steps],
                 "observations": self.observations[-3:]}
 
@@ -107,7 +116,8 @@ def _send_keys(combo: str) -> tuple[bool, str]:
 
 
 def act(action: str, target: str = "", text: str = "", *,
-        approved: bool = False, cancel_check: Callable[[], None] | None = None) -> Step:
+        approved: bool = False, override_idle: bool = False,
+        cancel_check: Callable[[], None] | None = None) -> Step:
     """ONE grounded action, gated and verified."""
     if cancel_check:
         cancel_check()
@@ -120,6 +130,12 @@ def act(action: str, target: str = "", text: str = "", *,
         step.detail = risk.reason
         return step
 
+    # Resolve the target BEFORE asking for the mouse. A step that was never
+    # going to send input -- an element that is not there, an ambiguous
+    # description -- should say so plainly whether or not the owner happens
+    # to be typing; asking for control first would replace a useful answer
+    # with an irrelevant one.
+    target_point: tuple[int, int] | None = None
     if action == "click":
         if vision.grounding.ambiguous(before, target):
             options = [e.label for _s, e in vision.grounding.candidates(before, target, 3)]
@@ -128,19 +144,71 @@ def act(action: str, target: str = "", text: str = "", *,
         element = vision.grounding.find(before, target)
         if element is None:
             step.detail = f"'{target}' is not on screen; nothing was clicked"
+            if not before.reliable and before.coverage is not None:
+                # Do not let a bad read masquerade as a missing button.
+                step.detail += (f" -- but I could not read this window properly "
+                                f"({before.coverage.reason}), so it may well be there. "
+                                f"{before.coverage.remedy.capitalize()}.")
             return step
-        x, y = element.center
-        step.ok, step.detail = _send_click(x, y)
-    elif action == "type":
-        step.ok, step.detail = _send_text(text or target)
-    elif action == "key":
-        step.ok, step.detail = _send_keys(target)
+        target_point = element.center
     elif action == "observe":
         step.ok, step.detail = True, before.summary(limit=12)
         return step
-    else:
+    elif action == "focus":
+        # The remedy for a minimized or suspended window. It sends no mouse
+        # or keyboard input, but yanking a window in front of someone who is
+        # mid-sentence is just as rude, so it answers to the same guard.
+        grant = input_guard.may_take_control(override=override_idle)
+        if not grant.allowed:
+            step.detail = grant.reason
+            step.blocked_on_owner = True
+            return step
+        matches = window.find_by_title(target)
+        if not matches:
+            step.detail = f"no open window matching '{target}'"
+            return step
+        handle, title = matches[0]
+        step.ok, step.detail = window.activate(handle)
+        step.detail = f"{title!r}: {step.detail}"
+        if step.ok:
+            time.sleep(SETTLE_S)
+            vision.scene_state.invalidate()
+            step.changed = True
+        return step
+    elif action not in _SENDS_INPUT:
         step.detail = f"unknown action '{action}'"
         return step
+
+    # Two different questions. `safety` asks whether the action is permissible
+    # at all; this asks whether NOW is an acceptable moment to take the
+    # owner's mouse away from them.
+    grant = input_guard.may_take_control(override=override_idle)
+    if not grant.allowed:
+        step.detail = grant.reason
+        step.blocked_on_owner = True
+        return step
+
+    # The scene was parsed from ONE window and the coordinates and keystrokes
+    # below are aimed at that window. If focus has moved since -- the owner
+    # alt-tabbed, a notification stole it -- then those coordinates point at a
+    # stranger's UI and the keystrokes land in someone else's document.
+    # Refusing here is the difference between a failed step and typing into
+    # the owner's email.
+    if before.window_handle:
+        live = vision.parser.foreground_handle()
+        if live and live != before.window_handle:
+            step.detail = (f"focus moved to another window since I looked at "
+                           f"'{before.window}' -- I will not send input to a window "
+                           "I have not read")
+            step.focus_moved = True
+            return step
+
+    if action == "click":
+        step.ok, step.detail = _send_click(*target_point)
+    elif action == "type":
+        step.ok, step.detail = _send_text(text or target)
+    else:
+        step.ok, step.detail = _send_keys(target)
 
     # The GUI needs a moment, and the cached scene is now a lie.
     time.sleep(SETTLE_S)
@@ -153,6 +221,7 @@ def act(action: str, target: str = "", text: str = "", *,
 
 
 def run(goal: str, plan: list[dict], *, approved: bool = False,
+        override_idle: bool = False,
         max_steps: int = MAX_STEPS, deadline_s: float = DEADLINE_S,
         cancel_check: Callable[[], None] | None = None) -> Outcome:
     """Execute a grounded plan with hard bounds.
@@ -160,7 +229,19 @@ def run(goal: str, plan: list[dict], *, approved: bool = False,
     `plan` is a list of {action, target, text, expect} produced by the model
     -- ZENO decides WHAT to do, this decides whether each step is allowed,
     possible and effective.
+
+    The whole run is wrapped so the pointer returns to where the owner left
+    it, however the run ends -- success, refusal, deadline or exception.
     """
+    with input_guard.cursor_home():
+        return _run_locked(goal, plan, approved=approved, override_idle=override_idle,
+                           max_steps=max_steps, deadline_s=deadline_s,
+                           cancel_check=cancel_check)
+
+
+def _run_locked(goal: str, plan: list[dict], *, approved: bool, override_idle: bool,
+                max_steps: int, deadline_s: float,
+                cancel_check: Callable[[], None] | None) -> Outcome:
     outcome = Outcome(ok=False)
     started = time.time()
     no_change = 0
@@ -178,11 +259,21 @@ def run(goal: str, plan: list[dict], *, approved: bool = False,
 
         action = str(raw.get("action", "")).strip().lower()
         step = act(action, str(raw.get("target", "")), str(raw.get("text", "")),
-                   approved=approved, cancel_check=cancel_check)
+                   approved=approved, override_idle=override_idle,
+                   cancel_check=cancel_check)
         outcome.steps.append(step)
 
         if step.risk == safety.REFUSED:
             outcome.reason = "refused: " + step.detail
+            return outcome
+        if step.blocked_on_owner:
+            # Not a failure of the plan -- a deliberate refusal to fight the
+            # owner for the mouse. Distinct so the caller can offer to retry.
+            outcome.blocked_on_owner = True
+            outcome.reason = step.detail
+            return outcome
+        if step.focus_moved:
+            outcome.reason = step.detail
             return outcome
         if step.risk == safety.APPROVAL and not step.ok:
             outcome.needs_approval = step.detail
