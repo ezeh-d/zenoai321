@@ -178,6 +178,45 @@ def test_a_failing_provider_never_reports_a_fake_answer() -> None:
         model_router.reset()
 
 
+def test_authentication_failure_stays_quarantined_until_explicit_recovery() -> None:
+    from reyes_agent import model_router
+
+    model_router.reset()
+    try:
+        model_router.record("xai", 0.1, ok=False, error="Incorrect API key provided")
+        assert model_router.breaker_state("xai") == model_router.OPEN
+        stats = model_router._stats["xai"]
+        assert stats.permanent_failure is True
+        stats.opened_at -= model_router._BREAKER_MAX_COOLDOWN_S * 2
+        assert model_router.breaker_state("xai") == model_router.OPEN
+        measured = model_router.explain()["measured"]["xai"]
+        assert measured["healthy"] is False
+        assert measured["permanent_failure"] is True
+
+        # A successful explicit probe/reset path may close it after the owner
+        # has changed configuration; time alone may not.
+        model_router.record("xai", 0.1, ok=True)
+        assert model_router.breaker_state("xai") == model_router.CLOSED
+    finally:
+        model_router.reset()
+
+
+def test_local_ollama_fallback_is_explicitly_opt_in() -> None:
+    from reyes_agent import config, model_router
+
+    original_enabled = config.OLLAMA_ENABLED
+    original_provider = config.MODEL_PROVIDER
+    try:
+        config.OLLAMA_ENABLED = False
+        config.MODEL_PROVIDER = "gemini"
+        assert model_router.available_providers()["ollama"] is False
+        config.OLLAMA_ENABLED = True
+        assert model_router.available_providers()["ollama"] is True
+    finally:
+        config.OLLAMA_ENABLED = original_enabled
+        config.MODEL_PROVIDER = original_provider
+
+
 # --- instinct, advice, wisdom --------------------------------------------
 
 def test_instinct_stays_quiet_during_ordinary_conversation() -> None:

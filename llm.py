@@ -62,12 +62,30 @@ def _build_chain() -> list[str]:
     if settings.openai_api_key:
         add("gpt-4o-mini")
 
-    # 4) always finish with local Ollama (free, offline)
-    add(settings.ollama_model)
+    # 4) optionally finish with local Ollama (free, offline). Older installations
+    # stored the raw Ollama tag ("llama3.2:3b"); LiteLLM requires the provider
+    # prefix or it rejects the request before contacting the local daemon.
+    ollama_model = (settings.ollama_model or "").strip()
+    if ollama_model and not ollama_model.lower().startswith("ollama/"):
+        ollama_model = f"ollama/{ollama_model}"
+    primary_is_ollama = str(settings.llm_model or "").lower().startswith("ollama/")
+    if settings.ollama_enabled or primary_is_ollama:
+        add(ollama_model)
 
     # keep only models we can actually authenticate (or that need no key)
     usable = [m for m in chain if _provider_key(m)]
     return usable
+
+
+def _litellm_ollama_base_url() -> str:
+    """Return the native Ollama base expected by LiteLLM.
+
+    The modern ZENO gateway uses Ollama's OpenAI-compatible ``/v1`` API, but
+    LiteLLM's ``ollama/`` provider calls the native endpoints itself. Both
+    gateways share one .env, so accept either spelling and adapt here.
+    """
+    base = (settings.ollama_base_url or "http://localhost:11434").rstrip("/")
+    return base[:-3] if base.lower().endswith("/v1") else base
 
 
 class LLM:
@@ -84,7 +102,7 @@ class LLM:
         for model in self.chain:
             kwargs = dict(model=model, messages=messages, temperature=0.4)
             if model.lower().startswith("ollama/"):
-                kwargs["api_base"] = settings.ollama_base_url
+                kwargs["api_base"] = _litellm_ollama_base_url()
             try:
                 resp = completion(**kwargs)
                 text = (resp.choices[0].message.content or "").strip()

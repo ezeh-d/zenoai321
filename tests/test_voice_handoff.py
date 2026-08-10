@@ -44,6 +44,35 @@ def test_vad_retries_only_the_unsupported_optional_constraint() -> None:
     assert "NotAllowedError" not in vad  # Errors stay observable to microphone.py.
 
 
+def test_plain_browser_cannot_compete_for_the_desktop_microphone() -> None:
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+    from reyes_agent import web
+
+    mini = (ROOT / "reyes_agent" / "static" / "mini.html").read_text(encoding="utf-8")
+    dashboard = (ROOT / "reyes_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    desktop = (ROOT / "reyes_agent" / "desktop_app.py").read_text(encoding="utf-8")
+    assert "ZENO_DESKTOP_MIC_TOKEN" in desktop
+    assert "X-Zeno-Mic-Token" in mini and "X-Zeno-Mic-Token" in dashboard
+    assert "listening stays with the native Mini Orb" in dashboard
+
+    original = web._DESKTOP_MIC_TOKEN
+    web._DESKTOP_MIC_TOKEN = "native-only"
+    try:
+        try:
+            web._require_desktop_mic_token(SimpleNamespace(headers={}))
+        except HTTPException as exc:
+            assert exc.status_code == 403
+        else:
+            raise AssertionError("an unowned browser microphone must be refused")
+        web._require_desktop_mic_token(
+            SimpleNamespace(headers={"X-Zeno-Mic-Token": "native-only"})
+        )
+    finally:
+        web._DESKTOP_MIC_TOKEN = original
+
+
 def _run_all() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     failed = 0

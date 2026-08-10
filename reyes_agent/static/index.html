@@ -1074,7 +1074,7 @@ const orb = initOrb(document.getElementById("orb-canvas"));
 // without driving a whole turn (same pattern as window.agentRing).
 window.zenoOrb = orb;
 
-// --- Agent Ring: 13 specialists orbiting ZENO, real activation state ----
+// --- Agent Ring: registered specialists orbiting ZENO, real activation state ----
 // Color/icon per the user's own spec. "Role" and every dashboard field
 // are derived from real data (delegate's own description text, the
 // actual task string sent, the actual result that came back) -- no
@@ -1093,6 +1093,7 @@ const AGENTS = {
   kate:        { name: 'KATE',   color: '#6366f1', icon: '\u{1F393}', role: 'Academic & Scientific Intelligence' },
   ultron:      { name: 'ULTRON', color: '#b91c1c', icon: '⬢',    role: 'Strategic / Critical Review' },
   atlas:       { name: 'ATLAS',  color: '#3b5a8a', icon: '\u{1F9ED}', role: 'Mission Control' },
+  jarvis:      { name: 'JARVIS', color: '#52e7ff', icon: '\u25c8', role: 'Systems Integration Intelligence' },
   helios:      { name: 'HELIOS', color: '#10b981', icon: '❤️', role: 'Wellbeing Intelligence' },
 };
 const AGENT_ORDER = Object.keys(AGENTS);
@@ -1599,6 +1600,15 @@ function cmdkAsk(promptText) {
   const q = window.prompt(promptText);
   if (q && q.trim()) runTurn(q.trim());
 }
+let jarvisHudModule = null;
+async function openJarvisHud() {
+  try {
+    jarvisHudModule = jarvisHudModule || await import('/static/jarvis_hud.js?v=1');
+    await jarvisHudModule.openJarvisHud({ runCommand: runTurn });
+  } catch (error) {
+    addMessage('error', 'JARVIS Systems HUD could not open: ' + (error?.message || error));
+  }
+}
 const COMMANDS = [
   { label: 'Toggle Focus Mode', hint: 'Dim visuals, show only active agents', run: () => setFocusMode(!focusMode) },
   { label: 'Toggle Mini Mode', hint: 'Shrink to the corner orb', run: () => setMini(!document.body.classList.contains('mini')) },
@@ -1608,6 +1618,7 @@ const COMMANDS = [
   { label: 'Show what ZENO just did', hint: 'Explainability panel', run: () => { explainPanel.classList.add('open'); renderExplainPanel(); } },
   { label: 'Open Timeline', hint: 'Everything ZENO has done, from the event record', run: () => openTimeline() },
   { label: 'Situation Room', hint: 'Everything at once: agents, system, missions, model, events', run: () => openSituation() },
+  { label: 'JARVIS Systems HUD', hint: 'On-demand cinematic command view backed by live runtime evidence', run: () => openJarvisHud() },
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map — notes, tags, real links', run: () => openGalaxy() },
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map of real links and tags', run: () => openGalaxy() },
   { label: 'Evolution report', hint: 'What ZENO measured about its own performance', run: () => runTurn('Run an evolution report on yourself.') },
@@ -2677,7 +2688,10 @@ async function transcribeVADClip(blob, speakerBlob = null) {
     const form = new FormData();
     form.append('audio', blob, 'zeno-command.webm');
     if (speakerBlob && speakerBlob.size) form.append('speaker_audio', speakerBlob, 'zeno-speaker.wav');
-    const response = await fetch('/api/transcribe', { method: 'POST', body: form, signal: controller.signal });
+    const token = await desktopMicToken();
+    const headers = {};
+    if (token) headers['X-Zeno-Mic-Token'] = token;
+    const response = await fetch('/api/transcribe', { method: 'POST', headers, body: form, signal: controller.signal });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
       // A failed provider stays isolated from the listener and never starts
@@ -2792,11 +2806,20 @@ function microphoneAvailable() {
 const MIC_DEVICE_STORAGE = 'zeno.selectedMicrophoneId';
 let micRecoveryAttempts = 0, micRecoveryTimer = null, micMeterRaf = 0, micMeterValue = 0;
 let micAudioProved = false, micLastRuntimeReport = 0;
+let desktopMicTokenPromise = null;
 // One in-flight WebView2 request owns each dashboard capture attempt. A
 // generation makes a late getUserMedia resolution harmless after Stop.
 let micStartPromise = null, micSessionGeneration = 0, micWanted = false;
 
 function selectedMicrophoneId() { return localStorage.getItem(MIC_DEVICE_STORAGE) || ''; }
+function desktopMicToken() {
+  if (desktopMicTokenPromise) return desktopMicTokenPromise;
+  const nativeApi = window.pywebview && window.pywebview.api;
+  desktopMicTokenPromise = nativeApi && nativeApi.microphone_token
+    ? Promise.resolve(nativeApi.microphone_token()).then(value => String(value || ''), () => '')
+    : Promise.resolve('');
+  return desktopMicTokenPromise;
+}
 function compactMicStatus(status, text, actionRequired = false) {
   const live = document.getElementById('mic-live-status');
   if (live) live.textContent = status + (text ? ' — ' + text : '');
@@ -2808,10 +2831,13 @@ function compactMicStatus(status, text, actionRequired = false) {
   micIndicator.setAttribute('aria-label', active ? 'Stop listening' : 'Start listening');
   micIndicator.title = active ? 'Stop listening' : (actionRequired ? 'Enable microphone' : 'Start listening');
 }
-function reportMicRuntime(status, detail = '', audioReceived = false) {
+async function reportMicRuntime(status, detail = '', audioReceived = false) {
   const body = { status, detail, source: 'dashboard', audio_received: audioReceived,
     device_id: voiceVAD.capabilities().device_id || selectedMicrophoneId() };
-  return fetch('/api/microphone/runtime', { method: 'POST', headers: {'Content-Type':'application/json'},
+  const token = await desktopMicToken();
+  const headers = {'Content-Type':'application/json'};
+  if (token) headers['X-Zeno-Mic-Token'] = token;
+  return fetch('/api/microphone/runtime', { method: 'POST', headers,
     body: JSON.stringify(body) }).catch(() => null);
 }
 async function browserPermissionState() {
@@ -2877,6 +2903,11 @@ function startAmbientListening(options = {}) {
 }
 
 async function openAmbientListening(generation, options = {}) {
+  if (!(window.pywebview && window.pywebview.api)) {
+    compactMicStatus('MIC OFF', 'listening stays with the native Mini Orb');
+    micStatusEl.textContent = 'Always-on listening is available in the ZENO desktop app.';
+    return false;
+  }
   if (!microphoneAvailable()) {
     micStatusEl.textContent = 'This browser cannot capture microphone audio for always-on voice.';
     compactMicStatus('MIC ERROR', 'browser capture unavailable', true);
@@ -2968,6 +2999,12 @@ micIndicator.addEventListener('click', () => {
 // Auto-start the moment permission already exists (every visit after the
 // first) -- no click, no button, matches "open the browser and just talk."
 (async function initVoice() {
+  if (!(window.pywebview && window.pywebview.api)) {
+    window.addEventListener('pywebviewready', () => { void startAmbientListening(); }, { once: true });
+    micStatusEl.textContent = 'Always-on listening stays with the native ZENO Mini Orb.';
+    compactMicStatus('MIC OFF', 'native Mini Orb owns listening');
+    return;
+  }
   if (!microphoneAvailable()) {
     micStatusEl.textContent = 'This browser cannot capture microphone audio for always-on voice.';
     compactMicStatus('MIC ERROR', 'browser capture unavailable', true);

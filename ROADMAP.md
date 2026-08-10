@@ -6,7 +6,7 @@ Status vocabulary, used strictly:
 - **PARTIAL** — a real, working subset exists; the gap is named explicitly.
 - **NOT BUILT** — no code. Not stubbed, not faked, not simulated.
 
-Last updated: 2026-08-04. See `AGENT.md` for the dated engineering log
+Last updated: 2026-08-10. See `AGENT.md` for the dated engineering log
 behind each entry.
 
 ---
@@ -30,7 +30,7 @@ one and routing is close to a no-op until more keys exist. The router says
 that in its own `note` field rather than implying richer behaviour.
 
 ## Phase 3 — Multi-Agent System · DONE
-13 specialists with scoped toolsets, real delegation, and genuine parallel
+14 specialists with scoped toolsets, real delegation, and genuine parallel
 execution. The long-standing "multi-agent doesn't work" bug was root-caused
 on 2026-08-04 to Gemini sending `index=None` on tool-call deltas, which
 merged parallel calls into one and corrupted their arguments — fixed in
@@ -68,8 +68,8 @@ App control, window/media/volume, clipboard, keyboard/mouse, file
 operations, shell commands. Governed by the Permission Engine.
 
 ## Phase 9 — Voice System · DONE (one browser-reported limit)
-**Done:** ElevenLabs TTS; Voice Manager with 13 per-agent profiles; **all
-13 agents now have their own distinct voice** (owner supplied 12 ids
+**Done:** ElevenLabs TTS; Voice Manager with 14 per-agent profiles; **the
+original 13 agents have their own distinct voice** (owner supplied 12 ids
 2026-08-04 — verified genuinely distinct, not just configured: same
 sentence as ULTRON vs APEX produced different byte lengths and MD5s);
 disk cache (measured 3.36s → 0.19s on repeats); speech queue; diagnostics;
@@ -103,11 +103,12 @@ constraint. Account-side id validation needs an ElevenLabs key with
 `voices_read`; this install's key lacks that scope, which affects
 validation only, not speech.
 
-## Phase 10 — Vision System · PARTIAL
-**Done:** screenshots, webcam capture, screen understanding, OpenCV
-template matching, hand-gesture/mouse control (opt-in — it was the cause
-of a real performance regression).
-**Gap:** no OCR (`pytesseract` not installed).
+## Phase 10 — Vision System · DONE (with named recognition limits)
+Screenshots, webcam capture, screen understanding, OpenCV template matching,
+hand-gesture/mouse control (opt-in — it was the cause of a real performance
+regression), and OCR through the installed Windows OCR engine are integrated.
+The older `pytesseract` gap is obsolete; Phase 10b records the actual document
+format limits and Phase 21 records the temporal/person-recognition limits.
 
 ## Phase 11 — Event Bus · DONE
 `event_bus.py` — typed, durable, queryable, bounded fan-out, prefix and
@@ -159,15 +160,15 @@ but only real lifecycle/audio activity animates a face. CSS animation is
 gated to the active state and is paused while hidden; terminal dashboard
 cards fade out and their DOM/timers are released.
 
-## Phase 14 — Executive Dashboard · PARTIAL
+## Phase 14 — Executive Dashboard · DONE
 **Done:** **Agent Monitor** (live worker state, heartbeat age, queue
 depth, tasks done/failed, success rate, per-agent restart button; polls
 only while open), Timeline, missions panel, approvals, notices, system
 health, permission status, mini-orb hover card, **Executive Meeting**
 (every specialist reports its REAL runtime metrics aloud in its own
 voice, then ZENO summarises).
-**Gap:** no single unified "home screen"/Situation Room composing them
-into one view.
+The unified Situation Room composing these runtime views is implemented in
+Phase 19; this older gap is therefore closed rather than counted twice.
 
 ## Phase 15 — Dream Mode · DONE
 `dream_mode.py` — five idle passes: knowledge upkeep (reindex + orphan
@@ -281,7 +282,25 @@ actual remaining deadline rather than rounding short deadlines up to a 50 ms
 poll interval. External provider limits remain correctly reported rather than
 masked: the current Gemini/OpenAI accounts were quota/credit limited during
 an offline test path, and provider configuration/credit changes require the
-owner rather than a source-code workaround.
+owner rather than a source-code workaround. The installed Ollama model is now
+an explicit emergency fallback on this machine: both the modern OpenAI-
+compatible gateway and the legacy LiteLLM seam normalize their different
+model/base-URL conventions and returned a real `LOCAL_READY` response.
+
+**Peak stability validation (2026-08-07):** each specialist queue is capped at
+32 retained tasks (configurable from 1–256), rejects overflow visibly, and
+preserves deduplication, cancellation and restart semantics. Provider circuit
+breakers now quarantine an authentication-rejected credential until an
+explicit reset/restart instead of probing the same bad key every cooldown.
+The router reports configured and operational state separately. A native-only
+microphone capability prevents an old localhost Chrome tab from becoming a
+second always-on listener or overwriting Mini Orb capture evidence; typed web
+access remains available. Measured cold startup reached READY in 2.73 seconds.
+A five-second live process-tree sample before these final guards measured
+4.93% total ZENO CPU, 392.2 MiB aggregate working set and every host/WebView
+responding while the machine itself was at 100% CPU and about 92% RAM. The
+complete 36-file standalone regression suite passed before the ownership guard;
+focused voice, VAD, kernel, router and queue suites passed after it.
 
 **Creator, Mastery and Foodie Intelligence:** `creator_mode.py` and
 `foodie_intelligence.py` extend the existing conversation engine, Fast/Deep
@@ -553,7 +572,7 @@ Investment Engine stops at a validated order ticket by design.
 
 ---
 
-## Microphone diagnosis and recovery — IMPLEMENTED, live WebView2 validation pending restart
+## Microphone diagnosis and recovery — IMPLEMENTED AND LIVE-VALIDATED
 
 The earlier large “blocked in Windows or this ZENO profile” banner was an
 incorrect frontend collapse of `NotAllowedError`; it did not prove that
@@ -580,11 +599,13 @@ and remains the sole listener when the dashboard is hidden. Both retain the
 one processed VAD stream and make at most two safe recovery attempts after a
 track ends.
 
-**Validation limit:** offline diagnostic/API/VAD regressions pass. The running
-desktop process predates this change, therefore an actual WebView2
-`getUserMedia` grant, live RMS and end-to-end wake/STT response must be
-observed after ZENO is restarted; the UI now records that evidence instead of
-claiming success from registry settings alone.
+**Live validation (2026-08-07):** after restart, the persistent WebView2
+profile reported `MICROPHONE_READY` with `audio_received=true` from both the
+Mini Orb handoff and the dashboard owner. Warm Deepgram samples recognized
+"Zeno open Chrome" in 0.54–2.01 seconds (1.40 seconds average across three),
+and a real app conversation returned successfully. Energy VAD still has the
+named TV/other-speaker limitation in Phase 9; that is not misreported as a
+permission failure.
 
 ---
 
@@ -710,3 +731,58 @@ real result.
 routing, original/evidence-based design policy, local persistent/adaptive
 learning progress, generic learning paths, lazy tool registration, ZEAL scope,
 and that design/learning remain prompt policy on the existing provider turn.
+
+---
+
+## JARVIS systems integration and situational intelligence -- DONE
+
+JARVIS is the fourteenth registered ZENO specialist, not a second executive
+brain or a permanently running renderer. It starts only when ZENO delegates
+real work, uses the existing bounded specialist queue, permission engine,
+cancellation path, Event Bus and serialized Voice Manager, and reports back to
+ZENO. Its three bounded workers are TELEMETRY (measured runtime/context),
+CONDUIT (mission state) and FLIGHTDECK (explicit owner-requested interface
+operations). All worker tools remain subsets of JARVIS's own scope. The voice
+profile uses ZENO's configured voice unless `ELEVENLABS_VOICE_JARVIS` is set to
+an original owner-configured voice; no film performance or voice is copied.
+
+Claude's `awareness.py` and `anticipation.py` are integrated into the same
+brain as cached prompt context and into JARVIS's audit tools. They add no
+sensor, thread, poller or scheduler. Awareness fuses existing foreground-app,
+idle, task, battery and local-calendar evidence; anticipation learns only from
+the newest bounded executable-name samples and never reads window titles.
+Predictions below the evidence threshold remain absent. Two integration bugs
+were corrected before acceptance: the calendar query now uses the real
+`due_at` column, and the learner keeps the newest 20,000 records instead of the
+oldest records forever.
+
+The **JARVIS Systems HUD** is a lazy command-palette view backed by
+`/api/situation` and the existing Event Bus. It displays measured runtime,
+mission, provider, Event Bus, situational and learned-pattern evidence. It does
+not claim fictional hardware. Opening it creates one EventSource and one
+two-second measurement timer; closing it closes the source, clears the timer
+and removes the DOM. It uses CSS only: no WebGL, canvas, particle loop or
+`requestAnimationFrame`. Desktop and 390x844 layouts were rendered and checked
+with zero horizontal overflow; closing left zero HUD elements.
+
+**Measured live (2026-08-10):** staged startup reached READY in 2.61 seconds.
+A real Gemini turn delegated to JARVIS, called measured system health, returned
+CPU/RAM evidence in 47.57 seconds under severe machine pressure, published the
+full waiting/thinking/working/success lifecycle, and left the worker healthy
+with an empty queue. The post-restart situation endpoint returned 14 agents,
+2,889 real activity samples and the new 16.9 KB HUD module. A cold standalone
+awareness fusion measured 744.59 ms and anticipation learning 35.15 ms on a
+90% RAM machine; both run on a managed background turn, not the GUI thread,
+and their combined cached path measured 0.019 ms.
+
+**Verification:** all 39 standalone regression files passed in 159.5 seconds;
+Python compilation, JavaScript syntax and `git diff --check` passed. This
+includes 16 awareness honesty tests, 5 awareness/JARVIS integration tests, 6
+HUD/specialist tests, all 14 specialist operational checks and all 77 bounded
+worker-team checks.
+
+**Honest limits:** this is an original ZENO armored-systems interface, not
+Marvel artwork, dialogue, hardware or an impersonated voice. JARVIS remains
+OFFLINE until actually delegated (by design). Its first cold context fusion can
+add under one second to a background AI turn on this pressured machine; it
+does not block rendering and subsequent cached reads are effectively free.

@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Offline fallback (requires a running local Ollama server)
     ollama_model: str = "ollama/llama3"
     ollama_base_url: str = "http://localhost:11434"
+    # Opt in only after the daemon and model are installed; otherwise a cloud
+    # outage must not become a second local connection timeout.
+    ollama_enabled: bool = False
 
     # --- Audio output ---
     voice_rate: int = 170
@@ -123,6 +126,7 @@ LLM_MODEL = settings.llm_model
 MODEL = settings.ollama_model.removeprefix("ollama/")
 OLLAMA_MODEL = settings.ollama_model
 OLLAMA_BASE_URL = settings.ollama_base_url
+OLLAMA_ENABLED = settings.ollama_enabled
 
 VOICE_RATE = settings.voice_rate
 WAKE_WORD = settings.wake_word

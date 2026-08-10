@@ -504,6 +504,25 @@ _team(
        {"run_command", "read_file", "list_project_files"}),
 )
 
+_team(
+    "jarvis",
+    _w("telemetry", "jarvis", "Runtime telemetry",
+       "You are TELEMETRY, JARVIS's measurement worker. Inspect real runtime and machine health, distinguish "
+       "measured facts from unavailable sensors, and return the smallest useful status report. Never invent a "
+       "percentage, device state or diagnosis.",
+       {"system_health", "current_situation", "current_situation_report", "learned_patterns",
+        "list_processes", "current_activity"}),
+    _w("conduit", "jarvis", "Mission systems liaison",
+       "You are CONDUIT, JARVIS's mission liaison. Reconcile the current ZENO situation with real mission records, "
+       "identify the next concrete step and name anything blocked. You report status; you do not fabricate progress.",
+       {"current_situation", "list_missions", "get_mission"}),
+    _w("flightdeck", "jarvis", "Owner interface operations",
+       "You are FLIGHTDECK, JARVIS's interface worker. Carry out only the explicit owner-requested app, media or "
+       "browser operation through the available tools. Respect every normal confirmation boundary and report the "
+       "actual tool result rather than assuming the screen changed.",
+       {"open_app", "media_control", "set_volume", "browser_open", "browser_read", "take_screenshot"}),
+)
+
 
 def teams() -> dict[str, list[Worker]]:
     return _TEAMS

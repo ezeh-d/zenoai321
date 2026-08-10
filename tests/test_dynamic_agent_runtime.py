@@ -92,5 +92,24 @@ def _run_all() -> int:
     return 1 if failed else 0
 
 
+def test_specialist_queue_rejects_overflow_without_growing() -> None:
+    original_capacity = agent_runtime.config.AGENT_QUEUE_CAPACITY
+    agent_runtime.config.AGENT_QUEUE_CAPACITY = 1
+    try:
+        worker = agent_runtime.AgentWorker("bounded-test", "test")
+        accepted = worker.submit_task("first", lambda: "first")
+        rejected = worker.submit_task("second", lambda: "second")
+
+        assert worker.queue.qsize() == 1
+        assert not accepted.done.is_set()
+        assert rejected.done.is_set()
+        assert "queue is full" in rejected.wait(0)
+        snapshot = worker.snapshot()
+        assert snapshot["tasks_rejected"] == 1
+        assert snapshot["queue_capacity"] == 1
+    finally:
+        agent_runtime.config.AGENT_QUEUE_CAPACITY = original_capacity
+
+
 if __name__ == "__main__":
     raise SystemExit(_run_all())

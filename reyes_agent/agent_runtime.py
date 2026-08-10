@@ -41,6 +41,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from reyes_agent import config
+
 # Lifecycle states (spec's list, minus ones we cannot truthfully observe).
 OFFLINE = "offline"
 STARTING = "starting"
@@ -108,6 +110,7 @@ class AgentMetrics:
     tasks_completed: int = 0
     tasks_failed: int = 0
     tasks_cancelled: int = 0
+    tasks_rejected: int = 0
     total_duration: float = 0.0
     restarts: int = 0
     last_activity: float = 0.0
@@ -135,7 +138,9 @@ class AgentWorker:
     def __init__(self, agent_id: str, role: str = "") -> None:
         self.agent_id = agent_id
         self.role = role
-        self.queue: queue.Queue[AgentTask | None] = queue.Queue()
+        self.queue: queue.Queue[AgentTask | None] = queue.Queue(
+            maxsize=config.AGENT_QUEUE_CAPACITY
+        )
         self.state = OFFLINE
         self.heartbeat = 0.0
         self.started_at = 0.0
@@ -164,7 +169,13 @@ class AgentWorker:
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
-        self.queue.put(None)  # unblock the get()
+        try:
+            self.queue.put_nowait(None)  # unblock the get() when capacity exists
+        except queue.Full:
+            # A full queue means the worker is already runnable. The stop
+            # event makes it exit after the active item; shutdown then cancels
+            # the bounded pending remainder.
+            pass
         self.state = OFFLINE
 
     def cancel_pending(self, reason: str = "ZENO is shutting down") -> int:
@@ -346,7 +357,23 @@ class AgentWorker:
                 fn=fn, dedupe_key=key,
             )
             self._pending_by_key[key] = task
-            self.queue.put(task)
+            try:
+                self.queue.put_nowait(task)
+            except queue.Full:
+                self._pending_by_key.pop(key, None)
+                task.error = f"agent queue is full (capacity {config.AGENT_QUEUE_CAPACITY})"
+                task.result = f"Error: {task.error}. Try again after current work finishes."
+                task.done.set()
+                self.metrics.tasks_rejected += 1
+                _publish("agent.task_rejected", {
+                    "agent": self.agent_id,
+                    "task_id": task.id,
+                    "task": description[:200],
+                    "reason": task.error,
+                    "visual_state": "error",
+                    "emotion": "concerned",
+                })
+                return task
             _publish("agent.task_queued", {
                 "agent": self.agent_id,
                 "task_id": task.id,
@@ -371,6 +398,8 @@ class AgentWorker:
             "tasks_completed": self.metrics.tasks_completed,
             "tasks_failed": self.metrics.tasks_failed,
             "tasks_cancelled": self.metrics.tasks_cancelled,
+            "tasks_rejected": self.metrics.tasks_rejected,
+            "queue_capacity": config.AGENT_QUEUE_CAPACITY,
             "success_rate": round(self.metrics.success_rate, 1),
             "avg_duration_s": round(self.metrics.avg_duration, 2),
             "restarts": self.metrics.restarts,
@@ -418,6 +447,7 @@ AGENT_ROLES: dict[str, str] = {
     "oracle": "Chief Analytics Officer",
     "apex": "Gaming Director",
     "atlas": "Mission Control",
+    "jarvis": "Systems Integration Director",
 }
 
 _workers: dict[str, AgentWorker] = {}
@@ -522,7 +552,10 @@ def restart(agent_id: str, reason: str = "manual") -> str:
         if old_thread is not None and old_thread.is_alive():
             w._stop.set()
             w._wake.set()
-            w.queue.put(None)
+            try:
+                w.queue.put_nowait(None)
+            except queue.Full:
+                pass
             if old_thread is not threading.current_thread():
                 old_thread.join(timeout=2.0)
         if old_thread is not None and old_thread.is_alive():

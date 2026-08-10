@@ -16,6 +16,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
@@ -29,6 +30,10 @@ from reyes_agent import config
 
 _PORT = 8765
 _URL = f"http://127.0.0.1:{_PORT}"
+_DESKTOP_MIC_TOKEN = secrets.token_urlsafe(32)
+# Inherited only by the managed backend child. Plain Chrome tabs can still
+# use typed local UI, but cannot become a second always-on microphone owner.
+os.environ["ZENO_DESKTOP_MIC_TOKEN"] = _DESKTOP_MIC_TOKEN
 _DASHBOARD_URL = _URL + ("?audit=1" if os.environ.get("ZENO_PERFORMANCE_AUDIT") == "1" else "")
 # A machine-local, stable profile: WebView2 stores origin permissions here.
 # Never clean, rotate or place this below a temporary workspace directory.
@@ -408,6 +413,10 @@ class _DesktopApi:
         with self._window_lock:
             self._mini_window = window
             self._window = window
+
+    def microphone_token(self) -> str:
+        """Capability token for the two native WebView microphone surfaces."""
+        return _DESKTOP_MIC_TOKEN
 
     def _bridge_start(self, name: str) -> None:
         with self._bridge_lock:

@@ -140,12 +140,21 @@ WEBSITE_WORKSPACE_PATH = Path(_website_workspace_raw).expanduser() if _website_w
 
 # Local/offline fallback -- no key needed, just a running `ollama serve`.
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b").strip()
+# The modern OpenAI-compatible client wants Ollama's raw model tag, while the
+# legacy LiteLLM gateway wants `ollama/` in front. Accept either spelling in
+# the shared .env and normalize at each gateway boundary.
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b").strip().removeprefix("ollama/")
+OLLAMA_ENABLED = _flag("OLLAMA_ENABLED")
 
 # Upper bound for one provider HTTP/streaming request. The managed runtime has
 # its own task deadline; this SDK-level timeout is what actually releases a
 # worker when a provider stops responding.
 AI_REQUEST_TIMEOUT_S = float(os.environ.get("AI_REQUEST_TIMEOUT_S", "90"))
+
+# Each specialist owns one serial queue. Keep bursts bounded just like the
+# central worker pool so a stalled provider cannot turn repeated delegation
+# into unbounded retained tasks and conversation closures.
+AGENT_QUEUE_CAPACITY = _bounded_env_int("AGENT_QUEUE_CAPACITY", 32, 1, 256)
 
 # The Obsidian vault REYES can read from. Defaults to the vault already
 # sitting inside this project.

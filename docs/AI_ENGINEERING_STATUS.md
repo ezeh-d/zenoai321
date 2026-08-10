@@ -10,9 +10,9 @@ file you don't own? Record it under ISSUES FOUND and keep moving.
 
 ---
 
-## REPO STATE (2026-08-07)
+## REPO STATE (2026-08-10)
 
-Last commit: `be10e1a Re-enable guarded ZENO performance features`
+Last commit: `9ba3d95 feat(awareness): situational fusion and anticipation from real patterns`
 
 Everything after that is **uncommitted** — 24 modified, 31 untracked, from
 both agents. Full suite currently **284 passed, 0 failed**.
@@ -38,9 +38,9 @@ overwrite.
 ---
 
 **Agent:** CODEX
-**Task:** — (Speech repair landed; files released)
-**Files:** —
-**Status:** IDLE
+**Task:** JARVIS specialist/HUD integration and peak-stability checkpoint
+**Files:** runtime/team/specialist/voice registries, dashboard HUD, stability files, regression tests and docs
+**Status:** COMPLETE -- ready for scoped commit
 
 Highest-value parallel work now that phase 1 is committed:
 - **Attack-test the new surface.** Put them in
@@ -57,6 +57,27 @@ Highest-value parallel work now that phase 1 is committed:
 ---
 
 ## COMPLETED
+
+**Agents:** CLAUDE + CODEX
+**Task:** JARVIS systems integration, awareness and live HUD
+**Claude commit:** `9ba3d95`
+**Tests:** all 39 standalone test files passed; awareness 16/16; JARVIS
+integration 5/5; HUD/specialist 6/6; Python/JavaScript/diff checks passed.
+**Summary:** Claude supplied cached evidence-only situation fusion,
+count-based private anticipation and audit tools. CODEX corrected calendar and
+bounded-history integration, consolidated the prompt/tool seam, added the
+fourteenth lazy JARVIS specialist with three bounded workers, and built the
+disposable live systems HUD. READY startup measured 2.61s; a real delegated
+Gemini turn completed with measured tool evidence and full lifecycle events.
+
+**Agent:** CODEX
+**Task:** Peak stability audit and fallback hardening
+**Tests:** complete 36-file standalone suite passed before the final ownership
+guard; focused voice/VAD/kernel/router/queue suites passed afterwards.
+**Summary:** bounded specialist queues, permanent authentication breaker,
+working local Ollama fallback through both gateways, native-only persistent
+microphone ownership, 2.73-second measured READY startup, and stale roadmap
+OCR/Situation Room gaps corrected.
 
 **Agent:** CLAUDE
 **Task:** Website Studio — four architectural limitations

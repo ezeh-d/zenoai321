@@ -75,6 +75,20 @@ except Exception:  # noqa: BLE001 -- remote access must never block ZENO booting
 # before applying voice-specific privacy restrictions/context.
 _VOICE_IDENTITY_SIGNING_MATERIAL = os.urandom(32)
 _VOICE_IDENTITY_MAX_AGE_S = 120
+_DESKTOP_MIC_TOKEN = os.environ.get("ZENO_DESKTOP_MIC_TOKEN", "").strip()
+
+
+def _require_desktop_mic_token(request: Request) -> None:
+    """Reject stale/plain-browser listeners when desktop ownership is active.
+
+    A standalone development server has no token and keeps the historical
+    local testing behavior. The managed desktop server always has one.
+    """
+    if not _DESKTOP_MIC_TOKEN:
+        return
+    supplied = request.headers.get("X-Zeno-Mic-Token", "")
+    if not supplied or not hmac.compare_digest(supplied, _DESKTOP_MIC_TOKEN):
+        raise HTTPException(403, "Microphone capture belongs to the native ZENO window.")
 
 
 def _issue_voice_identity(identity: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -990,7 +1004,8 @@ def _read_audio_upload(audio: UploadFile) -> bytes:
 
 
 @app.post("/api/transcribe")
-def transcribe_audio(audio: UploadFile = File(...), speaker_audio: UploadFile | None = File(None)) -> dict[str, Any]:
+def transcribe_audio(request: Request, audio: UploadFile = File(...),
+                     speaker_audio: UploadFile | None = File(None)) -> dict[str, Any]:
     """Transcribe one VAD-bounded browser clip without starting an agent turn.
 
     The desktop UI calls this from its single processed microphone stream.
@@ -998,6 +1013,7 @@ def transcribe_audio(audio: UploadFile = File(...), speaker_audio: UploadFile | 
     normal room noise and wake-word listening must never execute an agent
     request merely because a clip was captured.
     """
+    _require_desktop_mic_token(request)
     audio_bytes = _read_audio_upload(audio)
     # The WebM clip goes to STT; the small browser-generated PCM WAV copy is
     # used only locally for speaker comparison, then discarded in the worker.
@@ -1284,6 +1300,20 @@ def situation_room() -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         camps = []
 
+    try:
+        from reyes_agent import anticipation, awareness
+
+        observed = awareness.observe().as_dict()
+        predicted = anticipation.predict_app()
+        anticipated = {
+            "readiness": anticipation.readiness(),
+            "current_prediction": predicted.as_dict() if predicted else None,
+        }
+    except Exception as exc:  # noqa: BLE001 -- the dashboard names unavailable evidence
+        observed = None
+        anticipated = {"readiness": None, "current_prediction": None,
+                       "error": type(exc).__name__}
+
     return {
         "system": {
             "cpu": round(psutil.cpu_percent(interval=None)),
@@ -1312,6 +1342,8 @@ def situation_room() -> dict[str, Any]:
         "intelligence": {
             "situation": intelligence.situation(),
             "capabilities": intelligence.capabilities(),
+            "observed": observed,
+            "anticipation": anticipated,
         },
     }
 
@@ -1924,14 +1956,15 @@ def microphone_status() -> dict[str, Any]:
 
 
 @app.post("/api/microphone/runtime")
-def microphone_runtime(request: MicrophoneRuntimeRequest) -> dict[str, Any]:
+def microphone_runtime(payload: MicrophoneRuntimeRequest, request: Request) -> dict[str, Any]:
     """Accept compact browser capture lifecycle evidence from the current owner."""
     from reyes_agent import microphone
 
+    _require_desktop_mic_token(request)
     try:
         return microphone.report_runtime(
-            request.status, detail=request.detail, source=request.source,
-            audio_received=request.audio_received, device_id=request.device_id,
+            payload.status, detail=payload.detail, source=payload.source,
+            audio_received=payload.audio_received, device_id=payload.device_id,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

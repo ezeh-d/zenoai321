@@ -23,6 +23,7 @@ export const AGENT_IDENTITIES = {
   ultron:      { name: "ULTRON", color: "#b91c1c", role: "Critical Review" },
   atlas:       { name: "ATLAS", color: "#3b5a8a", role: "Mission Control" },
   helios:      { name: "HELIOS", color: "#10b981", role: "Wellbeing" },
+  jarvis:      { name: "JARVIS", color: "#52e7ff", role: "Systems Integration" },
 };
 
 const VISUAL_STATES = new Set(["waiting", "thinking", "working", "speaking", "success", "error"]);

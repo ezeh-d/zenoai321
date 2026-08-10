@@ -61,6 +61,22 @@ _BREAKER_THRESHOLD = 3
 _BREAKER_COOLDOWN_S = 60.0
 _BREAKER_MAX_COOLDOWN_S = 900.0
 
+# These failures cannot heal while the process keeps using the same loaded
+# credential. Treating them like a transient outage caused ZENO to retry a
+# known-invalid key every cooldown before falling back to a working provider.
+_AUTH_FAILURE_MARKERS = (
+    "incorrect api key",
+    "invalid api key",
+    "api key not valid",
+    "invalid_api_key",
+    "authentication failed",
+    "authentication_error",
+    "invalid authentication",
+    "unauthorized",
+    "status code: 401",
+    "error code: 401",
+)
+
 CLOSED, OPEN, HALF_OPEN = "CLOSED", "OPEN", "HALF_OPEN"
 
 
@@ -75,6 +91,7 @@ class ProviderStats:
     last_error: str = ""
     opened_at: float = 0.0
     cooldown: float = _BREAKER_COOLDOWN_S
+    permanent_failure: bool = False
 
     @property
     def avg_latency(self) -> float:
@@ -83,6 +100,8 @@ class ProviderStats:
     @property
     def breaker(self) -> str:
         """CLOSED / OPEN / HALF_OPEN, derived from real failures and time."""
+        if self.permanent_failure:
+            return OPEN
         if self.consecutive_failures < _BREAKER_THRESHOLD:
             return CLOSED
         if time.time() - self.opened_at >= self.cooldown:
@@ -106,9 +125,9 @@ def available_providers() -> dict[str, bool]:
         "anthropic": bool(config.ANTHROPIC_API_KEY),
         "xai": bool(config.XAI_API_KEY),
         "gemini": bool(config.GEMINI_API_KEY),
-        # Ollama needs no key; treated as available only if explicitly the
-        # configured provider, since we can't cheaply prove the daemon is up.
-        "ollama": config.MODEL_PROVIDER == "ollama",
+        # Ollama needs no key. It remains opt-in so machines without the
+        # daemon do not pay a connection timeout on every cloud outage.
+        "ollama": config.OLLAMA_ENABLED or config.MODEL_PROVIDER == "ollama",
     }
 
 
@@ -163,11 +182,20 @@ def record(provider: str, latency: float, ok: bool, error: str = "") -> None:
             st.consecutive_failures = 0
             st.opened_at = 0.0
             st.cooldown = _BREAKER_COOLDOWN_S      # recovery resets the backoff
+            st.permanent_failure = False
         else:
             st.failures += 1
             st.consecutive_failures += 1
             st.last_error = error[:200]
-            if st.consecutive_failures >= _BREAKER_THRESHOLD:
+            normalized_error = error.casefold()
+            if any(marker in normalized_error for marker in _AUTH_FAILURE_MARKERS):
+                # The key is read at process start. A timed half-open probe
+                # cannot repair it; reset/restart after changing configuration
+                # is the explicit recovery path.
+                st.permanent_failure = True
+                st.consecutive_failures = max(st.consecutive_failures, _BREAKER_THRESHOLD)
+                st.opened_at = time.time()
+            elif st.consecutive_failures >= _BREAKER_THRESHOLD:
                 # A failure while probing means it is still broken: back off
                 # further rather than retrying every cooldown forever.
                 st.cooldown = (min(st.cooldown * 2, _BREAKER_MAX_COOLDOWN_S)
@@ -248,11 +276,18 @@ def explain() -> dict:
                 "avg_latency_s": round(s.avg_latency, 2),
                 "last_latency_s": round(s.last_latency, 2),
                 "healthy": s.healthy,
+                "breaker": s.breaker,
+                "consecutive_failures": s.consecutive_failures,
+                "permanent_failure": s.permanent_failure,
                 "last_error": s.last_error,
                 "seconds_since_use": round(time.time() - s.last_used) if s.last_used else None,
             }
             for p, s in _stats.items()
         }
+    operational = {
+        provider: configured and stats.get(provider, {}).get("healthy", True)
+        for provider, configured in avail.items()
+    }
     return {
         "active_provider": config.MODEL_PROVIDER,
         "active_model": {
@@ -262,6 +297,7 @@ def explain() -> dict:
             "ollama": config.OLLAMA_MODEL,
         }.get(config.MODEL_PROVIDER, "unknown"),
         "available": avail,
+        "operational": operational,
         "configured_count": sum(1 for v in avail.values() if v),
         "routes": {k: route(k) for k in TASK_KINDS},
         "measured": stats,

@@ -251,6 +251,27 @@ _SPECIALISTS: dict[str, dict] = {
         ),
         "tools": {"current_activity", "daily_activity_summary", "write_note", "list_memories"},
     },
+    "jarvis": {
+        "description": (
+            "JARVIS -- Systems Integration Intelligence. Gives ZENO a concise, evidence-backed command view of "
+            "runtime health, missions and owner-requested computer operations."
+        ),
+        "prompt": (
+            "You are JARVIS, ZENO's systems-integration specialist. You are an original ZENO Council identity, "
+            "not an imitation of a film character and not a second executive brain. Report to ZENO with composed, "
+            "concise operational intelligence. Ground every system claim in tools you actually called; if a sensor "
+            "or status is unavailable, say unknown. Coordinate runtime health and mission context, and perform only "
+            "the computer or browser action Divine explicitly requested. The normal permission, confirmation, "
+            "cancellation and evidence rules always apply. Never claim a task succeeded until its tool returned "
+            "verifiable evidence, and never imply access to fictional suit hardware."
+        ),
+        "tools": {
+            "system_health", "current_situation", "list_processes", "current_activity",
+            "current_situation_report", "learned_patterns",
+            "list_missions", "get_mission", "open_app", "media_control", "set_volume",
+            "browser_open", "browser_read", "take_screenshot",
+        },
+    },
 }
 
 def _grant_team_tools() -> None:

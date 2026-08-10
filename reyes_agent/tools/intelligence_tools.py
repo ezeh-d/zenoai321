@@ -68,6 +68,21 @@ def undo_last_actions(count: int = 1) -> str:
 )
 def current_situation() -> str:
     state = intelligence.situation()
+    try:
+        from reyes_agent import anticipation, awareness
+
+        prediction = anticipation.predict_app()
+        state = {
+            **state,
+            "observed": awareness.observe().as_dict(),
+            "anticipation": {
+                "readiness": anticipation.readiness(),
+                "current_prediction": prediction.as_dict() if prediction else None,
+            },
+        }
+    except Exception as exc:  # noqa: BLE001 -- unavailable context is explicit
+        state = {**state, "observed": None, "anticipation": None,
+                 "context_status": f"unavailable: {type(exc).__name__}"}
     return json.dumps(state, default=str)
 
 

@@ -2935,3 +2935,77 @@ early-returns once settled, and the pre-existing 4-10s data polls.
 Verified post-restart: `typeof window.THREE === 'undefined'`, zero video
 elements, dev overlay off, dots confirmed using transform with no inline
 left/top, 13 dots present, zero console errors.
+
+## Peak stability and fallback hardening (2026-08-07)
+
+A live audit kept the running desktop app under real machine pressure instead
+of inferring health from unit tests. Cold startup reached Kernel READY in
+2.73 seconds. A five-second full process-tree sample measured 4.93% ZENO CPU,
+392.2 MiB aggregate working set and 194 threads across the desktop host,
+backend and WebView2 subprocesses; every process reported responsive. The
+machine itself was saturated at 100% CPU and about 92% RAM, so provider and
+UI timings under that sample are explicitly not presented as isolated-machine
+benchmarks.
+
+Three confirmed reliability gaps were closed. Specialist queues are now
+bounded (32 by default, hard configurable range 1–256) and return an explicit
+rejection rather than retaining unlimited closures while a provider stalls.
+Authentication-rejected providers stay quarantined until reset/restart rather
+than wasting time on a half-open probe that cannot repair a loaded bad key.
+The installed Ollama model is opt-in as a real last-resort provider; its raw
+model tag and `/v1` URL are normalized separately at the modern and legacy
+gateways. Live calls returned `LOCAL_READY` through both (48.58 seconds cold
+through LiteLLM, 14.70 seconds warm through the modern gateway).
+
+The microphone audit also found an old localhost Chrome dashboard still
+reporting itself as the owner after native Mini Orb startup. The managed
+desktop now gives its Mini Orb and lazy dashboard an ephemeral capability
+known only through the pywebview bridge. Runtime microphone evidence and VAD
+transcription require that capability when the managed backend is running, so
+a stale/plain browser tab cannot become a second persistent listener or send
+duplicate voice commands. Standalone development servers retain their old
+local test behavior when no desktop capability exists.
+
+## JARVIS systems specialist + live armored HUD (2026-08-10)
+
+Claude's final handoff produced a bounded situational-fusion module, a
+count-based anticipation module, two owner-auditable tools and 16 honesty
+tests (`9ba3d95`). CODEX reviewed and integrated that work instead of creating
+a second intelligence path. Two confirmed defects were fixed before the
+handoff landed: awareness queried `calendar_events.start_ts`, but the real
+schema stores `due_at`; anticipation selected the oldest bounded rows, which
+would eventually freeze its model in stale history, so it now selects the
+newest 20,000 rows and restores chronological order. Window titles never enter
+the learning query.
+
+JARVIS is registered through the existing `AGENT_ROLES` / `_SPECIALISTS`
+contracts as Systems Integration Director. It owns exactly three bounded
+workers (TELEMETRY, CONDUIT, FLIGHTDECK), uses existing tools and permissions,
+and is not instantiated until delegated. It receives a shared animated-face
+identity, Mini Orb/Council presence through existing lifecycle events, and one
+Voice Manager profile. Without an explicit `ELEVENLABS_VOICE_JARVIS`, that
+profile honestly falls back to ZENO's voice rather than inventing or copying a
+film voice.
+
+The dashboard command palette lazy-imports `static/jarvis_hud.js`. The module
+builds an original cyan/gold systems interface from real `/api/situation`
+evidence and `agent.*` events. It owns no runtime state. Its only active
+resources are one EventSource and one 2-second measurement timer while open;
+close releases both and removes the complete overlay. Animations are three
+slow CSS compositor effects, pause under reduced-motion/hidden state, and use
+no WebGL, canvas, particles or animation-frame loop.
+
+Live verification: rendered at a normal 1280px viewport and 390x844 with no
+horizontal overflow; accessible close control found exactly once; overlay DOM
+count returned to zero after close. A real Gemini request delegated to JARVIS
+and returned measured CPU 96% and RAM 8.2/8.4 GB in 47.57 seconds under severe
+machine pressure, with durable waiting/thinking/working/success events and a
+healthy empty queue afterward. After restart, boot READY took 2.61 seconds and
+the situation endpoint exposed 14 agents plus 2,889 real pattern samples.
+
+Complete verification: 39/39 standalone test files passed in 159.5 seconds,
+plus Python compilation, bundled-Node JavaScript syntax and `git diff --check`.
+The measured cold standalone context cost was 744.59 ms awareness + 35.15 ms
+anticipation under 90% RAM pressure; the combined cached path was 0.019 ms.
+This work stays on the managed AI/background path and never blocks the GUI
+message loop.

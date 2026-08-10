@@ -72,6 +72,7 @@ _PROFILE_SPEC: dict[str, tuple[float, float, str]] = {
     "nova":        (0.55, 0.75, "Vision -- attentive, descriptive"),
     "helios":      (0.60, 0.70, "Wellbeing -- calm, unhurried"),
     "apex":        (0.30, 0.70, "Gaming -- upbeat, high energy"),
+    "jarvis":      (0.72, 0.82, "Systems integration -- composed, precise, original"),
 }
 
 

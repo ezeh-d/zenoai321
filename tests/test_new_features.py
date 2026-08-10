@@ -17,16 +17,21 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+class _OfflineLLM:
+    def complete(self, _messages):
+        return ""
+
+
 def test_planner_offline_splits_goal():
     from core.planner import Planner
-    plan = Planner(llm=None).make_plan("research laptops and then write an email")
+    plan = Planner(llm=_OfflineLLM()).make_plan("research laptops and then write an email")
     assert len(plan.steps) == 2
     assert plan.steps[0].n == 1 and not plan.steps[0].done
 
 
 def test_planner_marks_and_completes():
     from core.planner import Planner
-    plan = Planner(llm=None).make_plan("do one thing")
+    plan = Planner(llm=_OfflineLLM()).make_plan("do one thing")
     assert plan.next_step() is not None
     for s in list(plan.steps):
         plan.mark(s.n, "ok")
@@ -88,6 +93,25 @@ def test_agent_routing():
     assert o.route("research the latest news") == "researcher"
     assert o.route("open chrome and click the button") == "operator"
     assert o.route("draft an email to the team") == "writer"
+
+
+def test_legacy_ollama_fallback_has_the_litellm_provider_prefix():
+    from config import settings
+    from llm import _build_chain, _litellm_ollama_base_url
+
+    original = settings.ollama_enabled
+    try:
+        settings.ollama_enabled = True
+        ollama_models = [model for model in _build_chain() if model.lower().startswith("ollama/")]
+        assert ollama_models, "the enabled local fallback must be present"
+        assert all(model.split("/", 1)[1] for model in ollama_models)
+        assert not _litellm_ollama_base_url().lower().endswith("/v1")
+
+        settings.ollama_enabled = False
+        if not str(settings.llm_model).lower().startswith("ollama/"):
+            assert not any(model.lower().startswith("ollama/") for model in _build_chain())
+    finally:
+        settings.ollama_enabled = original
 
 
 # ---- plain-python runner (no pytest required) ----------------------------
