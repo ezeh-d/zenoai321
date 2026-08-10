@@ -41,7 +41,8 @@ def browser_open(url: str) -> str:
         try:
             page = bc.get_page()
             page.goto(url, timeout=bc.action_timeout_ms(45_000), wait_until="domcontentloaded")
-            return f"Opened {page.url} -- '{page.title()}'."
+            return (f"Opened {page.url}; postcondition verified: the browser reports "
+                    f"title '{page.title()}'.")
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
     return _run("browser_open", action)
@@ -75,6 +76,11 @@ def browser_click(text: str = "", selector: str = "") -> str:
         try:
             page = bc.get_page()
             timeout = bc.action_timeout_ms(15_000)
+            before_url, before_title = page.url, page.title()
+            try:
+                before_text = page.inner_text("body", timeout=timeout)[:20_000]
+            except Exception:  # noqa: BLE001
+                before_text = ""
             if text.strip():
                 page.get_by_text(text.strip(), exact=False).first.click(timeout=timeout)
             elif selector.strip():
@@ -82,7 +88,16 @@ def browser_click(text: str = "", selector: str = "") -> str:
             else:
                 return "Give either text or selector."
             page.wait_for_load_state("domcontentloaded", timeout=timeout)
-            return f"Clicked '{text or selector}'. Now at {page.url}"
+            page.wait_for_timeout(250)
+            try:
+                after_text = page.inner_text("body", timeout=timeout)[:20_000]
+            except Exception:  # noqa: BLE001
+                after_text = before_text
+            if page.url != before_url or page.title() != before_title or after_text != before_text:
+                return (f"Clicked '{text or selector}'; postcondition verified: "
+                        f"the page state changed and is now at {page.url}.")
+            return (f"Click was sent to '{text or selector}', but no URL, title, or visible-text "
+                    "change was observed; the effect is unverified.")
         except Exception as exc:  # noqa: BLE001
             return _err(exc) + " -- try browser_vision_click if there is no stable text or selector."
     return _run("browser_click", action, timeout=20.0)
@@ -96,12 +111,20 @@ def browser_fill(value: str, selector: str = "", label: str = "") -> str:
             page = bc.get_page()
             timeout = bc.action_timeout_ms(15_000)
             if label.strip():
-                page.get_by_label(label.strip(), exact=False).first.fill(value, timeout=timeout)
-                return f"Filled '{label}'."
-            if selector.strip():
-                page.fill(selector, value, timeout=timeout)
-                return f"Filled '{selector}'."
-            return "Give either selector or label."
+                field = page.get_by_label(label.strip(), exact=False).first
+                field.fill(value, timeout=timeout)
+                observed = field.input_value(timeout=timeout)
+                target = label
+            elif selector.strip():
+                field = page.locator(selector).first
+                field.fill(value, timeout=timeout)
+                observed = field.input_value(timeout=timeout)
+                target = selector
+            else:
+                return "Give either selector or label."
+            if observed != value:
+                return f"Failed to verify field '{target}': the read-back value did not match."
+            return f"Filled '{target}'; postcondition verified by field value read-back."
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
     return _run("browser_fill", action, timeout=20.0)
@@ -134,7 +157,13 @@ def browser_scroll(direction: str, amount: int = 800) -> str:
     def action() -> str:
         try:
             page = bc.get_page()
+            before = float(page.evaluate("() => window.scrollY"))
+            maximum = float(page.evaluate(
+                "() => Math.max(0, document.documentElement.scrollHeight - window.innerHeight)"
+            ))
             direction_normalized = direction.strip().lower()
+            if direction_normalized not in {"down", "up", "bottom", "top"}:
+                return "Scroll direction must be down, up, bottom, or top."
             if direction_normalized == "bottom":
                 page.keyboard.press("End")
             elif direction_normalized == "top":
@@ -142,7 +171,17 @@ def browser_scroll(direction: str, amount: int = 800) -> str:
             else:
                 page.mouse.wheel(0, int(amount or 800) * (1 if direction_normalized == "down" else -1))
             page.wait_for_timeout(700)
-            return f"Scrolled {direction_normalized}."
+            after = float(page.evaluate("() => window.scrollY"))
+            reached_edge = (
+                direction_normalized == "top" and after <= 1
+            ) or (
+                direction_normalized == "bottom" and after >= max(0.0, maximum - 1)
+            )
+            if after == before and not reached_edge:
+                return f"Scroll input was sent {direction_normalized}, but position did not change."
+            evidence = "requested edge reached" if reached_edge else "position changed"
+            return (f"Scrolled {direction_normalized}; postcondition verified ({evidence}) by "
+                    f"scroll position {before:.0f} -> {after:.0f} of {maximum:.0f}.")
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
     return _run("browser_scroll", action, timeout=10.0)
@@ -159,8 +198,12 @@ def browser_screenshot(full_page: bool = False) -> str:
             out_dir = config.VAULT_PATH / "07-System" / "captures"
             out_dir.mkdir(parents=True, exist_ok=True)
             name = f"browser-{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
-            page.screenshot(path=str(out_dir / name), full_page=bool(full_page), timeout=bc.action_timeout_ms(30_000))
-            return f"Saved screenshot {name} (of {page.url})."
+            output = out_dir / name
+            page.screenshot(path=str(output), full_page=bool(full_page), timeout=bc.action_timeout_ms(30_000))
+            if not output.is_file() or output.stat().st_size < 100:
+                return f"Failed to verify browser screenshot {name}."
+            return (f"Saved screenshot {name} (of {page.url}); postcondition verified on disk "
+                    f"({output.stat().st_size} bytes).")
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
     return _run("browser_screenshot", action, timeout=35.0)
@@ -175,9 +218,23 @@ def browser_vision_click(template_path: str, threshold: float = 0.75) -> str:
             if point is None:
                 return "Vision match failed -- nothing on the page matched that image above the threshold."
             page = bc.get_page()
+            before_url, before_title = page.url, page.title()
+            try:
+                before_text = page.inner_text("body", timeout=bc.action_timeout_ms(15_000))[:20_000]
+            except Exception:  # noqa: BLE001
+                before_text = ""
             page.mouse.click(*point)
             page.wait_for_load_state("domcontentloaded", timeout=bc.action_timeout_ms(15_000))
-            return f"Vision-clicked at {point}. Now at {page.url}"
+            page.wait_for_timeout(250)
+            try:
+                after_text = page.inner_text("body", timeout=bc.action_timeout_ms(15_000))[:20_000]
+            except Exception:  # noqa: BLE001
+                after_text = before_text
+            if page.url != before_url or page.title() != before_title or after_text != before_text:
+                return (f"Vision-clicked at {point}; postcondition verified by a "
+                        f"visible page-state change at {page.url}.")
+            return (f"Vision click was sent at {point}, but no URL, title, or visible-text "
+                    "change was observed; the effect is unverified.")
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
     return _run("browser_vision_click", action, timeout=25.0)
@@ -188,5 +245,10 @@ def browser_vision_click(template_path: str, threshold: float = 0.75) -> str:
 def browser_close() -> str:
     if not bc.is_open():
         return "The browser wasn't open."
-    _run("browser_close", bc.close_browser, timeout=10.0)
-    return "Browser closed. Saved logins are kept for next time."
+    try:
+        _run("browser_close", bc.close_browser, timeout=10.0)
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+    if bc.is_open():
+        return "Browser close was requested, but the persistent context still reports open."
+    return "Browser closed; postcondition verified. Saved logins are kept for next time."

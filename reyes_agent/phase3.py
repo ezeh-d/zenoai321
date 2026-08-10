@@ -90,7 +90,16 @@ def status() -> dict[str, Any]:
             "heavy": spec.heavy, "detail": detail,
             "activated_at": activated.get(spec.key),
         })
-    return {"state": ONLINE, "polling": False, "enabled": enabled_count,
+    enabled_states = [row["state"] for row in rows if row["enabled"]]
+    if any(state == DEGRADED for state in enabled_states):
+        overall = DEGRADED
+    elif any(state == STANDBY for state in enabled_states):
+        overall = STANDBY
+    elif any(state == ONLINE for state in enabled_states):
+        overall = ONLINE
+    else:
+        overall = DISABLED
+    return {"state": overall, "polling": False, "enabled": enabled_count,
             "total": len(rows), "services": rows}
 
 

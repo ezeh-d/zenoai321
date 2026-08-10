@@ -44,7 +44,9 @@ from typing import Any
 
 from reyes_agent import config
 
-_DB_PATH = config.VAULT_PATH / "07-System" / "heartbeat" / "state.db"
+_DB_PATH = config.VAULT_PATH / "07-System" / "heartbeat" / (
+    "test-state.db" if config.ZENO_ENV == "test" else "state.db"
+)
 
 # Keep the most recent N events. At a few hundred events a day this is
 # months of history in a file measured in low single-digit megabytes.

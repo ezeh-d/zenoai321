@@ -150,6 +150,60 @@ def _ensure() -> None:
     _legacy_migrate()
 
 
+def health() -> dict[str, Any]:
+    """Probe the canonical store with a real write/read/delete cycle.
+
+    The probe is not a memory record and never reaches the index, graph, or
+    embeddings. It proves the current process can durably write and read the
+    configured store instead of reporting ONLINE because an import worked.
+    """
+    started = time.perf_counter()
+    probe = ROOT / ".healthcheck.json"
+    marker = uuid.uuid4().hex
+    unreadable = 0
+    try:
+        with _lock:
+            _ensure()
+            _atomic(probe, {"marker": marker, "written_at": _now()})
+            observed = _read(probe)
+            if observed.get("marker") != marker:
+                raise MemoryError("Memory health probe did not read back the written marker.")
+            probe.unlink(missing_ok=True)
+            records = list(RECORDS.glob("*.json")) if RECORDS.exists() else []
+            # Validate a bounded recent sample. A corrupt old record remains
+            # visible through the count without making health itself unbounded.
+            for path in records[-50:]:
+                try:
+                    _read(path)
+                except MemoryError:
+                    unreadable += 1
+        state = "ONLINE" if unreadable == 0 else "DEGRADED"
+        return {
+            "state": state,
+            "readable": True,
+            "writable": True,
+            "records": len(records),
+            "sampled": min(50, len(records)),
+            "unreadable_in_sample": unreadable,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "path": str(ROOT),
+        }
+    except Exception as exc:  # noqa: BLE001 -- health is a typed result
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return {
+            "state": "FAILED",
+            "readable": False,
+            "writable": False,
+            "records": None,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "path": str(ROOT),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def _new_record(content: str, *, title: str = "", memory_type: str = "fact", category: str = "",
                 actor: str = "user", reason: str = "", mission_id: str = "", agents: list[str] | None = None,
                 tags: list[str] | None = None, source_ids: list[str] | None = None, original_id: str = "",

@@ -13,6 +13,14 @@ load_dotenv(PROJECT_ROOT / ".env")
 ASSISTANT_NAME = os.environ.get("ASSISTANT_NAME", "ZENO")
 USER_NAME = os.environ.get("USER_NAME", "Boss")
 
+# Explicit environment separation. Development is the backwards-compatible
+# local default; demo behavior remains OFF unless the owner deliberately sets
+# it, and production entry points reject mock/demo backend flags.
+ZENO_ENV = os.environ.get("ZENO_ENV", "development").strip().lower()
+ZENO_DEMO_MODE = os.environ.get("ZENO_DEMO_MODE", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
 # Which provider the seam in provider.py dispatches to. Swapping providers
 # is a one-line edit here (or in .env) -- never a code change elsewhere.
 MODEL_PROVIDER = os.environ.get("MODEL_PROVIDER", "anthropic").strip().lower()
@@ -312,16 +320,10 @@ AUTONOMY_NEVER_AUTO_TOOLS = frozenset({
     "deposit_funds", "buy_asset", "sell_asset", "make_payment",
 })
 
+# Legacy compatibility only. Secure phone pairing now uses one-time records
+# and WebAuthn in ``phone_security.py``. Merely importing config must never
+# generate a secret or modify .env.
 PHONE_PAIR_TOKEN = os.environ.get("PHONE_PAIR_TOKEN", "").strip()
-if not PHONE_PAIR_TOKEN:
-    import secrets
-
-    PHONE_PAIR_TOKEN = secrets.token_urlsafe(16)
-    try:
-        with open(PROJECT_ROOT / ".env", "a", encoding="utf-8") as _f:
-            _f.write(f"\nPHONE_PAIR_TOKEN={PHONE_PAIR_TOKEN}\n")
-    except OSError:
-        pass  # still usable for this process's lifetime, just won't survive a restart
 
 SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a personal AI operating system for {USER_NAME}.
 

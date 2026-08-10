@@ -7,6 +7,7 @@ own module. The core loop never changes -- it only ever reads from `TOOLS`.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -48,6 +49,11 @@ def _audit_safe(value: Any, *, depth: int = 0) -> Any:
             label = str(key)
             if any(marker in label.casefold() for marker in ("password", "passwd", "secret", "token", "api_key", "apikey", "cookie", "credential", "private_key")):
                 out[label] = "[REDACTED]"
+            elif label.casefold() in {"message", "content", "body", "code", "value"} and isinstance(item, str):
+                # Consequential-action logs need the operation and target,
+                # not a durable second copy of messages, form values, file
+                # bodies, or source code. Length is enough for diagnostics.
+                out[label] = f"[REDACTED_CONTENT {len(item)} chars]"
             else:
                 out[label] = _audit_safe(item, depth=depth + 1)
         return out
@@ -161,6 +167,12 @@ TOOL_GROUPS: dict[str, str] = {
     "knowledge_graph_query": "phase3", "knowledge_graph_remember": "phase3",
     "engineering_backends": "phase3", "mobile_device_status": "phase3",
     "sandbox_status": "phase3",
+    # Durable Phase 4 skills remain out of ordinary turns. The agent adds
+    # this group only for an explicit skill/routine request or a real trigger
+    # match against an approved skill.
+    "skill_list": "skills", "skill_inspect": "skills", "skill_scan": "skills",
+    "skill_approve": "skills", "skill_disable": "skills", "skill_delete": "skills",
+    "skill_run": "skills",
     # Worker teams. Grouped ONLY to keep call_worker out of ZENO's core
     # payload -- ZENO delegates to a commander, it never calls a commander's
     # worker itself, so a core schema here would be pure per-turn token cost
@@ -170,6 +182,95 @@ TOOL_GROUPS: dict[str, str] = {
     "call_worker": "agent_workers",
 }
 GROUP_NAMES = sorted(set(TOOL_GROUPS.values()))
+
+
+_FAILED_RESULT_STATES = {
+    "error", "failed", "failure", "blocked", "denied", "cancelled",
+    "canceled", "timed_out", "timeout", "unavailable", "rejected",
+}
+_WAITING_RESULT_STATES = {
+    "pending", "queued", "waiting", "waiting_for_input",
+    "waiting_for_confirmation", "accepted",
+}
+
+
+def classify_tool_result(result: Any) -> dict[str, Any]:
+    """Classify observable output without promoting a return to success.
+
+    A subsystem returning normally is not proof that its requested effect
+    happened. Only explicit verification evidence produces ``completed``;
+    ordinary data is ``returned`` and remains usable by the agent without a
+    false success event.
+    """
+    parsed: Any = result
+    text_value = str(result or "").strip()
+    if isinstance(result, str) and text_value[:1] in {"{", "["}:
+        try:
+            parsed = json.loads(text_value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = result
+
+    state = ""
+    verified = False
+    has_evidence = False
+    if isinstance(parsed, dict):
+        state = str(parsed.get("state") or parsed.get("status") or parsed.get("outcome") or "").strip().casefold()
+        if parsed.get("ok") is False or parsed.get("success") is False or state in _FAILED_RESULT_STATES:
+            from reyes_agent.failures import classify
+            return {"outcome": "failed", "verification_state": "failed", "state": state,
+                    "error_category": classify(text_value)}
+        if state in _WAITING_RESULT_STATES:
+            return {"outcome": "waiting", "verification_state": "pending", "state": state}
+        verified = parsed.get("verified") is True or str(parsed.get("verification_state", "")).casefold() == "verified"
+        has_evidence = bool(parsed.get("evidence") or parsed.get("verification_evidence"))
+        verified = verified or (parsed.get("ok") is True and has_evidence)
+
+    lowered = text_value.casefold()
+    if any(lowered.startswith(prefix) for prefix in (
+        "error", "failed", "failure", "blocked", "denied", "refused",
+        "unavailable", "timed out", "timeout", "browser error", "couldn't",
+        "could not", "no element matches", "nothing matches", "vision match failed",
+        "telegram did not confirm",
+    )):
+        from reyes_agent.failures import classify
+        return {"outcome": "failed", "verification_state": "failed", "state": state,
+                "error_category": classify(text_value)}
+    if any(lowered.startswith(prefix) for prefix in (
+        "queued", "pending", "waiting", "accepted for", "approval required",
+    )):
+        return {"outcome": "waiting", "verification_state": "pending", "state": state}
+    # Existing file/build/browser executors include a concrete verification
+    # marker only after their postcondition check passes.
+    if any(marker in lowered for marker in (
+        "verified on disk", "build completed and verified", "verification passed",
+        "verified evidence", "postcondition verified",
+    )):
+        verified = True
+    return {
+        "outcome": "completed" if verified else "returned",
+        "verification_state": "verified" if verified else "unverified",
+        "state": state,
+        "error_category": "",
+    }
+
+
+def _publish_tool_failure(tool: Tool, tool_input: dict[str, Any], error: str,
+                          duration: float) -> None:
+    try:
+        from reyes_agent import event_bus, intelligence
+
+        safe_input = _audit_safe(tool_input)
+        intelligence.update_situation(current_task=tool.name, current_step="failed")
+        event_bus.publish("tool.failed", payload={
+            "tool": tool.name,
+            "input": safe_input,
+            "result": _audit_safe(error),
+            "duration_ms": int(max(0.0, duration) * 1000),
+            "outcome": "failed",
+            "verification_state": "failed",
+        }, source="tools")
+    except Exception:  # noqa: BLE001 -- failure reporting cannot mask cause
+        pass
 
 
 def group_of(name: str) -> str:
@@ -228,7 +329,12 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
             pass
         safe_input = _audit_safe(tool_input)
         safe_result = _audit_safe(result)
-        audit.log("tool_run", tool=tool.name, input=safe_input, result=safe_result)
+        outcome = classify_tool_result(result)
+        audit.log("tool_result", actor="zeno", action=tool.name,
+                  policy="permission_engine", outcome=outcome["outcome"],
+                  verification_state=outcome["verification_state"],
+                  error_category=outcome.get("error_category", ""),
+                  duration_ms=int(duration * 1000), input=safe_input, result=safe_result)
         # The next-intelligence layer records an intentionally bounded action
         # history and current observable task.  It never becomes a second
         # executor; this remains the one gated tool path.
@@ -236,7 +342,8 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
             from reyes_agent import intelligence
 
             intelligence.record_tool_execution(tool.name, safe_input, str(safe_result))
-            intelligence.update_situation(current_task=tool.name, current_step="completed")
+            intelligence.update_situation(current_task=tool.name,
+                                          current_step=outcome["outcome"])
         except Exception:  # noqa: BLE001 -- action history cannot break a tool
             pass
         # Durable event record -- this is what makes an execution timeline
@@ -245,18 +352,28 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
         from reyes_agent import event_bus
 
         event_bus.publish(
-            "tool.completed",
+            f"tool.{outcome['outcome']}",
             payload={
                 "tool": tool.name,
                 "input": safe_input,
                 "result": str(safe_result or "")[:500],
                 "duration_ms": int(duration * 1000),
+                "outcome": outcome["outcome"],
+                "verification_state": outcome["verification_state"],
+                "error_category": outcome.get("error_category", ""),
             },
             source="tools",
         )
         return result
     except TypeError as exc:
-        return f"Error: bad input for '{tool.name}': {exc}"
+        duration = time.time() - started
+        message = f"Error: bad input for '{tool.name}': {exc}"
+        audit.log("tool_error", actor="zeno", action=tool.name,
+                  policy="permission_engine", outcome="failed",
+                  duration_ms=int(duration * 1000), input=_audit_safe(tool_input),
+                  error=_audit_safe(str(exc)))
+        _publish_tool_failure(tool, tool_input, message, duration)
+        return message
     except Exception as exc:  # noqa: BLE001 -- tool failures must reach the model, not crash the loop
         try:
             from reyes_agent.performance_monitor import record_latency
@@ -267,7 +384,12 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
                 record_latency("browser", duration)
         except Exception:  # noqa: BLE001
             pass
-        audit.log("tool_error", tool=tool.name, input=_audit_safe(tool_input), error=_audit_safe(str(exc)))
+        audit.log("tool_error", actor="zeno", action=tool.name,
+                  policy="permission_engine", outcome="failed",
+                  duration_ms=int(duration * 1000), input=_audit_safe(tool_input),
+                  error=_audit_safe(str(exc)))
+        _publish_tool_failure(tool, tool_input,
+                              f"Error running '{tool.name}': {exc}", duration)
         try:
             from reyes_agent import intelligence
 
@@ -400,7 +522,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, phase3_tools, profile_tools, projects, rag, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, phase3_tools, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

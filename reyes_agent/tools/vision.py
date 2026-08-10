@@ -139,8 +139,9 @@ def take_screenshot(question: str = "Describe what's on the screen, in a few sen
     try:
         description = _describe_image(image_bytes, question)
     except VisionError as exc:
-        return f"Captured the screen (saved to {path}) but couldn't describe it: {exc}"
-    return f"{description}\n\n(saved to {path})"
+        return (f"Captured the screen; postcondition verified: screenshot file exists at {path}. "
+                f"Image description failed: {exc}")
+    return f"{description}\n\n(postcondition verified: screenshot file exists at {path})"
 
 
 @register(

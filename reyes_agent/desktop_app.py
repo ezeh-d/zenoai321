@@ -723,6 +723,8 @@ class _DesktopApi:
 
 def main() -> None:
     _redirect_stdio_if_console_free()
+    from reyes_agent.runtime_environment import require_safe_startup
+    require_safe_startup()
     from reyes_agent.single_instance import SingleInstanceGuard
 
     instance = SingleInstanceGuard(config.ASSISTANT_NAME, config.PROJECT_ROOT)

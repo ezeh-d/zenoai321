@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
+from pathlib import Path
 
 import psutil
 
@@ -18,6 +20,65 @@ from reyes_agent.tools import register
 
 _MAX_LIST = 200
 _MAX_READ_CHARS = 6000
+
+
+def _visible_windows() -> list[tuple[int, int, str]]:
+    """Return visible top-level ``(hwnd, pid, title)`` rows on Windows."""
+    if os.name != "nt":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        rows: list[tuple[int, int, str]] = []
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def visit(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buffer, length + 1)
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            rows.append((int(hwnd), int(pid.value), buffer.value))
+            return True
+
+        user32.EnumWindows(callback_type(visit), 0)
+        return rows
+    except Exception:  # noqa: BLE001 -- process evidence remains available
+        return []
+
+
+def _verify_app_open(expected: str, before_pids: set[int], *, timeout_s: float = 6.0) -> str:
+    target = Path(str(expected)).stem.casefold().replace(".exe", "").strip()
+    compact = "".join(ch for ch in target if ch.isalnum())
+    deadline = time.monotonic() + max(0.2, timeout_s)
+    while time.monotonic() < deadline:
+        processes: dict[int, str] = {}
+        for process in psutil.process_iter(["pid", "name"]):
+            try:
+                name = str(process.info.get("name") or "")
+                processes[int(process.info["pid"])] = name
+                process_compact = "".join(ch for ch in Path(name).stem.casefold() if ch.isalnum())
+                if compact and (process_compact == compact or (
+                    len(compact) >= 5 and compact in process_compact
+                )):
+                    return f"process {name} (PID {process.info['pid']}) exists"
+            except (psutil.Error, OSError, ValueError):
+                continue
+        for _hwnd, pid, title in _visible_windows():
+            title_compact = "".join(ch for ch in title.casefold() if ch.isalnum())
+            if (compact and len(compact) >= 4 and compact in title_compact) or (
+                pid not in before_pids and pid in processes and compact
+                and compact in "".join(ch for ch in Path(processes[pid]).stem.casefold() if ch.isalnum())
+            ):
+                return f"visible window '{title[:100]}' (PID {pid}) exists"
+        time.sleep(0.1)
+    return ""
 
 
 @register(
@@ -123,10 +184,14 @@ def _resolve_start_app(name: str) -> tuple[str, str] | None:
     light=True,
 )
 def open_app(name_or_path: str) -> str:
+    before_pids = {process.pid for process in psutil.process_iter(["pid"])}
     # Direct launch first -- fastest for classic apps and full paths.
     try:
         os.startfile(name_or_path)  # noqa: S606 -- Windows app launch, not shell exec
-        return f"Opened '{name_or_path}'."
+        evidence = _verify_app_open(name_or_path, before_pids)
+        if evidence:
+            return f"Opened '{name_or_path}'; postcondition verified: {evidence}."
+        return f"Launch request for '{name_or_path}' returned, but ZENO could not verify a matching process or window."
     except OSError:
         pass
 
@@ -138,7 +203,10 @@ def open_app(name_or_path: str) -> str:
     display, app_id = resolved
     try:
         os.startfile(f"shell:AppsFolder\\{app_id}")  # noqa: S606
-        return f"Opened '{display}'."
+        evidence = _verify_app_open(display, before_pids)
+        if evidence:
+            return f"Opened '{display}'; postcondition verified: {evidence}."
+        return f"Launch request for '{display}' returned, but ZENO could not verify a matching process or window."
     except OSError as exc:
         return f"Found '{display}' but couldn't launch it: {exc}"
 
@@ -160,7 +228,8 @@ def open_path(path: str) -> str:
         return f"'{path}' doesn't exist."
     try:
         os.startfile(path)  # noqa: S606
-        return f"Opened '{path}'."
+        return (f"Open request for '{path}' was accepted and the target exists; "
+                "the resulting application/window was not independently verified.")
     except OSError as exc:
         return f"Couldn't open '{path}': {exc}"
 
@@ -313,10 +382,12 @@ def media_control(action: str) -> str:
 @register(
     name="send_slack_message",
     description=(
-        "Send a message to a person or channel using the Slack desktop app "
+        "Attempt to send a message to a person or channel using the Slack desktop app "
         "already installed and logged in on this computer. Opens Slack, "
         "uses its Ctrl+K quick switcher to jump to the target, types the "
-        "message, and sends it. Always requires the user's explicit "
+        "message, and presses send. Desktop automation cannot prove that "
+        "Slack selected the intended recipient, so the result remains "
+        "unverified until a real Slack API connection is configured. Always requires the user's explicit "
         "confirmation first, same as any other message REYES sends on "
         "the user's behalf."
     ),
@@ -357,11 +428,9 @@ def send_slack_message(target: str, message: str) -> str:
     pyautogui.press("enter")  # send
 
     return (
-        f"Sent to '{target}' via the Slack desktop app: {message!r}. "
-        "This used keyboard automation, not Slack's API -- it can't "
-        "confirm the quick switcher actually landed on the right person "
-        "or channel, so it's worth a glance at Slack to make sure it went "
-        "where intended."
+        f"Slack desktop automation pressed send for target '{target}', but no "
+        "recipient or delivery evidence was available. The action is unverified; "
+        "check Slack before relying on it."
     )
 
 
@@ -596,7 +665,19 @@ def send_telegram_message(message: str) -> str:
             timeout=10,
         )
         resp.raise_for_status()
+        payload = resp.json()
     except requests.RequestException as exc:
         return f"Couldn't send the Telegram message: {exc}"
+    except (TypeError, ValueError) as exc:
+        return f"Telegram returned an invalid response: {exc}"
 
-    return f"Sent to your Telegram: {message!r}."
+    result = payload.get("result", {}) if isinstance(payload, dict) else {}
+    message_id = result.get("message_id") if isinstance(result, dict) else None
+    if payload.get("ok") is not True or not isinstance(message_id, int):
+        description = payload.get("description", "missing message confirmation") if isinstance(payload, dict) else "invalid response"
+        return f"Telegram did not confirm the message: {description}"
+
+    return (
+        f"Telegram accepted the message as ID {message_id}; postcondition verified "
+        "from the authenticated provider response."
+    )

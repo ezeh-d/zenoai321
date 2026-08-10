@@ -94,9 +94,12 @@ def set_volume(level: int) -> str:
 
         vol = AudioUtilities.GetSpeakers().EndpointVolume
         vol.SetMasterVolumeLevelScalar(level / 100.0, None)
+        observed = round(float(vol.GetMasterVolumeLevelScalar()) * 100)
     except Exception as exc:  # noqa: BLE001
         return f"Couldn't set the volume: {exc}"
-    return f"Volume set to {level}%."
+    if abs(observed - level) > 2:
+        return f"Failed to verify volume change: requested {level}%, read back {observed}%."
+    return f"Volume set to {level}%; postcondition verified by read-back at {observed}%."
 
 
 @register(
@@ -131,9 +134,13 @@ def set_mic_level(level: int) -> str:
         interface = mic.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
         vol = cast(interface, POINTER(IAudioEndpointVolume))
         vol.SetMasterVolumeLevelScalar(level / 100.0, None)
+        observed = round(float(vol.GetMasterVolumeLevelScalar()) * 100)
     except Exception as exc:  # noqa: BLE001
         return f"Couldn't set the mic level: {exc}"
-    return f"Microphone input level set to {level}%."
+    if abs(observed - level) > 2:
+        return f"Failed to verify microphone level: requested {level}%, read back {observed}%."
+    return (f"Microphone input level set to {level}%; postcondition verified "
+            f"by read-back at {observed}%.")
 
 
 @register(

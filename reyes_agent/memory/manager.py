@@ -178,9 +178,12 @@ class MemoryManager:
         with self._lock:
             session_items = len(self._session)
             writes_queued = self._writes_queued
+        from reyes_agent import living_memory
+        canonical_health = living_memory.health()
         return {
-            "state": "ONLINE",
+            "state": canonical_health["state"],
             "canonical": "Living Memory",
+            "canonical_health": canonical_health,
             "semantic_backend": self.backend.status(),
             "session_items": session_items,
             "session_capacity": self._session.maxlen,

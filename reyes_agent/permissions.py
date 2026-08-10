@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass
 from typing import Literal
 
@@ -118,6 +119,9 @@ PROFILES: dict[str, dict[str, State]] = {
     "cautious": _CAUTIOUS,
 }
 
+_OVERRIDE_FILE = config.VAULT_PATH / "07-System" / "permissions" / "overrides.json"
+_override_lock = threading.RLock()
+
 ACTIVE_PROFILE = os.environ.get("INSTALLATION_PROFILE", "cautious").strip().lower()
 if ACTIVE_PROFILE not in PROFILES:
     ACTIVE_PROFILE = "cautious"
@@ -133,6 +137,10 @@ TOOL_CAPABILITY: dict[str, str] = {
     "mcp_discover": "plugin_exec",
     "mcp_read": "plugin_exec",
     "mcp_action": "plugin_exec",
+    "skill_approve": "plugin_exec",
+    "skill_disable": "plugin_exec",
+    "skill_delete": "filesystem_delete",
+    "skill_run": "plugin_exec",
     "device_observe": "vision",
     "device_execute": "desktop_automation",
     "episodic_search": "filesystem_read",
@@ -196,6 +204,61 @@ def _env_overrides() -> dict[str, State]:
     return out
 
 
+def _stored_overrides() -> dict[str, State]:
+    try:
+        raw = json.loads(_OVERRIDE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    capabilities = raw.get("capabilities", {})
+    if not isinstance(capabilities, dict):
+        return {}
+    return {
+        cap: value for cap, value in capabilities.items()
+        if cap in CAPABILITIES and value in {ENABLED, CONFIRM, BLOCKED}
+        and cap != "financial"
+    }
+
+
+def set_state(capability: str, state: str) -> State:
+    """Persist one owner setting and make it effective immediately.
+
+    ``default`` removes the saved override. Financial execution remains
+    structurally blocked and cannot be changed through this API.
+    """
+    capability = str(capability or "").strip().lower()
+    state = str(state or "").strip().lower()
+    if capability not in CAPABILITIES:
+        raise ValueError(f"Unknown capability '{capability}'.")
+    if capability == "financial":
+        raise PermissionError("Financial execution is locked and cannot be enabled.")
+    if state not in {ENABLED, CONFIRM, BLOCKED, "default"}:
+        raise ValueError("State must be enabled, confirm, blocked, or default.")
+    with _override_lock:
+        data = _stored_overrides()
+        if state == "default":
+            data.pop(capability, None)
+        else:
+            data[capability] = state  # type: ignore[assignment]
+        _OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = _OVERRIDE_FILE.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps({
+            "schema_version": 1,
+            "profile": ACTIVE_PROFILE,
+            "capabilities": data,
+        }, indent=2, sort_keys=True), encoding="utf-8")
+        temporary.replace(_OVERRIDE_FILE)
+    try:
+        from reyes_agent import audit
+        audit.log("permission_changed", actor="owner", action_type="permission.update",
+                  target=capability, policy=ACTIVE_PROFILE, outcome="updated",
+                  state=state)
+    except Exception:  # noqa: BLE001 -- policy update already persisted
+        pass
+    return state_for(capability)
+
+
 def state_for(capability: str) -> State:
     base = PROFILES[ACTIVE_PROFILE]
     # financial is structurally blocked -- profile and env cannot open it.
@@ -204,6 +267,9 @@ def state_for(capability: str) -> State:
     override = _env_overrides().get(capability)
     if override is not None:
         return override
+    stored = _stored_overrides().get(capability)
+    if stored is not None:
+        return stored
     return base.get(capability, CONFIRM)
 
 
@@ -237,11 +303,14 @@ def describe() -> dict:
                 "name": cap,
                 "description": desc,
                 "state": state_for(cap),
-                "overridden": cap in _env_overrides() and cap != "financial",
+                "overridden": (cap in _env_overrides() or cap in _stored_overrides()) and cap != "financial",
+                "source": ("environment" if cap in _env_overrides() else
+                           "saved" if cap in _stored_overrides() else "profile"),
                 "locked": cap == "financial",
             }
             for cap, desc in CAPABILITIES.items()
         ],
+        "settings_file": str(_OVERRIDE_FILE),
     }
 
 

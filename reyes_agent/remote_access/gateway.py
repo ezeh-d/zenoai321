@@ -70,6 +70,18 @@ def record(device_id: str, request_id: str, category: str, action: str,
                           correlation_id=entry["request_id"])
     except Exception:  # noqa: BLE001 -- audit must never break a request
         pass
+    try:
+        from reyes_agent import audit
+
+        # Durable record excludes the natural-language command body. The
+        # request id and category are sufficient to correlate it without
+        # copying potentially private phone content into another store.
+        audit.log("remote_action", actor=entry["device_id"],
+                  action_type="remote.command", request_id=entry["request_id"],
+                  category=entry["category"], outcome=entry["result"],
+                  detail=entry["detail"])
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def audit_log(limit: int = 50) -> list[dict[str, Any]]:
@@ -111,13 +123,15 @@ def connection_status() -> dict[str, Any]:
         reasons.append("no public domain configured yet")
 
     try:
-        from reyes_agent import model_router
+        from reyes_agent import provider_manager
 
-        healthy = [name for name, ok in model_router.available_providers().items()
-                   if ok and model_router.breaker_state(name) != model_router.OPEN]
-        if not healthy:
+        providers = provider_manager.status()
+        # A disabled remote surface is OFFLINE regardless of provider state.
+        # Provider health may downgrade an otherwise reachable gateway, but
+        # must never overwrite the stronger fail-closed state.
+        if providers["online_count"] < 1 and state == protocol.ONLINE:
             state = protocol.DEGRADED
-            reasons.append("no healthy model provider")
+            reasons.append("no model provider has validated ONLINE")
     except Exception:  # noqa: BLE001
         pass
 
@@ -182,8 +196,11 @@ def handle(request: protocol.Request, *, scopes: set[str] | None = None,
         return protocol.failed(request.request_id,
                                f"That could not be completed: {type(exc).__name__}")
 
+    # A conversational response was generated. This is not evidence that an
+    # action mentioned in the request succeeded; tool postconditions carry
+    # their own verified outcome events.
     record(request.device_id, request.request_id, decision.category,
-           request.message, "success")
+           request.message, "responded")
     return protocol.ok(request.request_id, reply.get("reply", ""),
                        category=decision.category,
                        tools=[t.get("name") for t in reply.get("tool_calls", [])][:8])

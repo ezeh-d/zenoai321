@@ -24,10 +24,12 @@ configurable in .env, availability detection from real credentials,
 health from consecutive-failure counts, automatic fallback around
 degraded providers, and **measured** latency recorded from every real
 provider call in `provider.py` (never seeded or estimated).
-`GET /api/router`. **Named limit, reported by the router itself:** this
-install has 2 providers configured, so most routes collapse onto the same
-one and routing is close to a no-op until more keys exist. The router says
-that in its own `note` field rather than implying richer behaviour.
+`GET /api/router`. Provider state now comes from durable real validation,
+not credential presence. On 2026-08-10 this install had four configured
+providers: OpenAI, Gemini and local Ollama validated ONLINE; xAI rejected its
+configured key and reports FAILED/AUTH_EXPIRED; Anthropic is NOT_CONFIGURED.
+The router keeps fallback available without presenting the rejected key as
+operational.
 
 ## Phase 3 — Multi-Agent System · DONE
 14 specialists with scoped toolsets, real delegation, and genuine parallel
@@ -913,3 +915,60 @@ were not present, so adapters are not called production-ready. Host-to-HTTP
 startup still measured about 8.3 s and the existing WebView2 tree remains the
 dominant process cost under 88% system RAM. Full details are in
 `PHASE3_ADVANCED_CAPABILITIES_REPORT.md`.
+
+---
+
+## Production reality pass — WORKING WITH EXTERNAL LIMITS (2026-08-10)
+
+ZENO now separates credential presence from operational health. A persistent
+provider manager validates real OpenAI, xAI, Gemini and Ollama endpoints and
+stores only one-way credential fingerprints. Synthetic/fault-injection runners
+cannot update the production health database. The live dashboard/router show
+the validation state and circuit state independently.
+
+The first-run identity database creates no sample owner. The dashboard asks for
+real owner setup and persists OWNER/TRUSTED_USER/GUEST/SERVICE roles. Local
+desktop access remains bound to the signed-in Windows session and loopback;
+phone access retains WebAuthn, expiring revocable sessions, CSRF, scopes and
+role checks. Forwarded remote callers see only the narrow phone/API surface,
+and the connector stays OFFLINE until explicitly enabled and configured.
+
+Tool completion is now evidence-based. FAILED, WAITING, RETURNED/unverified and
+COMPLETED/verified are distinct Event Bus outcomes. Browser navigation, click,
+fill, scroll, screenshot and close paths perform real postcondition checks;
+Windows app launch verifies a real process/window; volume and microphone level
+changes read back the OS value. Slack desktop automation is explicitly
+unverified because it cannot prove the selected recipient. Telegram validates
+the authenticated provider response and message ID.
+
+Living Memory health performs a real bounded read/write/delete probe. Permission
+changes persist atomically and reach the execution gate; financial execution
+remains structurally blocked. Audit records are append-oriented, rotated,
+secret-redacted and carry actor/action/policy/outcome/verification/duration.
+Failure results use the shared typed recovery taxonomy instead of a generic
+error string.
+
+Claude's Phase 4 durable skill subsystem is now reachable through lazy agent
+tools for scan/list/inspect/approve/disable/delete/run. An approved trigger is
+context for the existing planner, never an execution bypass. Every reusable
+skill step must return verified postcondition evidence; an ordinary text return
+cannot advance the workflow. Current real state is zero skills because 127
+recorded owner actions contain no repeated sequence above the evidence
+threshold—no sample skill was created.
+
+Live verification on this machine: final startup reached loopback promptly and
+settled at Stage 2 with 3/3 core services ready, four idle bounded workers and
+queue depth zero. The Mini Orb window was visible, non-minimized, topmost and
+responding; its live stream reported MICROPHONE_READY. A real Playwright run
+navigated example.com, verified a link transition to IANA, loaded Selenium's
+public test form, filled and read back a value, and closed its persistent
+context. A real Notepad run opened, focused, typed, read back the exact marker
+and closed the process. The complete matrix, external authorization blockers
+and measurements are in `PRODUCTION_REALITY_REPORT.md`.
+
+External limits remain explicit: xAI needs a replacement key; owner onboarding
+has not been completed; Telegram needs the owner's chat allowlist; Slack,
+Google/Outlook Calendar, GitHub/MCP, Home Assistant and Android need real
+authorization/setup; a custom local ZENO wake model is absent; Mem0 and Open
+Interpreter remain optional fallbacks; the Netlify artifact exists but no
+Netlify account/repository/site is connected and no production URL exists.

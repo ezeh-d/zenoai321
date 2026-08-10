@@ -730,6 +730,21 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
 .ws-headline:hover { background: rgba(80,140,255,0.08); }
 .ws-headline .ws-source { display: block; margin-top: 4px; font-size: 11.5px; color: #7f93c2; }
 </style>
+<div id="onboarding-overlay" style="display:none;position:fixed;inset:0;z-index:20000;background:rgba(2,6,18,.94);align-items:center;justify-content:center;padding:24px;pointer-events:auto;">
+  <form id="onboarding-form" style="width:min(92vw,620px);max-height:90vh;overflow:auto;background:#0a1226;border:1px solid rgba(90,170,255,.42);border-radius:18px;padding:24px;box-shadow:0 24px 90px #000;">
+    <h2 style="margin:0 0 6px;font-size:23px;">Welcome to ZENO</h2>
+    <p style="margin:0 0 18px;color:var(--text-dim);line-height:1.5;">Create the real local owner profile. Optional integrations can be connected later; ZENO will not invent accounts or data.</p>
+    <label style="display:block;margin:10px 0 4px;color:var(--text-dim);font-size:12px;">Owner display name</label>
+    <input id="onboarding-name" maxlength="120" required autocomplete="name" style="width:100%;padding:11px;border-radius:9px;border:1px solid var(--border);background:#060b17;color:var(--text);" />
+    <label style="display:block;margin:10px 0 4px;color:var(--text-dim);font-size:12px;">Timezone</label>
+    <input id="onboarding-timezone" maxlength="80" style="width:100%;padding:11px;border-radius:9px;border:1px solid var(--border);background:#060b17;color:var(--text);" />
+    <label style="display:block;margin:10px 0 4px;color:var(--text-dim);font-size:12px;">Languages (comma separated)</label>
+    <input id="onboarding-languages" value="English" maxlength="240" style="width:100%;padding:11px;border-radius:9px;border:1px solid var(--border);background:#060b17;color:var(--text);" />
+    <div id="onboarding-steps" style="margin:18px 0;padding:12px;border:1px solid var(--border);border-radius:10px;color:var(--text-dim);font-size:12px;line-height:1.7;"></div>
+    <p id="onboarding-error" style="min-height:18px;color:var(--danger);font-size:12px;"></p>
+    <button type="submit" style="width:100%;padding:12px;border:0;border-radius:10px;background:var(--accent);color:#03101a;font-weight:800;cursor:pointer;">Save owner profile</button>
+  </form>
+</div>
 <div id="code-overlay">
   <div class="ws-bar">
     <span class="ws-title" id="code-overlay-title">Coding Workspace</span>
@@ -4181,14 +4196,18 @@ async function refreshSituation() {
   const meas = d.model.measured || {};
   const provider = d.model.provider;
   const pm = meas[provider];
+  const providerValidation = ((d.model.validation || {}).providers || {})[provider] || {};
+  const providerState = providerValidation.state || 'NOT VALIDATED';
   document.querySelector('#sit-model .sit-content').innerHTML =
     sitRows([
       ['Provider', provider],
+      ['Connection', providerState,
+        providerState === 'ONLINE' ? 'sit-ok' : (providerState === 'FAILED' ? 'sit-bad' : 'sit-warn')],
       ['Calls this run', pm ? pm.calls : '—'],
       ['Avg latency', pm ? pm.avg_latency_s + 's' : '—'],
       ['Last latency', pm ? pm.last_latency_s + 's' : '—'],
       ['Failures', pm ? pm.failures : '—', pm && pm.failures ? 'sit-warn' : ''],
-      ['Health', pm ? (pm.healthy ? 'healthy' : 'degraded') : 'no calls yet',
+      ['Circuit', pm ? (pm.healthy ? 'closed/usable' : 'open/degraded') : 'no calls yet',
         pm ? (pm.healthy ? 'sit-ok' : 'sit-bad') : ''],
     ]);
 
@@ -4336,6 +4355,12 @@ function describeEvent(ev) {
   if (ev.type === 'tool.completed') {
     const [ico, label] = friendlyTool(p.tool, p.input || {});
     return { icon: ico, main: label, detail: (p.result || '').slice(0, 120), ms: p.duration_ms };
+  }
+  if (ev.type === 'tool.failed' || ev.type === 'tool.waiting' || ev.type === 'tool.returned') {
+    const [ico, label] = friendlyTool(p.tool, p.input || {});
+    const state = ev.type.split('.')[1];
+    return { icon: state === 'failed' ? '!' : ico, main: label + ' — ' + state,
+      detail: (p.result || '').slice(0, 120), ms: p.duration_ms };
   }
   if (ev.type === 'ui.workspace_code') return { icon: '📁', main: 'Wrote ' + (p.file || 'a file'), detail: 'Project: ' + (p.project || '') };
   if (ev.type === 'ui.workspace_news') return { icon: '📰', main: 'Pulled headlines', detail: p.topic || '' };
@@ -4995,6 +5020,46 @@ if (performanceAuditEnabled) {
   }, 5000);
 }
 orb.setState('idle');
+async function initializeOnboarding() {
+  const overlay = document.getElementById('onboarding-overlay');
+  const stepsEl = document.getElementById('onboarding-steps');
+  try {
+    const response = await fetch('/api/onboarding/status');
+    const data = await response.json();
+    if (!response.ok || data.state === 'FAILED') throw new Error(data.error || 'Identity store unavailable.');
+    const labels = {
+      owner: 'Owner identity', local_permissions: 'Local permissions', microphone: 'Microphone',
+      voice: 'Voice', ai_provider: 'AI provider', optional_integrations: 'Optional integrations', security: 'Security'
+    };
+    stepsEl.innerHTML = Object.entries(data.steps || {}).map(([key, value]) =>
+      `<div style="display:flex;justify-content:space-between;gap:14px"><span>${escapeHtml(labels[key] || key)}</span><b style="color:${value === 'READY' || value === 'ONLINE' || value === 'CONFIGURED' ? 'var(--ok)' : 'var(--warn)'}">${escapeHtml(value)}</b></div>`
+    ).join('');
+    if (data.state === 'SETUP_REQUIRED') {
+      document.getElementById('onboarding-timezone').value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+      overlay.style.display = 'flex';
+    }
+  } catch (error) {
+    console.warn('Owner onboarding status unavailable', error);
+  }
+}
+document.getElementById('onboarding-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const errorEl = document.getElementById('onboarding-error');
+  errorEl.textContent = '';
+  const payload = {
+    display_name: document.getElementById('onboarding-name').value.trim(),
+    timezone: document.getElementById('onboarding-timezone').value.trim(),
+    language_preferences: document.getElementById('onboarding-languages').value.split(',').map(x => x.trim()).filter(Boolean),
+    assistant_preferences: {}
+  };
+  try {
+    const response = await fetch('/api/onboarding/owner', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Owner setup failed.');
+    document.getElementById('onboarding-overlay').style.display = 'none';
+  } catch (error) { errorEl.textContent = error.message; }
+});
+void initializeOnboarding();
 inputEl.focus();
 </script>
 </body>

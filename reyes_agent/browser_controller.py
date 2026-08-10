@@ -35,6 +35,7 @@ reputation if the model gets it wrong. See AGENT.md's standing list.
 from __future__ import annotations
 
 import os
+import importlib.util
 import threading
 import time
 from pathlib import Path
@@ -158,8 +159,12 @@ def close_if_idle(max_idle_seconds: float = 1800.0) -> bool:
 
 def health() -> dict[str, Any]:
     with _lock:
+        try:
+            installed = importlib.util.find_spec("playwright.sync_api") is not None
+        except (ImportError, ModuleNotFoundError):
+            installed = False
         return {
-            "available": True,
+            "available": installed,
             "open": _context is not None,
             # Do not touch Playwright objects from diagnostic/request threads:
             # sync_api contexts are strictly owner-thread affine.
@@ -168,6 +173,9 @@ def health() -> dict[str, Any]:
             "timeout_ms": _DEFAULT_TIMEOUT_MS,
             "launch_failures": _launch_failures,
             "owner_thread": _owner_thread_id,
+            "state": ("ONLINE" if _context is not None else
+                      "DEGRADED" if _launch_failures else
+                      "STANDBY" if installed else "NOT_CONFIGURED"),
         }
 
 

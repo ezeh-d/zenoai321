@@ -515,6 +515,11 @@ _RUNNERS = {
     "gemini": _run_gemini,
     "ollama": _run_ollama,
 }
+# Immutable identity map for durable health evidence. Tests and controlled
+# adapters may replace entries in ``_RUNNERS``; those injected callables are
+# useful for fault isolation but must never poison the real provider-health
+# database or make a mock success ONLINE.
+_PRODUCTION_RUNNERS = dict(_RUNNERS)
 
 
 def run_turn(
@@ -574,6 +579,7 @@ def run_turn(
 
     for provider in chain:
         runner = _RUNNERS[provider]
+        is_production_runner = runner is _PRODUCTION_RUNNERS.get(provider)
         for attempt in range(_MAX_RETRY_ATTEMPTS):
             if cancel_check:
                 cancel_check()
@@ -592,13 +598,15 @@ def run_turn(
                 # Real measured latency feeds the Model Router's health/metrics.
                 # Never estimated -- see model_router.py.
                 try:
-                    model_router.record(provider, time.time() - _t0, ok=True)
+                    model_router.record(provider, time.time() - _t0, ok=True,
+                                        validated_runtime=is_production_runner)
                 except Exception:  # noqa: BLE001 -- telemetry must not break a turn
                     pass
                 return _result
             except ProviderError as exc:
                 try:
-                    model_router.record(provider, time.time() - _t0, ok=False, error=str(exc))
+                    model_router.record(provider, time.time() - _t0, ok=False,
+                                        error=str(exc), validated_runtime=is_production_runner)
                 except Exception:  # noqa: BLE001
                     pass
                 last_exc = exc

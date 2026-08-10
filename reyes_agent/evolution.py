@@ -13,7 +13,7 @@ list: ZENO learns via memory, never via self-modification).
 EVERY FINDING IS MEASURED
 ------------------------
 Sources are all real records this system already keeps:
-  * tool latency + failure counts -> the Event Bus (`tool.completed`)
+  * tool latency + failure counts -> the Event Bus (`tool.<outcome>`)
   * unused capability            -> registered tools with zero events
   * agent reliability            -> Agent Runtime metrics
   * duplicate memories           -> exact/near-duplicate text comparison
@@ -82,7 +82,7 @@ def analyse() -> Report:
         d = p.get("duration_ms")
         if isinstance(d, int):
             durations[name].append(d)
-        if str(p.get("result", "")).lower().startswith("error"):
+        if ev.get("type") == "tool.failed" or p.get("outcome") == "failed":
             failures[name] += 1
 
     if durations:
@@ -101,7 +101,7 @@ def analyse() -> Report:
         rep.findings.append(Finding(
             area="performance", severity="info",
             summary="No tool timing data yet",
-            evidence="the event bus holds no tool.completed events with durations",
+            evidence="the event bus holds no tool outcome events with durations",
             recommendation="Use ZENO normally; this fills in on its own.",
         ))
 
@@ -126,7 +126,7 @@ def analyse() -> Report:
             rep.findings.append(Finding(
                 area="capability", severity="info",
                 summary=f"{len(unused)} of {len(TOOLS)} tools have never been used",
-                evidence="no tool.completed event recorded for them: "
+                evidence="no tool outcome event recorded for them: "
                          + ", ".join(unused[:12]) + ("…" if len(unused) > 12 else ""),
                 recommendation=("Unused tools still cost latency in every request -- they're "
                                 "part of the schema payload. If some will never be used, "

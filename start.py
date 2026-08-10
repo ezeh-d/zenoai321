@@ -1,11 +1,5 @@
-"""
-REYES launcher — one friendly entry point.
+"""One launcher for ZENO's authoritative front doors."""
 
-Run:  python start.py
-
-Pick a mode from the menu instead of remembering separate commands. Pass a
-number as an argument to skip the menu, e.g.  python start.py 1
-"""
 from __future__ import annotations
 
 import subprocess
@@ -15,34 +9,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 BANNER = r"""
-  ____  _____ _   _ _____ ____
- |  _ \| ____| | | | ____/ ___|
- | |_) |  _| | | | |  _| \___ \
- |  _ <| |___| |_| | |___ ___) |
- |_| \_\_____|\___/|_____|____/   launcher
+  ______  ______ _   _  ____
+ |___  / |  ____| \ | |/ __ \
+    / /  | |__  |  \| | |  | |
+   / /   |  __| | . ` | |  | |
+  / /__  | |____| |\  | |__| |
+ /_____| |______|_| \_|\____/   launcher
 """
 
 MENU = [
-    ("Terminal assistant", "Chat with REYES in this window", ["run.py"]),
-    ("Voice assistant", "Always-on — call his name to talk", ["assistant.py"]),
-    ("HUD (graphical)", "The futuristic desktop interface", ["main.py"]),
-    ("Mobile bridge", "Open REYES on your phone (same Wi-Fi)", ["server.py"]),
-    ("Telegram remote", "Control REYES from Telegram", ["-m", "mobile.telegram_bridge"]),
-    ("Doctor (preflight)", "Check what's installed / what each mode needs", ["doctor.py"]),
+    ("ZENO desktop", "Mini Orb + lazy dashboard (recommended)", ["-m", "reyes_agent.desktop_app"]),
+    ("Terminal assistant", "Same ZENO brain in this window", ["-m", "reyes_agent.cli"]),
+    ("Voice terminal", "Push-to-talk front door", ["-m", "reyes_agent.voice_cli"]),
+    ("Local web backend", "Loopback diagnostics; not a remote bridge", ["-m", "reyes_agent.web"]),
+    ("Telegram remote", "Authenticated Telegram bot integration", ["-m", "reyes_agent.telegram_bridge"]),
+    ("Doctor (preflight)", "Check installed and configured components", ["doctor.py"]),
 ]
 
 
-def _ensure_path() -> None:
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
-
-
 def _run(args: list[str]) -> int:
-    """Launch a mode as a child process using the same Python interpreter."""
-    cmd = [sys.executable, *([str(ROOT / args[0])] if args[0].endswith(".py") else args)]
-    print(f"\n▶ launching: {' '.join(a.split('/')[-1] for a in cmd[1:])}\n")
+    command = [sys.executable, *(
+        [str(ROOT / args[0])] if args[0].endswith(".py") else args
+    )]
+    print(f"\nLaunching: {' '.join(command[1:])}\n")
     try:
-        return subprocess.call(cmd, cwd=str(ROOT))
+        return subprocess.call(command, cwd=str(ROOT))
     except KeyboardInterrupt:
         return 0
 
@@ -50,38 +41,33 @@ def _run(args: list[str]) -> int:
 def _pick(choice: str) -> int | None:
     if not choice.isdigit():
         return None
-    idx = int(choice) - 1
-    return idx if 0 <= idx < len(MENU) else None
+    index = int(choice) - 1
+    return index if 0 <= index < len(MENU) else None
 
 
 def main() -> None:
-    _ensure_path()
     print(BANNER)
-
-    # allow: python start.py 1
     if len(sys.argv) > 1:
-        idx = _pick(sys.argv[1])
-        if idx is not None:
-            sys.exit(_run(MENU[idx][2]))
-
-    for i, (name, desc, _) in enumerate(MENU, 1):
-        print(f"  {i}. {name:<22} {desc}")
+        index = _pick(sys.argv[1])
+        if index is not None:
+            raise SystemExit(_run(MENU[index][2]))
+    for number, (name, description, _) in enumerate(MENU, 1):
+        print(f"  {number}. {name:<22} {description}")
     print("  0. Quit")
-
     while True:
         try:
             choice = input(f"\nChoose a mode [0-{len(MENU)}]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return
-        if choice in ("0", "q", "quit", "exit"):
+        if choice.casefold() in {"0", "q", "quit", "exit"}:
             return
-        idx = _pick(choice)
-        if idx is None:
+        index = _pick(choice)
+        if index is None:
             print("  Please enter a number from the list.")
             continue
-        _run(MENU[idx][2])
-        break
+        _run(MENU[index][2])
+        return
 
 
 if __name__ == "__main__":

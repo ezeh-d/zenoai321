@@ -84,6 +84,18 @@ def _scopes(session) -> set[str]:
         return set()
 
 
+def _require_owner(session) -> None:
+    if str(session["role"] if "role" in session.keys() else "TRUSTED_USER") != "OWNER":
+        raise HTTPException(403, "This action requires an OWNER device.")
+
+
+def _require_scope(session, scope: str) -> None:
+    if scope not in _scopes(session) and str(
+        session["role"] if "role" in session.keys() else "TRUSTED_USER"
+    ) != "OWNER":
+        raise HTTPException(403, f"This device does not have the '{scope}' scope.")
+
+
 # --- models --------------------------------------------------------------
 
 class CommandBody(BaseModel):
@@ -105,6 +117,43 @@ class WebsiteAction(BaseModel):
 
 
 # --- endpoints -----------------------------------------------------------
+
+@router.get("/public-status")
+def remote_public_status() -> dict[str, Any]:
+    """Credential-free, read-only health summary for the static public site.
+
+    This deliberately contains no user, device, provider, path, task, memory,
+    or audit data. The remote boundary still makes it unreachable through a
+    forwarded connector while remote access is disabled.
+    """
+    from reyes_agent import system_health
+
+    health = system_health.snapshot()
+    checks = {item["system"]: item["status"] for item in health["checks"]}
+    try:
+        from reyes_agent.tools.missions import list_missions_dicts
+        missions_active = len(list_missions_dicts(include_all=False))
+    except Exception:  # noqa: BLE001 -- public health never breaks local ZENO
+        missions_active = 0
+    try:
+        from reyes_agent.skills import status as skills_status
+        skills_approved = int(skills_status().get("approved", 0))
+    except Exception:  # noqa: BLE001
+        skills_approved = 0
+
+    def state(name: str, fallback: str = "unknown") -> str:
+        return str(checks.get(name, fallback)).casefold()
+
+    return {
+        "overall": str(health.get("overall", "DEGRADED")).casefold(),
+        "core": state("ZENO CORE"),
+        "voice": state("VOICE"),
+        "memory": state("MEMORY"),
+        "vision": state("VISION/COMPUTER", "standby"),
+        "missions_active": missions_active,
+        "skills_approved": skills_approved,
+        "updated_at": health.get("checked_at"),
+    }
 
 @router.get("/status")
 def remote_status(request: Request, authorization: str | None = Header(default=None),
@@ -135,10 +184,13 @@ def remote_command(body: CommandBody, request: Request,
 def remote_devices(request: Request, authorization: str | None = Header(default=None),
                    zeno_phone_session: str | None = Cookie(default=None)) -> dict[str, Any]:
     """'Show my connected devices.'"""
-    _session(request, authorization, zeno_phone_session)
+    session = _session(request, authorization, zeno_phone_session)
     from reyes_agent.phone_security import get_phone_security
 
-    return {"devices": get_phone_security().devices()}
+    devices = get_phone_security().devices()
+    if str(session["role"]) != "OWNER":
+        devices = [item for item in devices if item["device_id"] == session["device_id"]]
+    return {"devices": devices}
 
 
 @router.post("/devices/revoke")
@@ -150,6 +202,8 @@ def remote_revoke(body: DeviceAction, request: Request,
     from reyes_agent.phone_security import get_phone_security
 
     target = (body.device_id or "").strip() or session["device_id"]
+    if target != session["device_id"]:
+        _require_owner(session)
     get_phone_security().set_device(target, state="REVOKED")
     gateway.record(session["device_id"], protocol.new_request_id(), policy.SENSITIVE,
                    f"revoke {target}", "success")
@@ -161,6 +215,7 @@ def remote_logout_all(request: Request, authorization: str | None = Header(defau
                       zeno_phone_session: str | None = Cookie(default=None)) -> dict[str, Any]:
     """'Log out all devices.' Sessions only -- pairings survive."""
     session = _session(request, authorization, zeno_phone_session)
+    _require_owner(session)
     from reyes_agent.phone_security import get_phone_security
 
     get_phone_security().end_sessions()
@@ -173,7 +228,8 @@ def remote_logout_all(request: Request, authorization: str | None = Header(defau
 def remote_tasks(request: Request, authorization: str | None = Header(default=None),
                  zeno_phone_session: str | None = Cookie(default=None)) -> dict[str, Any]:
     """Active work, in phone-facing states -- not internal task objects."""
-    _session(request, authorization, zeno_phone_session)
+    session = _session(request, authorization, zeno_phone_session)
+    _require_scope(session, "missions")
     from reyes_agent import task_engine
 
     mapping = {"PLANNING": "thinking", "RUNNING": "working", "VERIFYING": "testing",
@@ -192,7 +248,8 @@ def remote_tasks(request: Request, authorization: str | None = Header(default=No
 def remote_agents(request: Request, authorization: str | None = Header(default=None),
                   zeno_phone_session: str | None = Cookie(default=None)) -> dict[str, Any]:
     """Lightweight sub-agent state. Names and status only."""
-    _session(request, authorization, zeno_phone_session)
+    session = _session(request, authorization, zeno_phone_session)
+    _require_scope(session, "agents")
     try:
         from reyes_agent import agent_runtime
 
@@ -218,7 +275,8 @@ def remote_memory(request: Request, limit: int = 10,
     Deliberately narrow: recent conversation turns only, trimmed. The full
     memory store is NOT exposed -- a phone session is not a database login.
     """
-    _session(request, authorization, zeno_phone_session)
+    session = _session(request, authorization, zeno_phone_session)
+    _require_owner(session)
     from reyes_agent import web
 
     turns = []
@@ -234,7 +292,8 @@ def remote_memory(request: Request, limit: int = 10,
 def remote_website_projects(request: Request, authorization: str | None = Header(default=None),
                             zeno_phone_session: str | None = Cookie(default=None)) -> dict[str, Any]:
     """Website Studio status for the companion."""
-    _session(request, authorization, zeno_phone_session)
+    session = _session(request, authorization, zeno_phone_session)
+    _require_scope(session, "saved_routines")
     try:
         from reyes_agent import website_builder
 
@@ -264,6 +323,7 @@ def remote_website_action(body: WebsiteAction, request: Request,
     """Safe, named Website Studio commands -- phrased and routed as normal
     ZENO requests so every Website Studio rule still applies."""
     session = _session(request, authorization, zeno_phone_session)
+    _require_scope(session, "saved_routines")
     request_id = body.request_id or protocol.new_request_id()
     template = _WEBSITE_ACTIONS.get(str(body.action or "").strip().lower())
     if template is None:
@@ -283,7 +343,8 @@ def remote_website_action(body: WebsiteAction, request: Request,
 def remote_audit(request: Request, limit: int = 50,
                  authorization: str | None = Header(default=None),
                  zeno_phone_session: str | None = Cookie(default=None)) -> dict[str, Any]:
-    _session(request, authorization, zeno_phone_session)
+    session = _session(request, authorization, zeno_phone_session)
+    _require_owner(session)
     return {"entries": gateway.audit_log(limit)}
 
 

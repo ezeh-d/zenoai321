@@ -104,7 +104,7 @@ def decide_tool(
 ) -> Decision:
     """Tool-facing decision. Intent is unknown unless a real caller provides it."""
     decision = assess(signals or {}, risk=risk_for_tool(tool_name, requires_confirmation=requires_confirmation))
-    # Tool execution already publishes a durable ``tool.completed`` event.
+    # Tool execution publishes a durable typed ``tool.<outcome>`` event.
     # Keep the decision locally bounded rather than doubling Event Bus writes
     # for every low-risk tool call.
     record("action", decision.confidence, f"{tool_name}: {decision.reason}", emit=False)

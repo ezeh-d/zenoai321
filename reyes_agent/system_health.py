@@ -29,11 +29,23 @@ def snapshot() -> dict[str, Any]:
         from reyes_agent.kernel import get_kernel
         data = get_kernel().diagnostics()
         workers = data.get("workers", {})
-        healthy = bool(workers.get("workers_alive", 0)) and not data.get("shutting_down")
-        return ("ONLINE" if healthy else "DEGRADED",
-                f"Stage {data.get('stage')}; workers {workers.get('workers_alive', 0)}; queue {workers.get('queue_depth', 0)}.",
+        core_services = [item for item in data.get("services", {}).values()
+                         if item.get("stage") == 2]
+        degraded = [item for item in core_services if item.get("state") == "degraded"]
+        pending = [item for item in core_services if item.get("state") in {"registered", "running"}]
+        workers_alive = int(workers.get("workers_alive", 0) or 0)
+        if not workers_alive or data.get("shutting_down") or degraded:
+            state = "DEGRADED"
+        elif data.get("stage", 0) < 2 or pending:
+            state = "STANDBY"
+        else:
+            state = "ONLINE"
+        return (state,
+                f"Stage {data.get('stage')}; workers {workers_alive}; queue {workers.get('queue_depth', 0)}; "
+                f"core services {len(core_services) - len(pending) - len(degraded)}/{len(core_services)} ready.",
                 {"stage": data.get("stage"), "queue_depth": workers.get("queue_depth", 0),
-                 "thread_workers": workers.get("workers_alive", 0)})
+                 "thread_workers": workers_alive, "core_pending": len(pending),
+                 "core_degraded": len(degraded)})
 
     def voice():
         from reyes_agent import microphone
@@ -44,7 +56,36 @@ def snapshot() -> dict[str, Any]:
     def memory():
         from reyes_agent.memory import get_memory_manager
         data = get_memory_manager().status()
-        return "ONLINE", f"Canonical {data['canonical']}; semantic {data['semantic_backend']['state']}.", data
+        state = data.get("state", "DEGRADED")
+        return state, f"Canonical {data['canonical']} {state}; semantic {data['semantic_backend']['state']}.", data
+
+    def providers():
+        from reyes_agent import provider_manager
+        data = provider_manager.status()
+        raw = data["state"]
+        state = "ONLINE" if raw == "ONLINE" else (
+            "DEGRADED" if raw in {"FAILED", "RATE_LIMITED"} else "STANDBY"
+        )
+        return state, (
+            f"{data['online_count']}/{data['configured_count']} configured provider(s) "
+            "validated online. A key alone is not health evidence."
+        ), data
+
+    def environment():
+        from reyes_agent.runtime_environment import report
+        data = report()
+        return data["state"], data["summary"], data
+
+    def identity():
+        from reyes_agent.user_profiles import status
+        data = status()
+        raw = data["state"]
+        state = "ONLINE" if raw == "READY" else (
+            "STANDBY" if raw == "SETUP_REQUIRED" else "DEGRADED"
+        )
+        detail = (f"Owner: {data['owner']['display_name']}." if data.get("owner")
+                  else "First-run owner setup is required; no sample user was created.")
+        return state, detail, data
 
     def wake():
         from reyes_agent.wake import get_wake_engine
@@ -56,7 +97,13 @@ def snapshot() -> dict[str, Any]:
     def browser():
         from reyes_agent import browser_controller
         data = browser_controller.health()
-        return ("ONLINE" if data.get("available") else "STANDBY", data.get("reason", "Lazy browser controller."), data)
+        raw = data.get("state", "STANDBY")
+        state = raw if raw in {"ONLINE", "DEGRADED", "STANDBY"} else "STANDBY"
+        detail = ("Persistent browser context is open." if raw == "ONLINE" else
+                  "Playwright is installed and will start on a real browser request."
+                  if raw == "STANDBY" else
+                  "Browser runtime is unavailable or its last launch failed.")
+        return state, detail, data
 
     def agents():
         from reyes_agent import agent_runtime
@@ -95,7 +142,7 @@ def snapshot() -> dict[str, Any]:
         data = status()
         failed = sum(1 for item in data["services"]
                      if item["state"] == "DEGRADED" and item["enabled"])
-        state = "DEGRADED" if failed else "ONLINE"
+        state = data["state"]
         return state, (
             f"{data['enabled']}/{data['total']} enabled; "
             f"{failed} enabled service(s) degraded; no polling."
@@ -103,7 +150,8 @@ def snapshot() -> dict[str, Any]:
             "states": {item["key"]: item["state"] for item in data["services"]}}
 
     for name, operation in (
-        ("ZENO CORE", core), ("VOICE", voice), ("MEMORY", memory), ("WAKE WORD", wake),
+        ("ZENO CORE", core), ("ENVIRONMENT", environment), ("IDENTITY", identity),
+        ("MODEL PROVIDERS", providers), ("VOICE", voice), ("MEMORY", memory), ("WAKE WORD", wake),
         ("VISION/COMPUTER", integrations), ("BROWSER", browser), ("AGENTS", agents),
         ("CODING SPECIALIST", coding), ("MCP", mcp), ("LOCAL WINDOWS DEVICE", devices),
         ("ADVANCED SERVICES", advanced_services),

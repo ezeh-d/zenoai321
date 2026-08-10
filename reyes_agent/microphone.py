@@ -58,7 +58,12 @@ _KNOWN_STATUSES = {
 }
 _runtime_lock = threading.Lock()
 _runtime: dict[str, Any] = {
-    "status": "", "detail": "", "source": "", "updated_at": 0.0,
+    # Empty is not a diagnostic state. Until the browser reports real capture
+    # evidence, say precisely that permission has not yet been requested in
+    # this process rather than rendering a blank or an optimistic green light.
+    "status": MIC_PERMISSION_NOT_REQUESTED,
+    "detail": "No microphone capture evidence has been reported in this process yet.",
+    "source": "startup", "updated_at": 0.0,
     "audio_received": False, "device_id": "",
 }
 

@@ -170,8 +170,15 @@ def route(kind: str = "general") -> dict:
             "chain": list(chain), "fallback_used": True}
 
 
-def record(provider: str, latency: float, ok: bool, error: str = "") -> None:
-    """Record a REAL call. This is the only thing that produces metrics."""
+def record(provider: str, latency: float, ok: bool, error: str = "", *,
+           validated_runtime: bool = False) -> None:
+    """Record one call for routing metrics.
+
+    ``validated_runtime`` is deliberately explicit. Unit tests and synthetic
+    breaker exercises use this function too; they must not write a fake
+    ONLINE state into the durable provider registry. The actual provider seam
+    sets it only after an SDK request really succeeds or fails.
+    """
     with _lock:
         st = _stats.setdefault(provider, ProviderStats())
         was = st.breaker
@@ -213,6 +220,15 @@ def record(provider: str, latency: float, ok: bool, error: str = "") -> None:
                                "error": _stats[provider].last_error},
                               source="model_router")
         except Exception:  # noqa: BLE001 -- telemetry never breaks a turn
+            pass
+    if validated_runtime:
+        try:
+            from reyes_agent import provider_manager
+
+            provider_manager.record_runtime_result(
+                provider, ok=ok, latency_s=latency, error=error,
+            )
+        except Exception:  # noqa: BLE001 -- durable health cannot break a turn
             pass
 
 
@@ -285,9 +301,21 @@ def explain() -> dict:
             }
             for p, s in _stats.items()
         }
+    try:
+        from reyes_agent import provider_manager
+
+        validation = provider_manager.status()
+    except Exception as exc:  # noqa: BLE001 -- diagnostics remain available
+        validation = {"state": "FAILED", "providers": {},
+                      "detail": f"Provider registry unavailable: {type(exc).__name__}"}
+    # Operational means a real validation/model call succeeded and the
+    # circuit breaker is not open. Credential presence alone is CONFIGURED.
     operational = {
-        provider: configured and stats.get(provider, {}).get("healthy", True)
-        for provider, configured in avail.items()
+        provider: (
+            validation.get("providers", {}).get(provider, {}).get("state") == "ONLINE"
+            and stats.get(provider, {}).get("healthy", True)
+        )
+        for provider in avail
     }
     return {
         "active_provider": config.MODEL_PROVIDER,
@@ -300,11 +328,13 @@ def explain() -> dict:
         }.get(config.MODEL_PROVIDER, "unknown"),
         "available": avail,
         "operational": operational,
+        "validation": validation,
         "configured_count": sum(1 for v in avail.values() if v),
         "routes": {k: route(k) for k in TASK_KINDS},
         "measured": stats,
         "note": (
-            "Routing only takes effect for providers with real credentials. "
+            "Configured means a credential exists; ONLINE requires a real validation or model call. "
+            "Routing only takes effect for providers with credentials. "
             f"{sum(1 for v in avail.values() if v)} provider(s) configured -- "
             "with one, every route resolves to it and routing is a no-op."
         ),

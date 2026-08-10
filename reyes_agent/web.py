@@ -31,7 +31,7 @@ from typing import Any
 
 from fastapi import (Cookie, Depends, FastAPI, File, HTTPException, Request,
                      UploadFile, WebSocket, WebSocketDisconnect)
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -127,6 +127,22 @@ async def _no_cache(request, call_next):
     # bugs (WebView2 kept serving an OLD orb.js across restarts, so UI
     # fixes never reached the window). Force every response fresh.
     started = time.perf_counter()
+    from reyes_agent.remote_access.boundary import decision as remote_boundary
+    allowed, status_code, reason = remote_boundary(
+        request.url.path, request.headers,
+        enabled=bool(getattr(config, "REMOTE_ACCESS_ENABLED", False)),
+    )
+    if not allowed:
+        try:
+            from reyes_agent import audit
+            audit.log("remote_boundary_denied", actor="remote_client",
+                      action_type="http_request", target=request.url.path,
+                      policy="remote_surface_allowlist", outcome="denied",
+                      reason=reason)
+        except Exception:  # noqa: BLE001
+            pass
+        return JSONResponse({"detail": reason}, status_code=status_code,
+                            headers={"Cache-Control": "no-store"})
     response = await call_next(request)
     try:
         from reyes_agent.performance_monitor import record_latency
@@ -289,8 +305,19 @@ async def _on_startup() -> None:
     # under the kernel's lifecycle/shutdown authority.
     from reyes_agent.cloudflare_tunnel import get_cloudflare_tunnel
     tunnel = get_cloudflare_tunnel()
-    kernel.register_service("phone-cloudflare-tunnel", stage=STAGE_CORE,
-                            start=tunnel.start, stop=tunnel.stop)
+    tunnel_enabled = bool(getattr(config, "REMOTE_ACCESS_ENABLED", False)) and tunnel.configured()
+
+    def _start_tunnel() -> None:
+        if not tunnel.start():
+            status = tunnel.status()
+            raise RuntimeError(status.get("error") or "Cloudflare tunnel did not start")
+
+    # An unconfigured optional connector is lazy, not a perpetually pending
+    # core service. If the owner has enabled and configured it, it becomes a
+    # real Stage 2 service and a failed launch degrades health honestly.
+    kernel.register_service("phone-cloudflare-tunnel",
+                            stage=STAGE_CORE if tunnel_enabled else STAGE_LAZY,
+                            start=_start_tunnel, stop=tunnel.stop)
     kernel.register_service(
         "browser-runtime", stage=STAGE_LAZY,
         start=lambda: __import__("reyes_agent.browser_runtime", fromlist=["get_browser_runtime"]).get_browser_runtime(),
@@ -310,6 +337,8 @@ async def _on_startup() -> None:
     kernel.start_service("core-runtime", delay=1.5)
     kernel.start_service("executive-runtime", delay=1.8)
     kernel.start_service("core-services", delay=2.5)
+    if tunnel_enabled:
+        kernel.start_service("phone-cloudflare-tunnel", delay=3.0)
     import asyncio
 
     _event_loop_probe_stop = asyncio.Event()
@@ -527,6 +556,17 @@ class SimulationRequest(BaseModel):
     steps: list[str]
     risk: str = "medium"
     files: list[str] = []
+
+
+class PermissionStateRequest(BaseModel):
+    state: str
+
+
+class OwnerSetupRequest(BaseModel):
+    display_name: str
+    timezone: str = ""
+    language_preferences: list[str] | None = None
+    assistant_preferences: dict[str, Any] | None = None
 
 
 @app.post("/api/mouse")
@@ -1404,6 +1444,7 @@ def situation_room() -> dict[str, Any]:
         anticipated = {"readiness": None, "current_prediction": None,
                        "error": type(exc).__name__}
 
+    router_state = model_router.explain()
     return {
         "system": {
             "cpu": round(psutil.cpu_percent(interval=None)),
@@ -1422,8 +1463,9 @@ def situation_room() -> dict[str, Any]:
                              for m in missions[:5]]},
         "campaigns": {"active": len([c for c in camps if c["status"] in ("running", "paused")]),
                       "total": len(camps)},
-        "model": {"provider": model_router.explain()["active_provider"],
-                  "measured": model_router.explain()["measured"]},
+        "model": {"provider": router_state["active_provider"],
+                  "measured": router_state["measured"],
+                  "validation": router_state.get("validation", {})},
         "permissions": {"profile": permissions.ACTIVE_PROFILE},
         "events": event_bus.stats(),
         "pending_approvals": len(confirmation.list_pending()),
@@ -1445,6 +1487,26 @@ def model_router_state() -> dict[str, Any]:
     from reyes_agent import model_router
 
     return model_router.explain()
+
+
+@app.get("/api/providers")
+def provider_states() -> dict[str, Any]:
+    """Credential presence and real validation state, with no secret values."""
+    from reyes_agent import provider_manager
+
+    return provider_manager.status()
+
+
+@app.post("/api/providers/{provider}/validate")
+def validate_provider(provider: str) -> dict[str, Any]:
+    """Run one bounded real provider probe in FastAPI's sync worker pool."""
+    from reyes_agent import provider_manager
+
+    try:
+        result = provider_manager.validate(provider)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"provider": result, "registry": provider_manager.status()}
 
 
 @app.get("/api/agents")
@@ -1583,6 +1645,57 @@ def permissions_policy() -> dict[str, Any]:
     from reyes_agent import permissions
 
     return permissions.describe()
+
+
+@app.get("/api/onboarding/status")
+def onboarding_status() -> dict[str, Any]:
+    from reyes_agent import microphone, provider_manager, user_profiles
+
+    identity = user_profiles.status()
+    return {
+        **identity,
+        "steps": {
+            "owner": "READY" if identity.get("owner") else "REQUIRED",
+            "local_permissions": "READY",
+            "microphone": microphone.runtime_status().get("status", "NOT_CONFIGURED"),
+            "voice": "CONFIGURED" if (config.ELEVENLABS_API_KEY or config.TTS_PROVIDER == "sapi") else "NOT_CONFIGURED",
+            "ai_provider": provider_manager.status()["state"],
+            "optional_integrations": "OPTIONAL",
+            "security": "READY",
+        },
+    }
+
+
+@app.post("/api/onboarding/owner")
+def onboarding_owner(req: OwnerSetupRequest) -> dict[str, Any]:
+    from reyes_agent import user_profiles
+
+    try:
+        profile = user_profiles.create_owner(
+            req.display_name, timezone=req.timezone,
+            language_preferences=req.language_preferences,
+            assistant_preferences=req.assistant_preferences,
+        )
+    except PermissionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"state": "READY", "owner": profile}
+
+
+@app.post("/api/permissions/{capability}")
+def update_permission(capability: str, req: PermissionStateRequest) -> dict[str, Any]:
+    """Persist a desktop-only owner choice used by the real execution gate."""
+    from reyes_agent import permissions
+
+    try:
+        effective = permissions.set_state(capability, req.state)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"capability": capability, "state": effective,
+            "policy": permissions.describe()}
 
 
 @app.get("/api/confidence")
@@ -2349,6 +2462,18 @@ def phone_set_device(device_id: str, state: str, request: Request) -> dict[str, 
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
 
+
+@app.post("/api/phone/admin/devices/{device_id}/role/{role}")
+def phone_set_device_role(device_id: str, role: str, request: Request) -> dict[str, bool]:
+    """Desktop-only explicit owner/trusted/guest/service role assignment."""
+    _loopback(request)
+    from reyes_agent.phone_security import get_phone_security
+    try:
+        get_phone_security().set_role(device_id, role)
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
 @app.post("/api/phone/pair/options")
 def phone_pair_options(req: PhonePairRequest, request: Request) -> dict[str, Any]:
     from reyes_agent.phone_security import get_phone_security
@@ -2416,6 +2541,15 @@ async def phone_events(websocket: WebSocket) -> None:
     from reyes_agent import event_bus
     from reyes_agent.phone_security import get_phone_security
     from reyes_agent.remote_access import domains, policy
+    from reyes_agent.remote_access.boundary import decision as remote_boundary
+
+    allowed, _, _ = remote_boundary(
+        websocket.url.path, websocket.headers,
+        enabled=bool(getattr(config, "REMOTE_ACCESS_ENABLED", False)),
+    )
+    if not allowed:
+        await websocket.close(code=4403)
+        return
 
     # ORIGIN CHECK. A WebSocket upgrade is not protected by CORS -- the
     # browser performs it regardless of origin -- so without this any page
@@ -2479,6 +2613,9 @@ def _lan_ip() -> str:
 
 def main() -> None:
     import uvicorn
+    from reyes_agent.runtime_environment import require_safe_startup
+
+    require_safe_startup()
 
     print(f"{config.ASSISTANT_NAME} panel:")
     print(f"  this machine -> http://127.0.0.1:8765")

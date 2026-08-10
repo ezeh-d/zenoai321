@@ -92,14 +92,21 @@ class ZenoKernel:
             service = self._services.get(name)
             if service is None or service.stage != STAGE_LAZY:
                 raise KeyError(f"No lazy service named '{name}'.")
+            self._stage = max(self._stage, STAGE_LAZY)
         self._schedule_service(name)
 
     def start_service(self, name: str, *, delay: float = 0.0) -> None:
         """Schedule a registered service without exposing scheduler internals."""
         self.start_interface()
         with self._lock:
-            if name not in self._services:
+            service = self._services.get(name)
+            if service is None:
                 raise KeyError(f"No kernel service named '{name}'.")
+            # The web startup intentionally schedules core services with
+            # staggered delays instead of calling start_core() all at once.
+            # Advancing here keeps the lifecycle diagnostic truthful for that
+            # supported path; registration alone still never advances it.
+            self._stage = max(self._stage, service.stage)
         self._schedule_service(name, delay=delay)
 
     def _schedule_service(self, name: str, *, delay: float = 0.0) -> None:

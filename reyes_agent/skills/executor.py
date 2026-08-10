@@ -61,7 +61,7 @@ class Run:
 def _call_tool(action: str, arguments: dict[str, Any]) -> tuple[bool, str]:
     """One step, through the ordinary gated tool path."""
     try:
-        from reyes_agent.tools import run_tool
+        from reyes_agent.tools import classify_tool_result, run_tool
     except Exception as exc:  # noqa: BLE001
         return False, f"tool registry unavailable: {type(exc).__name__}: {exc}"
     try:
@@ -69,13 +69,16 @@ def _call_tool(action: str, arguments: dict[str, Any]) -> tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
     text = str(result)
-    # `run_tool` reports refusals as text rather than raising, so a step that
-    # was blocked must not be recorded as a success.
-    lowered = text.lower()
-    blocked = any(marker in lowered for marker in
-                  ("not allowed", "permission", "needs your", "requires confirmation",
-                   "refused", "blocked"))
-    return (not blocked), text
+    outcome = classify_tool_result(result)
+    if outcome["outcome"] == "completed":
+        return True, text
+    if outcome["outcome"] == "waiting":
+        return False, f"waiting, not completed: {text}"
+    if outcome["outcome"] == "failed":
+        return False, text
+    # A normal return may be useful data, but it is not postcondition proof.
+    # A reusable workflow must not advance on an unverified mutation.
+    return False, f"unverified result: {text}"
 
 
 def execute(skill: Skill, *, cancel_check: Callable[[], None] | None = None) -> Run:

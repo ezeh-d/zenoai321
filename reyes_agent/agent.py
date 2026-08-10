@@ -113,6 +113,26 @@ def run_agent(
     except Exception:
         pass
 
+    # Skills stay lazy. An explicit skill/routine request or a real trigger
+    # match exposes only the small durable-skill control group. The match is
+    # context for the existing planner, never an automatic execution bypass.
+    try:
+        from reyes_agent.skills import manager as skill_manager
+
+        skill_words = ("skill", "routine", "reusable workflow", "learn my workflow",
+                       "learned workflow", "automation recipe")
+        matched_skill = skill_manager.find_for(latest) if latest else None
+        if matched_skill or any(word in latest.casefold() for word in skill_words):
+            enabled_groups.add("skills")
+            if matched_skill:
+                system += ("\n\nA real owner-approved persisted skill matches this request: "
+                           f"{matched_skill.name} ({matched_skill.skill_id}). Use skill_run "
+                           "if the user's request is to execute it; never imitate its result.")
+            if config.MODEL_PROVIDER != "ollama":
+                tools = tool_definitions(groups=enabled_groups)
+    except Exception:
+        pass
+
     # --- observers ---------------------------------------------------------
     # Both are strictly best-effort: a broken diagnostic must never cost the
     # user a reply, so every call goes through these two helpers.
@@ -160,6 +180,11 @@ def run_agent(
     except Exception:  # noqa: BLE001
         memory_context = system_prompt_block()
     system = config.SYSTEM_PROMPT + memory_context
+    try:
+        from reyes_agent.user_profiles import owner_context
+        system += owner_context()
+    except Exception:  # noqa: BLE001 -- onboarding context is optional
+        pass
 
     # Episodic context is queried only when explicitly enabled and the user is
     # asking about prior computer activity. It runs in this managed agent turn,

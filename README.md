@@ -25,11 +25,17 @@ python doctor.py        # see what's installed / what each mode needs
 Or run a mode directly:
 
 ```bash
-python run.py                       # terminal assistant
-python main.py                      # graphical HUD
-python server.py                    # mobile bridge -> http://<your-ip>:8765
-python -m mobile.telegram_bridge    # control from Telegram
+python run.py                       # compatibility alias for the ZENO terminal
+python main.py                      # compatibility alias for the ZENO Mini Orb
+python -m reyes_agent.desktop_app   # normal Windows Mini Orb + lazy dashboard
+python -m reyes_agent.web           # loopback-only backend for diagnostics
+python -m reyes_agent.telegram_bridge # authenticated Telegram integration
 ```
+
+Remote control is never exposed by opening port 8765 or browsing to a LAN
+address. The Phone Companion uses the separately enabled Cloudflare Tunnel,
+approved WebAuthn device, expiring session, scopes, policy checks and audit
+trail. The legacy unauthenticated LAN bridge has been retired.
 
 ## Give it a brain
 
@@ -47,7 +53,7 @@ Type `capabilities` inside REYES for the live list. Highlights:
 - **deep_recall** relevant past notes; **remember** new ones
 - Control the desktop, browse, scaffold & run code
 - **see_screen** (OCR), defensive **security** tools (`sec_*`)
-- Talk to it from your **phone** via the web bridge or Telegram
+- Talk to it from your **phone** via the authenticated Phone Companion or Telegram
 
 ## Docs & tests
 

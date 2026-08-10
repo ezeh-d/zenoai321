@@ -31,6 +31,8 @@ from reyes_agent import config
 
 PENDING_APPROVAL = "PENDING_APPROVAL"
 TRUSTED, LOCKED, REVOKED, EXPIRED = "TRUSTED", "LOCKED", "REVOKED", "EXPIRED"
+OWNER, TRUSTED_USER, GUEST, SERVICE = "OWNER", "TRUSTED_USER", "GUEST", "SERVICE"
+DEVICE_ROLES = {OWNER, TRUSTED_USER, GUEST, SERVICE}
 DEFAULT_SCOPES = {"status", "talk", "missions", "agents", "saved_routines"}
 PAIR_TTL_S, CHALLENGE_TTL_S, SESSION_TTL_S = 300, 300, 1800
 _DB = Path(os.environ.get("LOCALAPPDATA", str(config.PROJECT_ROOT))) / "ZENO" / "phone" / "devices.sqlite"
@@ -55,6 +57,9 @@ class PhoneSecurity:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path, timeout=5)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
     @contextmanager
@@ -70,6 +75,7 @@ class PhoneSecurity:
     def _init_db(self) -> None:
         with self._connection() as conn:
             conn.executescript("""
+            CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS pairs(token_hash TEXT PRIMARY KEY, manual_hash TEXT UNIQUE,
               expires REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, cancelled INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS devices(device_id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -83,7 +89,12 @@ class PhoneSecurity:
             CREATE TABLE IF NOT EXISTS commands(device_id TEXT NOT NULL, command_id TEXT NOT NULL,
               nonce_hash TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(device_id,command_id), UNIQUE(device_id,nonce_hash));
             CREATE TABLE IF NOT EXISTS audit(ts REAL NOT NULL, event TEXT NOT NULL, device_id TEXT, detail TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS device_roles(device_id TEXT PRIMARY KEY, role TEXT NOT NULL,
+              updated REAL NOT NULL, FOREIGN KEY(device_id) REFERENCES devices(device_id) ON DELETE CASCADE);
+            CREATE UNIQUE INDEX IF NOT EXISTS one_owner_device ON device_roles(role) WHERE role='OWNER';
             """)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(1,?)",
+                         (time.time(),))
 
     def _audit(self, event: str, device_id: str | None = None, **detail: Any) -> None:
         with self._connection() as conn:
@@ -177,6 +188,8 @@ class PhoneSecurity:
             conn.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
                 device_id, subject["name"], _b64(verified.credential_id), verified.credential_public_key,
                 verified.sign_count, PENDING_APPROVAL, json.dumps(sorted(DEFAULT_SCOPES)), time.time(), None, None, None))
+            conn.execute("INSERT INTO device_roles(device_id,role,updated) VALUES(?,?,?)",
+                         (device_id, TRUSTED_USER, time.time()))
         self._audit("device_pending", device_id, name=subject["name"])
         return device_id
 
@@ -218,7 +231,12 @@ class PhoneSecurity:
 
     def session(self, token: str, csrf: str = "", require_csrf: bool = False) -> sqlite3.Row:
         with self._connection() as conn:
-            row = conn.execute("SELECT s.*,d.state,d.name,d.scopes FROM sessions s JOIN devices d ON d.device_id=s.device_id WHERE s.token_hash=?", (_hash(token),)).fetchone()
+            row = conn.execute(
+                "SELECT s.*,d.state,d.name,d.scopes,COALESCE(r.role,?) AS role "
+                "FROM sessions s JOIN devices d ON d.device_id=s.device_id "
+                "LEFT JOIN device_roles r ON r.device_id=d.device_id WHERE s.token_hash=?",
+                (TRUSTED_USER, _hash(token)),
+            ).fetchone()
             if not row or row["expires"] < time.time() or row["state"] != TRUSTED:
                 raise PermissionError("Phone session expired, locked, or revoked.")
             if require_csrf and (not csrf or not secrets.compare_digest(row["csrf_hash"], _hash(csrf))):
@@ -229,8 +247,28 @@ class PhoneSecurity:
 
     def devices(self) -> list[dict[str, Any]]:
         with self._connection() as conn:
-            rows = conn.execute("SELECT device_id,name,state,scopes,created,last_auth,last_activity,revoked_at FROM devices ORDER BY created DESC").fetchall()
+            rows = conn.execute(
+                "SELECT d.device_id,d.name,d.state,d.scopes,d.created,d.last_auth,d.last_activity,d.revoked_at,"
+                "COALESCE(r.role,?) AS role FROM devices d LEFT JOIN device_roles r "
+                "ON r.device_id=d.device_id ORDER BY d.created DESC", (TRUSTED_USER,)
+            ).fetchall()
         return [dict(r) | {"scopes": json.loads(r["scopes"])} for r in rows]
+
+    def set_role(self, device_id: str, role: str) -> None:
+        role = str(role or "").strip().upper()
+        if role not in DEVICE_ROLES:
+            raise ValueError("Invalid device role")
+        self._device(device_id)
+        try:
+            with self._connection() as conn:
+                conn.execute(
+                    "INSERT INTO device_roles(device_id,role,updated) VALUES(?,?,?) "
+                    "ON CONFLICT(device_id) DO UPDATE SET role=excluded.role,updated=excluded.updated",
+                    (device_id, role, time.time()),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("An OWNER phone is already assigned; demote it first.") from exc
+        self._audit("device_role_changed", device_id, role=role)
 
     def set_device(self, device_id: str, state: str | None = None, scopes: set[str] | None = None) -> None:
         if state and state not in {TRUSTED, LOCKED, REVOKED, EXPIRED}:
