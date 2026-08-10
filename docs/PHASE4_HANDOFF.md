@@ -19,18 +19,24 @@ all flag-gated and mostly off.
 
 ## 2. Architecture after Phase 4
 
-Six new subsystems, all lazy, all off the startup path:
+Fifteen new modules, all lazy, all off the startup path:
 
 ```
-skills/      OBSERVED → LEARNED → APPROVED, bounded by an immutable constitution
-missions/    durable, restart-safe, SQLite-checkpointed
-health/      psutil metrics + a watchdog with circuit breakers
-security/ai/       provenance-based guardrails (trust_context + guardrails)
-security/privacy/  destination-aware detection and redaction
-security/secrets/  OS credential store first, environment second
+skills/                   OBSERVED → LEARNED → APPROVED, bounded by a constitution
+missions/                 durable, restart-safe, SQLite-checkpointed
+health/                   psutil metrics + a watchdog with circuit breakers
+security/ai/              provenance-based guardrails (trust_context + guardrails)
+security/privacy/         destination-aware detection and redaction
+security/secrets/         OS credential store first, environment second
 computer/agent_backends/  the cheapest-first technique ladder
 computer/lifecycle.py     9 lifecycle stages on the EXISTING event bus
 vision/models/            hardware-measured vision tier routing
+vision/camera/            cv2 motion gating; off by default
+tools/marketplace/        MCP trust states; discovery is not trust
+research/crawler/         bounded, robots-respecting extraction with citations
+knowledge/vector/         filter-by-metadata then BM25
+audio/noise/              spectral subtraction before VAD
+audio/diarization/        turn segmentation without invented speakers
 web/ + netlify.toml       static public surface, no server-side code
 ```
 
@@ -68,8 +74,14 @@ Cold import of the full core is still **1.25s** — none of this loads until use
 `reyes_agent/security/secrets/{__init__,manager}.py`
 `reyes_agent/computer/{lifecycle.py,agent_backends/{__init__,ladder}.py}`
 `reyes_agent/vision/models/{__init__,router}.py`
+`reyes_agent/vision/camera/{__init__,sensor}.py`
+`reyes_agent/tools/marketplace/{__init__,trust,registry}.py`
+`reyes_agent/research/{__init__,crawler/{__init__,limits,manager}}.py`
+`reyes_agent/knowledge/vector/{__init__,index}.py`
+`reyes_agent/audio/noise/{__init__,suppressor}.py`
+`reyes_agent/audio/diarization/{__init__,router}.py`
 `web/index.html`, `netlify.toml`, `scripts/build-config.js`
-`tests/test_phase4_{skills,security,missions,health,routing}.py`
+`tests/test_phase4_{skills,security,missions,health,routing,subsystems}.py`
 
 ## 9. Files modified
 
@@ -83,7 +95,9 @@ Cold import of the full core is still **1.25s** — none of this loads until use
 
 `ZENO_AI_GUARDRAILS_ENABLED`, `ZENO_TEMPORAL_ENABLED`, `ZENO_AGENT_TARS_ENABLED`,
 `ZENO_VISION_GROUNDING_ENABLED`, `ZENO_MOONDREAM_ENABLED`, `ZENO_QWEN_VL_ENABLED`,
-`ZENO_CLOUD_VISION_ENABLED`. Netlify build-time: `ZENO_PUBLIC_API_URL` (public).
+`ZENO_CLOUD_VISION_ENABLED`, `ZENO_CAMERA_ENABLED`,
+`ZENO_NOISE_SUPPRESSION_ENABLED`, `ZENO_DIARIZATION_ENABLED`.
+Netlify build-time: `ZENO_PUBLIC_API_URL` (public).
 
 ## 13. Netlify configuration — WORKING (as an artifact)
 
@@ -106,7 +120,7 @@ status. Leaving it unset is safe: the page shows OFFLINE.
 
 ## 16. Feature flags
 
-All seven above default **off**. Rungs 1–5 of the computer ladder and the
+All ten above default **off**. Rungs 1–5 of the computer ladder and the
 ACCESSIBILITY vision tier need no flag and work today.
 
 ## 17–18. Tests executed and results
