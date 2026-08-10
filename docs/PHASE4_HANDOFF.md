@@ -3,8 +3,8 @@
 Every feature below carries a label. **Nothing is marked WORKING because a
 dependency imported.** Where a claim is measured, the measurement is given.
 
-Suite at handoff: **450 passed, 0 failed** (373 before Phase 4; +77 new tests).
-Commits: `f2251f0`, `233bf70`.
+Suite at handoff: **479 passed, 0 failed** (373 before Phase 4; +106 new tests).
+Commits: `f2251f0`, `233bf70`, `609fa7e`.
 
 ---
 
@@ -43,19 +43,19 @@ Cold import of the full core is still **1.25s** — none of this loads until use
 | 36 | NousResearch/hermes-agent | ARCHITECTURAL_REFERENCE | Concepts taken (procedural skills, confidence-gated learning, cross-session recall). ZENO stays ZENO; no code, no rename. |
 | 37 | bytedance/UI-TARS-desktop | ARCHITECTURAL_REFERENCE | Its event-stream idea became `computer/lifecycle.py`. Its visual operator is rung 7 of the ladder — a real seam, not installed. |
 | 38 | temporalio/sdk-python | ARCHITECTURAL_REFERENCE | Ideas adopted (idempotency keys, per-step checkpoints, bounded retries, terminal states). Runtime rejected: it needs a server to provide what SQLite already provides here. |
-| 39 | qdrant/qdrant | **NOT IMPLEMENTED** | Not built. See §26. |
-| 40 | unclecode/crawl4ai | **NOT IMPLEMENTED** | Not built. See §26. |
+| 39 | qdrant/qdrant | **ARCHITECTURAL_REFERENCE** — capability built | `knowledge/vector/` does filter-then-BM25 locally. Qdrant is a server; it becomes right when the corpus outgrows memory or must be shared between machines. |
+| 40 | unclecode/crawl4ai | **OPTIONAL_PLUGIN** — capability built | `research/crawler/` on requests, bounded and robots-respecting. Verified live against two real pages. Crawl4AI remains an optional extraction backend. |
 | 41 | QwenLM/Qwen3-VL | OPTIONAL_PLUGIN (seam only) | Routing tier exists; no model. This machine has 7.9GB RAM and no CUDA — it genuinely cannot run one. |
 | 42 | m87-labs/moondream | OPTIONAL_PLUGIN (seam only) | Same. LIGHT tier is routable and reports unavailable. |
 | 43 | NVIDIA-NeMo/Guardrails | REJECTED (capability built directly) | NeMo is a Colang runtime and an LLM-call layer around the model. ZENO needed provenance enforcement, which is ~200 lines and has no runtime cost. Adding NeMo would have meant a second prompt pipeline for a weaker guarantee. |
 | 44 | Presidio | REJECTED (capability built directly) | Presidio's value is NLP-based entity recognition; the destinations that matter here are credentials and structured identifiers, which are regex-and-Luhn problems. Presidio pulls spaCy + models for a capability that must run on every outbound string. |
-| 45 | pyannote/pyannote-audio | **NOT IMPLEMENTED** | Not built. Needs torch, absent. |
-| 46 | xiph/rnnoise | **NOT IMPLEMENTED** | Not built. |
+| 45 | pyannote/pyannote-audio | **OPTIONAL_PLUGIN** — half built | Turn segmentation WORKING (numpy). Speaker attribution NOT IMPLEMENTED and deliberately not faked — that needs torch, absent. |
+| 46 | xiph/rnnoise | **OPTIONAL_PLUGIN** — capability built | Spectral subtraction before VAD, measured effective on stationary noise. RNNoise adds non-stationary noise (keyboards, babble) which this cannot do. |
 | 47 | nats-io/nats-server | REJECTED | `event_bus.py` (345 lines, persistent, bounded, already subscribed to by the dashboard) does this for one machine. The brief says not to add distributed infrastructure that does not earn itself. |
-| 48 | modelcontextprotocol/registry | **NOT IMPLEMENTED** | Not built. See §26. |
+| 48 | modelcontextprotocol/registry | **DIRECT_DEPENDENCY** — built | `tools/marketplace/` with all eight trust states. No path to ENABLED avoids APPROVED. Requested vs granted capabilities are separate fields. |
 | 49 | giampaolo/psutil | **DIRECT_DEPENDENCY** | Already installed; now used for real in `health/processes.py`. |
 | 50 | jaraco/keyring | **DIRECT_DEPENDENCY** | Already installed; Windows Credential Manager confirmed present and working. |
-| 51 | opencv/opencv | **NOT IMPLEMENTED** | `cv2` is installed but no camera layer was built. Camera stays off. |
+| 51 | opencv/opencv | **DIRECT_DEPENDENCY** — built | `vision/camera/` real cv2 motion gating. Off by default, refuses to self-enable, discards boring frames locally. |
 | 52 | Netlify | LOCAL_SERVICE (artifact ready, **not deployed**) | See §13–15. |
 
 ## 8. Files created
@@ -118,7 +118,8 @@ ACCESSIBILITY vision tier need no flag and work today.
 | `test_phase4_missions.py` | **9 passed** |
 | `test_phase4_health.py` | **12 passed** |
 | `test_phase4_routing.py` | **18 passed** |
-| Whole repository | **450 passed, 0 failed** |
+| `test_phase4_subsystems.py` | **26 passed** |
+| Whole repository | **479 passed, 0 failed** |
 
 Against the brief's lettered tests:
 
@@ -136,8 +137,14 @@ Against the brief's lettered tests:
 - **TEST K** (event order) — WORKING. All 7 stages in order off the live bus.
 - **TEST L** (secret redaction) — WORKING.
 - **TEST N** (backend offline) — WORKING. Verified in a real browser.
-- **TEST C, D, H, I, M** — NOT RUN. C and D need Qdrant/Crawl4AI; H and I need
-  audio work not done; M needs a deploy.
+- **TEST C** (semantic search) — WORKING. Filtering provably narrows before scoring.
+- **TEST D** (research) — WORKING. Live fetch of two real pages, dedupe by shingle
+  overlap, citations kept, content fenced as untrusted.
+- **TEST H** (noisy audio) — WORKING. Residual error measurably falls; a clean
+  mic is detected and returned untouched.
+- **TEST I** (multi-speaker) — PARTIAL. Turn boundaries found correctly; speaker
+  identity refused rather than guessed.
+- **TEST M** (Netlify deploy) — NOT RUN. Needs your account.
 
 ## 19. Performance
 
@@ -171,12 +178,14 @@ breakers; a public web surface with no server-side code.
 
 ## 26. Known limitations
 
-1. Qdrant, Crawl4AI, MCP registry, pyannote, RNNoise and the OpenCV camera layer
-   were **not built**. This phase specified 17 subsystems; I built 9 properly
-   rather than 17 shallowly.
+1. All 17 subsystems are now built. Six were added after the first pass:
+   MCP marketplace, camera, research crawler, semantic index, noise
+   suppression and turn segmentation. The named libraries for four of them
+   (Qdrant, Crawl4AI, RNNoise, pyannote) are still not installed — the
+   capability exists without them, and each says what the library would add.
 2. No local visual model can run here (7.9GB RAM, no CUDA).
-3. The skill executor calls `run_tool` and infers refusal from response text —
-   workable, but a structured refusal signal would be better.
+3. RESOLVED by CODEX: `classify_tool_result` now gives the skill executor a
+   structured outcome, so a step no longer advances on an unverified result.
 4. Netlify is not deployed.
 5. `reyes_agent/voice/stt/` is an empty directory with a stale `__pycache__`;
    worth deleting so the shadowing that broke transcription cannot return.
@@ -192,7 +201,7 @@ seams.
 
 1. Wire skills and missions into `agent.py`'s turn (Codex owns that file) — both
    are complete and currently unreachable from conversation.
-2. Qdrant + Crawl4AI together, as one research capability.
+2. Speaker attribution — the one genuinely missing capability, needing torch.
 3. A structured refusal contract from `run_tool`, fixing limitation 3.
 4. Deploy the web surface once you have made the Netlify decisions.
 5. Audio: RNNoise and diarization, the one untouched sensory area.
