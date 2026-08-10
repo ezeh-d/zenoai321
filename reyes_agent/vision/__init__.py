@@ -9,10 +9,11 @@ schema, so the computer controller never cares which one answered.
 
 from __future__ import annotations
 
-from reyes_agent.vision import elements, grounding, parser, scene_state, screen_capture
+from reyes_agent.vision import (coverage, elements, grounding, parser,
+                                scene_state, screen_capture)
 from reyes_agent.vision.elements import Element, Scene
 
-__all__ = ["Element", "Scene", "elements", "grounding", "parser",
+__all__ = ["Element", "Scene", "coverage", "elements", "grounding", "parser",
            "scene_state", "screen_capture", "observe", "find"]
 
 

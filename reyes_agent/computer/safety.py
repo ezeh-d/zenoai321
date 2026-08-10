@@ -40,6 +40,10 @@ _REFUSE = (
 # Allowed, but only after the owner explicitly says yes.
 _APPROVE = (
     r"\bdelete\b", r"\bremove\b", r"\buninstall\b", r"\bdiscard\b",
+    # Throwing away unsaved work. Found by running a real GUI task: the
+    # button Windows actually shows says "Don't save", which matched nothing
+    # here and was therefore classified as an ordinary click.
+    r"\bdon'?t save\b", r"\bwithout saving\b", r"\bno,? don'?t\b",
     r"\bempty (?:the )?(?:trash|recycle bin)\b",
     r"\bsign out\b", r"\blog out\b", r"\brevoke\b",
     r"\bpublish\b", r"\bdeploy\b", r"\bsend\b", r"\bpost\b", r"\bsubmit\b",

@@ -28,12 +28,78 @@ overwrite.
 ## ACTIVE WORK
 
 **Agent:** CLAUDE
-**Task:** — (Remote Access phase 1 landed; files released)
-**Status:** IDLE — files below are now free for CODEX
+**Task:** Phase 1 limitations — closed. See below.
+**Status:** IDLE — all files released
 
 **Released by CLAUDE (safe to edit):**
 `reyes_agent/remote_access/*`, `docs/MOBILE_API.md`, `.env.example`,
-`tests/test_remote_access.py`
+`tests/test_remote_access.py`, `reyes_agent/vision/*`,
+`reyes_agent/computer/*`, `tests/test_phase1_integrations.py`
+
+### Phase 1 limitations closed (CLAUDE)
+
+Four limitations were open against Phase 1. Three are fixed and one is
+handed over; along the way the work turned up two real defects in my own
+code that no test had caught.
+
+1. **The agentic loop had never driven a real multi-step GUI task.**
+   It has now, end to end, against real Notepad: launch → focus → UIA read →
+   type → verify → close. **14/14 checks.** Script kept out of the repo; the
+   durable assertions are in `tests/test_phase1_integrations.py`.
+
+2. **`pyautogui` moved the real cursor with no isolation.**
+   New `computer/input_guard.py`. ZENO will not take the pointer within 4s of
+   the owner touching it, always restores the cursor to where it was, keeps
+   the corner failsafe on, and supports mid-run revoke. A blocked step now
+   reports `blocked_on_owner` — waiting is not failing.
+   Plus `focus_moved`: input is refused outright if the foreground window
+   changed since the scene was read, so grounded coordinates can never land
+   in a window ZENO has not looked at.
+
+3. **UIA saw only accessible apps.** Now it says *why*, from real signals
+   rather than guesswork — `vision/coverage.py` reads DWM cloak state and
+   IsIconic. Measured across every visible window: every collapsed tree was
+   shell-cloaked (state 2), every healthy tree was not — no exceptions.
+   MINIMIZED / SUSPENDED / OPAQUE / SLOW each carry their own remedy, and an
+   unreadable window is never again summarised as an empty one.
+
+4. **`agents/router.decide()` is still not consumed by `agent.py`.**
+   NOT FIXED — `agent.py` is CODEX's. Handing this one over; it is a
+   two-line wire-up at the point the turn picks a specialist.
+
+**Two defects found by measuring rather than reading:**
+
+- **A UIA scan took 86.7 seconds.** `SCAN_TIMEOUT_S` only ever guarded the
+  element loop, and the time was being spent inside `FindAllBuildCache`
+  before the loop began — so the loop hit its deadline on iteration zero and
+  returned an EMPTY window. ChatGPT was reported as having nothing on screen
+  while publishing 4,300 elements. Fixed by pushing type+onscreen filters
+  into the query (it was enumerating 4,300 elements to discard 3,900):
+
+  | window | before | after |
+  |---|---|---|
+  | ChatGPT | 37.6s / 0 kept | **2.8s / 103 kept** |
+  | Claude | 12.1s | **1.3s** |
+  | all 15 windows | 152.3s | **3.1s** |
+
+  Interactive-element counts are unchanged (81 → 81 on the same Chrome
+  window), so nothing actionable was lost. Minimized/suspended windows now
+  cost 0ms instead of 1.6s because the cheap flags are checked first.
+
+- **"Don't save" was classified ORDINARY.** `safety.py` gated `discard` but
+  not the words Windows actually prints on the button, so an autonomous loop
+  would have clicked away unsaved work without asking. Found by running the
+  real task, not by reading the file. Now APPROVAL, with `Save`/`OK`/`Cancel`
+  verified still ungated.
+
+**Also gained:** ZENO can read what a text box *contains*, not just its label
+(`Element.value`, via the UIA Value pattern — verified live against Notepad,
+where the typed text appears in Value and nowhere in Name), and
+`computer/window.py` can actually bring a window forward, which is what
+coverage's MINIMIZED/SUSPENDED remedies had been prescribing with nothing to
+carry them out.
+
+`tests/test_phase1_integrations.py`: **25 → 38**, all passing.
 
 ---
 
@@ -126,6 +192,74 @@ key-term prompting.
 ---
 
 ## ISSUES FOUND
+
+### P0 — VOICE TRANSCRIPTION IS BROKEN RIGHT NOW (CODEX, please take)
+
+**Issue:** `reyes_agent/voice/stt.py` (module) and `reyes_agent/voice/stt/`
+(new package) both exist. Python resolves the package, so the module is
+unreachable and everything in it — `transcribe_result`, `STTError`,
+`transcribe`, `_client` — is gone from `reyes_agent.voice.stt`.
+
+The new package exports only `status`, so this looks like an accidental
+namespace collision rather than an intended replacement.
+
+**Why it is P0:** `web.py:1115` and `web.py:1162` import `transcribe_result`
+and `STTError` *inside the request handlers*. The app therefore starts
+perfectly clean and only fails at the moment the owner speaks — ZENO's
+primary interface. It will not show up in a smoke test.
+
+Repro:
+```
+.venv/Scripts/python.exe -c "from reyes_agent.voice.stt import transcribe_result"
+ImportError: cannot import name 'transcribe_result' from 'reyes_agent.voice.stt'
+```
+
+Also fails: `tests/test_confidence_engine.py` (ImportError at import time, so
+the whole file stops running) and `tests/test_speech_repair.py::test_deepgram_request_has_a_real_network_timeout_and_no_retry`
+(`stt._client` no longer exists).
+
+**Severity:** P0 — primary interface, silent until used
+**Found by:** CLAUDE (full-suite regression sweep)
+**Suggested owner:** CODEX (the package is yours and in flight — I have NOT
+touched it)
+**Suggested fix:** rename the new package so it stops shadowing, e.g.
+`reyes_agent/voice/stt_availability.py` holding `status()`, leaving `stt.py`
+intact. Merging instead would work but means moving all of `stt.py` into
+`stt/__init__.py` and keeping `_client` patchable for the tests.
+
+---
+
+### Naming collision in `reyes_agent/computer/` (low, but worth settling now)
+
+**Issue:** `reyes_agent/computer/windows/pywinauto_backend.py` (CODEX) and
+`reyes_agent/computer/window.py` (CLAUDE) now sit side by side. Near-identical
+names, overlapping purpose — `windows.windows()` enumerates top-level windows
+via pywinauto; `window.find_by_title()/activate()` does it in plain ctypes
+with no optional dependency.
+
+Not a bug, but `from reyes_agent.computer import window, windows` is a trap.
+**Suggested:** keep both, rename one — `window.py` is the doer (focus,
+activate, find), `windows/` is a backend adapter, so something like
+`computer/backends/pywinauto.py` would read better. CODEX's call; I will
+rename mine instead if that is easier.
+**Found by:** CLAUDE
+
+---
+
+**RESOLVED — Phase 2 test failures were mine, not CODEX's.** I earlier saw 3
+failures in `tests/test_phase2_foundations.py` (subprocess capture bound, MCP
+stdio round trip, heavy-SDK import check). They are **load-induced timeouts,
+not defects**: the file passes 26/26 standalone, twice consecutively, and did
+so again in the full sweep. Measured while diagnosing —
+`coding_system/interpreter_client.py::_run_bounded` returns correctly in
+**1.3s** standalone (rc=1, stdout capped at 1048576, `limited=True`), and no
+Phase 2 module pulls a heavy SDK (`memory` 0.18s, `wake` 4.22s,
+`coding_system` 0.57s, `devices` 0.36s, `tools.mcp.manager` 4.22s). The
+drain-thread design is correct and prevents pipe deadlock. Only note: the
+30s import budget saw 16.9s wall under load — real but comfortable headroom
+is thinner than it looks.
+
+---
 
 **Issue:** `test_phase21_runtime.py::test_browser_runtime_returns_at_its_deadline_without_blocking_caller`
 is a timing flake — measured 1 failure in 5 runs. Asserts `< 0.12s` wall

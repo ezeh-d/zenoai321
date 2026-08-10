@@ -54,6 +54,13 @@ def test_uia_returns_real_structured_elements_fast() -> None:
     assert elapsed < 8.0, f"a screen parse took {elapsed:.1f}s -- that is the slow COM path"
     if scene.error:
         return                     # headless/locked session: nothing to assert against
+    if not scene.reliable:
+        # Whatever happens to be in front during a test run is not ours to
+        # choose -- it may be minimized or a suspended UWP app. An honest
+        # "I could not read this, and here is why" is a correct outcome,
+        # not an empty window, so there is nothing to assert about elements.
+        assert scene.coverage.reason and scene.coverage.remedy
+        return
     assert scene.elements, "a real window should expose elements"
     for element in scene.elements:
         assert element.type and element.position
