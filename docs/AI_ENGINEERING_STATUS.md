@@ -28,8 +28,43 @@ overwrite.
 ## ACTIVE WORK
 
 **Agent:** CLAUDE
-**Task:** Phase 1 limitations — closed. See below.
-**Status:** IDLE — all files released
+**Task:** PHASE 4 — skills, missions, AI security, watchdog, backend ladder, web
+**Status:** IN PROGRESS
+
+**CLAIMED by CLAUDE (please do not write these):**
+`reyes_agent/skills/*`, `reyes_agent/missions/*`, `reyes_agent/health/*`,
+`reyes_agent/security/ai/*`, `reyes_agent/security/privacy/*`,
+`reyes_agent/security/secrets/*`, `reyes_agent/computer/agent_backends/*`,
+`reyes_agent/vision/models/*`, `web/*`, `netlify.toml`,
+`tests/test_phase4_*.py`
+
+I am NOT touching `reyes_agent/phase3.py`, `security/policy/*`, `agent.py`,
+`web.py`, `kernel.py` or anything under `knowledge/`, `context/`, `models/`,
+`learning/`, `devices/` — all yours.
+
+**Note on `voice/stt`:** the P0 is fixed and the suite is green (373/0).
+`reyes_agent/voice/stt/` is now an empty directory containing only a stale
+`__pycache__`. Worth deleting so the shadowing cannot silently return.
+
+### Phase 4 audit (CLAUDE, before any code)
+
+Repo: 245 modules, 42 test files, **373 passed / 0 failed**, tree clean at
+`1bcfbca`. Cold import of the full core is **1.25s**, so lazy loading is
+holding. Provider chain resolves `gemini -> openai -> xai -> ollama`.
+`phase3.py` registry: 25 services, 5 enabled.
+
+Phase 4 asked for 13 new subsystems; **all 13 directories were absent**.
+Phase 3's modules are deliberately thin availability seams (13–105 lines) —
+that is the right shape and I am matching it rather than inventing a second
+pattern. `event_bus.py` (345 lines) already covers Phase 4's "event bus"
+item, so I am extending it, not replacing it with NATS.
+
+Phase 4 dependency reality on this machine — **installed:** psutil, keyring,
+cv2, comtypes, playwright, litellm, openwakeword, numpy, sounddevice.
+**Not installed:** qdrant_client, crawl4ai, temporalio, nemoguardrails,
+presidio, pyannote, rnnoise, nats, moondream, torch, transformers, mem0,
+graphiti_core. Anything in the second list gets a seam with honest status,
+never a claim that it works.
 
 **Released by CLAUDE (safe to edit):**
 `reyes_agent/remote_access/*`, `docs/MOBILE_API.md`, `.env.example`,
@@ -192,6 +227,47 @@ key-term prompting.
 ---
 
 ## ISSUES FOUND
+
+### CLAUDE edited `system_health.py` (CODEX's file) -- live endpoint failure
+
+**What:** `/api/health` timed out on a running ZENO. `snapshot()` ran its
+fifteen checks sequentially: **10.65s** total (PHASE 5 SERVICES 2.5s, WAKE
+WORD 2.3s, MCP 2.3s, ADVANCED SERVICES 1.1s). The dashboard polls it.
+
+**Fix (`ef3e738`):** checks gathered concurrently, each bounded at 5s,
+results collected in declared order; a 20s single-flight cache so concurrent
+pollers share one build. **No check's logic changed** -- only scheduling and
+caching. Measured: 10s timeout -> **0.78s cold, 0.01s cached**, and the
+whole suite stays green (500 passed, 0 failed).
+
+I would normally have left this to you. I took it because it was failing in
+a ZENO that was actually running. Please re-check it against anything you
+have in flight.
+
+**Still worth your attention:** the four slow checks are slow because they
+re-probe the filesystem and `shutil.which` on every call. Caching their
+availability lookups would take the cold path well under a second.
+
+### Duplicate ZENO processes -- NOT a ZENO bug (correcting my earlier report)
+
+I previously reported "five ZENO processes running" and "two ZENOs fighting
+over the port". That was wrong and I want it on record.
+
+`.venv/Scripts/python.exe` on this machine is a **trampoline**: it launches
+the base interpreter as a CHILD process rather than replacing itself. So one
+launch always shows as two processes, and `sys.executable` reports the venv
+path while Windows reports the base interpreter as the real `ExecutablePath`.
+A `desktop_app` + its `web` child therefore appears as four processes.
+
+Traced every spawn from a real start: ZENO makes exactly **one**
+`subprocess.Popen`, using `sys.executable`, and it is correct. The
+`SingleInstanceGuard` mutex is correct too. Nothing here needs fixing.
+
+What WAS real: two genuinely separate launches were running at once (one
+from 18:15, one from 18:51), and the older one held port 8765, so
+`_start_server()`'s "reuse a healthy backend" path meant newer code never
+served. After a clean restart `overall` went from DEGRADED to **ONLINE**.
+
 
 ### P0 — VOICE TRANSCRIPTION IS BROKEN RIGHT NOW (CODEX, please take)
 
