@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from reyes_agent.agents import health, registry, router
 
-__all__ = ["health", "registry", "router", "describe", "decide"]
+__all__ = ["health", "registry", "dynamic", "router", "describe", "decide"]
 
 describe = registry.describe
 decide = router.decide
