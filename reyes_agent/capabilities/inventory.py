@@ -35,6 +35,7 @@ import os
 import shutil
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 # Availability changes when the owner installs something. Ten minutes is far
@@ -75,6 +76,105 @@ def which(name: str) -> str | None:
 
 def has_binary(name: str) -> bool:
     return which(name) is not None
+
+
+# Where Windows applications actually live. PATH is the exception, not the
+# rule: Blender, Krita, Inkscape, OBS and most desktop software install to
+# Program Files and never touch it.
+_APP_ROOTS = (
+    r"C:\Program Files",
+    r"C:\Program Files (x86)",
+    os.path.expandvars(r"%LOCALAPPDATA%\Programs"),
+)
+
+# Vendor folders worth descending into, so a scan does not walk all of
+# Program Files looking for one executable.
+_APP_HINTS = {
+    "blender": ("Blender Foundation",),
+    "krita": ("Krita",),
+    "inkscape": ("Inkscape",),
+    "obs64": ("obs-studio",),
+    "ffmpeg": ("ffmpeg",),
+    "node": ("nodejs",),
+}
+
+
+def find_application(name: str, *, hints: tuple[str, ...] = ()) -> str | None:
+    """Locate an installed Windows application, PATH or not.
+
+    `which()` alone reported Blender as missing on a machine where Blender
+    5.2 was installed and working -- because desktop applications on Windows
+    are not on PATH, and treating PATH as the inventory makes ZENO
+    confidently wrong about what it can do.
+
+    Order: PATH, then the uninstall registry (authoritative -- it is what
+    the installer wrote), then the standard install roots.
+    """
+    key = str(name or "").strip().lower()
+    if not key:
+        return None
+
+    cached = _probes.get(f"app:{key}")
+    if cached is not None and _fresh(cached[1]):
+        return cached[0]
+
+    found = which(key)
+    if not found:
+        found = _from_registry(key) or _from_app_roots(key, hints or _APP_HINTS.get(key, ()))
+
+    with _lock:
+        _probes[f"app:{key}"] = (found, time.time())
+    return found
+
+
+def _from_registry(name: str) -> str | None:
+    """The uninstall registry knows where the installer put it."""
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    roots = ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+             (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"))
+    for hive, path in roots:
+        try:
+            with winreg.OpenKey(hive, path) as parent:
+                for index in range(winreg.QueryInfoKey(parent)[0]):
+                    try:
+                        with winreg.OpenKey(parent, winreg.EnumKey(parent, index)) as entry:
+                            display = str(winreg.QueryValueEx(entry, "DisplayName")[0])
+                            if name not in display.lower():
+                                continue
+                            location = str(winreg.QueryValueEx(entry, "InstallLocation")[0])
+                            if not location:
+                                continue
+                            candidate = Path(location) / f"{name}.exe"
+                            if candidate.is_file():
+                                return str(candidate)
+                    except (OSError, FileNotFoundError, IndexError):
+                        continue
+        except OSError:
+            continue
+    return None
+
+
+def _from_app_roots(name: str, hints: tuple[str, ...]) -> str | None:
+    """Look only inside named vendor folders -- never walk Program Files."""
+    for root in _APP_ROOTS:
+        base = Path(root)
+        if not base.is_dir():
+            continue
+        for hint in hints or (name,):
+            folder = base / hint
+            if not folder.is_dir():
+                continue
+            try:
+                for candidate in folder.rglob(f"{name}.exe"):
+                    if candidate.is_file():
+                        return str(candidate)
+            except OSError:
+                continue
+    return None
 
 
 def has_package(name: str) -> bool:
