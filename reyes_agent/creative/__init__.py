@@ -12,8 +12,11 @@ from __future__ import annotations
 
 from reyes_agent.creative import rights
 from reyes_agent.creative import verification
+from reyes_agent.creative import web3d
+from reyes_agent.creative import video
 
-__all__ = ["rights", "verification", "verify_render", "verify_site", "status"]
+__all__ = ["rights", "verification", "web3d", "video",
+           "verify_render", "verify_site", "status"]
 
 verify_render = verification.verify_render
 verify_site = verification.verify_site
@@ -21,4 +24,5 @@ verify_site = verification.verify_site
 
 def status() -> dict:
     return {"state": "ONLINE", "rights": rights.status(),
-            "verification": verification.status()}
+            "verification": verification.status(),
+            "web3d": web3d.status(), "video": video.status()}
