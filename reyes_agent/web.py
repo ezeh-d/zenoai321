@@ -2804,6 +2804,67 @@ def phone_pair_local(req: PhoneLocalPairRequest, request: Request) -> Response:
     return response
 
 
+@app.get("/api/phone/networks")
+def phone_networks(request: Request) -> dict[str, Any]:
+    """Every local route the phone could use -- Wi-Fi and hotspot together.
+
+    Loopback only. This lists the laptop's own addresses, which is exactly
+    the map an attacker would want and the owner already has.
+    """
+    _loopback(request)
+    from reyes_agent.remote_mic import routes
+
+    return routes.status()
+
+
+class PhoneQrRequest(BaseModel):
+    mode: str = ""          # AUTO | LAN_WIFI | LAPTOP_HOTSPOT
+    save_to: str = ""
+
+
+@app.post("/api/phone/networks/qr")
+def phone_network_qr(req: PhoneQrRequest, request: Request) -> dict[str, Any]:
+    """A fresh pairing QR for a chosen network. Either route, any time."""
+    _loopback(request)
+    from reyes_agent.remote_mic import connect
+
+    result = (connect.save_qr(req.mode, req.save_to) if req.save_to
+              else connect.offer(req.mode))
+    if not result.get("ok"):
+        raise HTTPException(409, result.get("reason", "No usable network."))
+    return result
+
+
+@app.get("/api/phone/mic/network")
+def phone_mic_network(request: Request) -> dict[str, Any]:
+    """Which network the phone is ACTUALLY on, not which one was offered.
+
+    The answer is derived from the peer address of the live session, so
+    "I'm receiving your microphone through my laptop hotspot" is a fact
+    read off the socket rather than a guess from whichever QR was scanned.
+    """
+    _loopback(request)
+    from reyes_agent.remote_mic import get_remote_mic_runtime, routes
+
+    runtime = get_remote_mic_runtime()
+    live = runtime.status()
+    peer = str(live.get("peer_ip") or "")
+    route = routes.selector().route_for_peer(peer) if peer else None
+    return {
+        "connected": bool(peer),
+        "peer_ip": peer,
+        "mode": route.mode if route else "",
+        "label": route.label if route else "",
+        "via": route.as_dict() if route else None,
+        "spoken": (
+            f"I'm receiving your phone microphone through "
+            f"{'my laptop hotspot' if route and route.mode == routes.HOTSPOT else 'the normal Wi-Fi network'}."
+            if route else
+            "No phone microphone is connected right now."),
+        "audio": live.get("state", ""),
+    }
+
+
 @app.post("/api/phone/login/options")
 def phone_login_options(req: PhoneLoginRequest, request: Request) -> dict[str, Any]:
     from reyes_agent.phone_security import get_phone_security
@@ -2886,7 +2947,8 @@ async def phone_mic_offer(req: PhoneMicOfferRequest, request: Request,
     runtime.set_command_handler(_remote_mic_command)
     try:
         return await runtime.offer(session["device_id"], req.sdp, req.type,
-                                   session_expires=float(session["expires"]))
+                                   session_expires=float(session["expires"]),
+                                   peer_ip=(request.client.host if request.client else ""))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 

@@ -398,7 +398,9 @@ def agent_introduction(agent: str) -> str:
         "relationship graph and mission-resume state), phase3 (episodic history, "
         "structured documents, temporal graph, engineering/device/sandbox status), "
         "analytics (read-only CSV/JSON/Parquet analysis), and phase5 (private "
-        "network and optional integration status). "
+        "network and optional integration status), or extended (less-common legacy "
+        "desktop, browser, memory, media, file and diagnostics operations). Use "
+        "extended only when no compact entry point covers the request. "
         "Call this FIRST when a request "
         "clearly needs one of those, then use the tools it unlocks."
     ),
@@ -409,7 +411,7 @@ def agent_introduction(agent: str) -> str:
                 "type": "string",
                 "enum": ["missions", "campaigns", "investing", "council", "work",
                           "creative", "comms", "admin", "intelligence", "phase3",
-                          "analytics", "phase5"],
+                          "analytics", "phase5", "extended"],
             }
         },
         "required": ["group"],
@@ -420,12 +422,12 @@ def enable_tools(group: str) -> str:
     """Handled specially by agent.py, which widens the toolset for the rest
     of the turn. The registered function still returns a real result so any
     other caller (a sub-agent, a direct call) gets a sensible answer."""
-    from reyes_agent.tools import GROUP_NAMES, TOOL_GROUPS
+    from reyes_agent.tools import GROUP_NAMES, TOOLS, group_of
 
     g = (group or "").strip().lower()
     if g not in GROUP_NAMES:
         return f"Unknown group '{group}'. Available: {', '.join(GROUP_NAMES)}."
-    names = sorted(n for n, grp in TOOL_GROUPS.items() if grp == g)
+    names = sorted(n for n in TOOLS if group_of(n) == g)
     return f"Loaded the '{g}' tools: {', '.join(names)}. Use them now."
 
 

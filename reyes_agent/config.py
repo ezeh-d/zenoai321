@@ -127,6 +127,19 @@ REMOTE_API_ENABLED = _flag("REMOTE_API_ENABLED", "true")
 REMOTE_WEBSOCKET_ENABLED = _flag("REMOTE_WEBSOCKET_ENABLED", "true")
 REMOTE_PAIRING_ENABLED = _flag("REMOTE_PAIRING_ENABLED", "true")
 REMOTE_PASSKEY_ENABLED = _flag("REMOTE_PASSKEY_ENABLED", "true")
+REMOTE_MIC_ENABLED = _flag("ZENO_REMOTE_MIC_ENABLED", "true")
+REMOTE_MIC_PROMOTE_SCORE = _bounded_env_float("ZENO_REMOTE_MIC_PROMOTE_SCORE", 65.0, 20.0, 95.0)
+REMOTE_MIC_DEMOTE_SCORE = _bounded_env_float("ZENO_REMOTE_MIC_DEMOTE_SCORE", 35.0, 5.0, 80.0)
+
+# Which local network the phone reaches ZENO on: AUTO, LAN_WIFI or
+# LAPTOP_HOTSPOT. This selects a PREFERENCE, not a capability -- the listener
+# binds every approved interface either way, so setting one does not turn the
+# other off and a QR for either can always be regenerated.
+REMOTE_MIC_NETWORK_MODE = (
+    os.getenv("REMOTE_MIC_NETWORK_MODE", "AUTO").strip().upper()
+    or "AUTO")
+if REMOTE_MIC_NETWORK_MODE not in {"AUTO", "LAN_WIFI", "LAPTOP_HOTSPOT"}:
+    REMOTE_MIC_NETWORK_MODE = "AUTO"
 # Localhost origins are allowed ONLY here. Production never gets them.
 REMOTE_DEV_MODE = _flag("REMOTE_DEV_MODE")
 
@@ -188,6 +201,19 @@ MIN_SPEECH_SECONDS = _bounded_env_float("MIN_SPEECH_SECONDS", 0.12, 0.05, 0.5)
 END_SILENCE_SECONDS = _bounded_env_float("END_SILENCE_SECONDS", 0.7, 0.4, 1.5)
 MAX_UTTERANCE_SECONDS = _bounded_env_float("MAX_UTTERANCE_SECONDS", 12.0, 4.0, 30.0)
 TRANSCRIBE_TIMEOUT_SECONDS = _bounded_env_int("TRANSCRIBE_TIMEOUT_SECONDS", 12, 5, 45)
+
+# Human-facing response budget.  This is a time-to-audible-response target,
+# not a promise that complex model/tool work finishes in 1.5 seconds.  When
+# a safe local reply is not possible, the browser may play an already-cached
+# ZENO ElevenLabs acknowledgement while the real bounded turn continues.
+VOICE_RESPONSE_BUDGET_MS = _bounded_env_int("ZENO_VOICE_RESPONSE_BUDGET_MS", 1500, 500, 5000)
+VOICE_THINKING_ACK_DELAY_MS = _bounded_env_int("ZENO_THINKING_ACK_DELAY_MS", 650, 250, 1400)
+VOICE_FAST_LOCAL_REPLIES = os.environ.get("ZENO_FAST_LOCAL_REPLIES", "true").strip().lower() not in {
+    "0", "false", "no", "off",
+}
+VOICE_THINKING_ACK_ENABLED = os.environ.get("ZENO_THINKING_ACK_ENABLED", "true").strip().lower() not in {
+    "0", "false", "no", "off",
+}
 MIC_NOISE_CALIBRATION_SECONDS = _bounded_env_float(
     "MIC_NOISE_CALIBRATION_SECONDS", 0.75, 0.25, 2.0
 )
@@ -629,3 +655,24 @@ a login that accepts no real credentials, and a visible note on the page \
 saying it is a demo. Never imitate a real financial institution, never \
 build a page that sends what someone types into it anywhere, and never \
 wire up a real transaction."""
+
+# Ordinary FAST conversation does not need the full tool/action manual above.
+# Gemini receives its system text on every request, and the full prompt had
+# grown past 18k characters. This compact prompt preserves identity, tone,
+# privacy and truthfulness while leaving action turns on SYSTEM_PROMPT.
+FAST_CHAT_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, {USER_NAME}'s personal AI companion.
+Talk like a sharp, calm, easygoing friend: warm, direct, occasionally dry-
+humorous, never customer-service filler. Match the user's language naturally,
+including Nigerian English or Pidgin, and keep ordinary replies to one to three
+sentences unless detail was requested. Respond to emotion without announcing
+that you detected it.
+
+This turn is conversation-only: no computer tool is available or required.
+Answer from reliable knowledge and the bounded relevant memory supplied below.
+Never pretend you opened, changed, searched, sent, saved, verified or completed
+anything. Never invent current/live facts. If the message actually requires an
+action or private data, say that plainly so it can be routed through ZENO's
+permission-controlled action path. Do not expose secrets or private memories to
+an unknown speaker. Voice identity alone never authorizes money, credentials,
+deletion, security changes or other sensitive actions. Do not reveal hidden
+reasoning; give the answer, useful evidence and uncertainty when it matters."""

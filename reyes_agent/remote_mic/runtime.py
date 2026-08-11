@@ -163,6 +163,7 @@ class RemoteMicRuntime:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._peers: dict[str, Any] = {}
+        self._peer_ips: dict[str, str] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._quality: dict[str, AudioQuality] = {}
         self._session_expiry: dict[str, float] = {}
@@ -192,7 +193,8 @@ class RemoteMicRuntime:
             return False, f"{type(exc).__name__}: install aiortc>=1.13"
 
     async def offer(self, device_id: str, sdp: str, offer_type: str = "offer",
-                    session_expires: float | None = None) -> dict[str, str]:
+                    session_expires: float | None = None,
+                    peer_ip: str = "") -> dict[str, str]:
         ready, detail = self.available()
         if not ready:
             raise RuntimeError(detail)
@@ -208,6 +210,13 @@ class RemoteMicRuntime:
             self._peers[device_id] = pc
             self._quality[source] = AudioQuality()
             self._session_expiry[device_id] = float(session_expires or (time.time() + 1800))
+            # The phone's own address, taken from the signalling connection.
+            # This is what lets ZENO say which network the audio is arriving
+            # on without guessing from whichever QR happened to be scanned --
+            # a phone can be handed a Wi-Fi code and still connect over the
+            # hotspot, and only the socket knows which actually happened.
+            if peer_ip:
+                self._peer_ips[device_id] = peer_ip
 
         @pc.on("track")
         def on_track(track) -> None:
@@ -309,6 +318,7 @@ class RemoteMicRuntime:
             pc = self._peers.pop(device_id, None)
             task = self._tasks.pop(device_id, None)
             self._session_expiry.pop(device_id, None)
+            self._peer_ips.pop(device_id, None)
             self._client_metrics.pop(device_id, None)
         if task and task is not asyncio.current_task():
             task.cancel()
@@ -330,10 +340,13 @@ class RemoteMicRuntime:
         available, detail = self.available()
         with self._lock:
             peers = {device_id: pc.connectionState for device_id, pc in self._peers.items()}
+            live = [self._peer_ips.get(d, "") for d, s in peers.items() if s == "connected"]
+            peer_ip = next((ip for ip in live if ip), "")
         return {"state": "ONLINE" if any(v == "connected" for v in peers.values()) else
                 ("STANDBY" if available else "UNAVAILABLE"),
                 "transport": "WebRTC DTLS-SRTP/Opus", "available": available, "detail": detail,
-                "peers": peers, "peer_limit": 2, "received_frames": self._received_frames,
+                "peers": peers, "peer_limit": 2, "peer_ip": peer_ip,
+                "received_frames": self._received_frames,
                 "selector": self._selector.status(), "last_error": self._last_error}
 
     def client_metrics(self, device_id: str, metrics: dict[str, Any]) -> None:

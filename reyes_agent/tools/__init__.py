@@ -163,6 +163,8 @@ TOOL_GROUPS: dict[str, str] = {
     "coding_inspect": "coding", "coding_execute": "coding",
     "mcp_status": "mcp", "mcp_discover": "mcp", "mcp_read": "mcp", "mcp_action": "mcp",
     "device_status": "devices", "device_observe": "devices", "device_execute": "devices",
+    "phone_mic_networks": "devices", "phone_mic_qr": "devices",
+    "phone_mic_set_network": "devices", "phone_mic_current_network": "devices",
     "episodic_search": "phase3", "read_document_structured": "phase3",
     "knowledge_graph_query": "phase3", "knowledge_graph_remember": "phase3",
     "engineering_backends": "phase3", "mobile_device_status": "phase3",
@@ -185,7 +187,18 @@ TOOL_GROUPS: dict[str, str] = {
     # explicitly to commanders that actually have a team.
     "call_worker": "agent_workers",
 }
-GROUP_NAMES = sorted(set(TOOL_GROUPS.values()))
+
+# The old fallback treated every tool absent from ``TOOL_GROUPS`` as core.
+# As ZENO grew that silently expanded the supposedly-small provider payload
+# to 94 schemas (44,588 JSON characters, measured 2026-08-11).  Keep only
+# the genuine entry points here.  Everything else remains available through
+# the existing ``enable_tools('extended')`` on-demand round.
+CORE_TOOL_NAMES = frozenset({
+    "enable_tools", "delegate", "open_app", "web_search", "build_project",
+    "website_project", "learning_mode", "creator_project", "mastery_mode",
+    "foodie_mode", "phase3_status", "system_health",
+})
+GROUP_NAMES = sorted(set(TOOL_GROUPS.values()) | {"extended"})
 
 
 _FAILED_RESULT_STATES = {
@@ -278,7 +291,9 @@ def _publish_tool_failure(tool: Tool, tool_input: dict[str, Any], error: str,
 
 
 def group_of(name: str) -> str:
-    return TOOL_GROUPS.get(name, "core")
+    if name in CORE_TOOL_NAMES:
+        return "core"
+    return TOOL_GROUPS.get(name, "extended")
 
 
 def tool_definitions(light_only: bool = False, groups: set[str] | None = None) -> list[dict[str, Any]]:
@@ -556,7 +571,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, phase3_tools, phase5_tools, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so
