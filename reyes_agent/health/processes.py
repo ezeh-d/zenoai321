@@ -113,7 +113,16 @@ def duplicates(marker: str = "reyes_agent") -> list[dict[str, Any]]:
                     continue
                 command = " ".join(info["cmdline"])
                 if marker in command:
-                    found.append({"pid": info["pid"], "cmdline": command[:140],
+                    # Keep the proof of ownership inside the bounded receipt.
+                    # Prefix-only truncation could find ``reyes_agent`` near
+                    # the end of a long launcher command and then remove the
+                    # very marker that justified listing the process.
+                    index = command.index(marker)
+                    start = max(0, index - 60)
+                    end = min(len(command), index + len(marker) + 60)
+                    snippet = (("…" if start else "") + command[start:end]
+                               + ("…" if end < len(command) else ""))
+                    found.append({"pid": info["pid"], "cmdline": snippet,
                                   "started_at": info.get("create_time")})
             except Exception:  # noqa: BLE001
                 continue

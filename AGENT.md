@@ -3037,6 +3037,47 @@ systems are `STANDBY`/`DISABLED`, not falsely `ONLINE`. The explicit deployment
 limits are: no custom ZENO openWakeWord model, no Mem0 package/config, no Open
 Interpreter executable and no production MCP servers on the audited machine.
 
+## Phase 5 real-world power engineering log (2026-08-10)
+
+CODEX preserved the existing kernel, Event Bus, bounded workers, provider
+executor, browser controller, voice owner, permission engine and Living Memory.
+It created no competing runtime. Twenty requested repositories have one explicit
+decision in `reyes_agent.phase5`; optional components are imported only when
+their tool or health adapter is called.
+
+Security changes are execution boundaries, not prompt advice. Specialist and
+worker delegation install `AgentCapabilityProfile` context, and the common tool
+registry checks tool, filesystem, service and network scope before calling the
+tool. The credential broker checks agent/service/method/endpoint/HTTPS/egress,
+injects a local secret only at the internal request seam, and returns a redacted
+receipt. Agent Vault and Infisical are not installed and must remain reported
+`NOT_CONFIGURED`/`AUTH_REQUIRED`.
+
+Phase 5 adds one browser backend router and finite verified recovery; one
+sandbox manager with AIO/E2B/restricted-local choices; Tailscale/Headscale
+private-network abstraction with independent peer authorization; one selected
+ntfy/Gotify push adapter through existing workers; DuckDB read-only analysis;
+sqlite-vec portable retrieval; bounded shared ONNX sessions; lazy SenseVoice;
+and ElevenLabs → Kokoro → Piper → SAPI routing. Missing models/services are not
+downloaded, initialized or marked online.
+
+Audit evidence: baseline 49/49 files passed in 217.94 seconds. Initial final
+matrix passed 50/50 in 276.52 seconds. Phase 5 contracts pass 21/21. The new
+notification-state cleanup test found that SQLite context managers committed
+but did not close Windows file handles; `notifications._connection` now closes
+unconditionally, and the temporary database deletion test passes. A live Mini
+Orb reported one visible ZENO window, `MICROPHONE_READY`, four bounded workers,
+queue zero and a responding native host. A 30-second sample measured 3.84%
+total-machine CPU and 359.62 MiB for the complete tree. See
+`PHASE5_REAL_WORLD_POWER_REPORT.md` for classifications and blocked live tests.
+
+Contracts to preserve: never infer peer authorization from tailnet membership;
+never infer ZENO service exposure from connected transport; never run untrusted
+code in the local restricted backend; never return raw credentials to an agent;
+never run multiple browser backends simultaneously; never enable OpenVINO
+without a real per-model benchmark; never claim remote notification delivery
+without a provider receipt; and never load Phase 5 models/services on startup.
+
 ## Phase 3 advanced capability contracts (2026-08-10)
 
 `phase3_flags.py` is the source of truth for 25 integration decisions and

@@ -657,6 +657,13 @@ def phase3_status() -> dict[str, Any]:
     return status()
 
 
+@app.get("/api/phase5/status")
+def phase5_status() -> dict[str, Any]:
+    """On-demand Phase 5 truth; starts no optional model or service."""
+    from reyes_agent.phase5 import status
+    return status()
+
+
 @app.get("/api/wake/status")
 def wake_status() -> dict[str, Any]:
     from reyes_agent.wake import get_wake_engine

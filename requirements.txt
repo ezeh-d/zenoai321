@@ -26,6 +26,11 @@ faster-whisper>=1.0
 onnxruntime>=1.17
 soundfile>=0.12
 
+# --- Phase 5: local, lazy data engines ---
+# Both import only when an analytics/vector request is made.
+duckdb>=1.4,<2
+sqlite-vec>=0.1,<0.2
+
 # --- Desktop automation ---
 pyautogui>=0.9.54
 pyperclip>=1.8

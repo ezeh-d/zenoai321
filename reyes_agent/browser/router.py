@@ -20,6 +20,9 @@ from dataclasses import dataclass
 from typing import Any
 
 DETERMINISTIC, AGENTIC = "DETERMINISTIC", "AGENTIC"
+PLAYWRIGHT, STAGEHAND, BROWSER_USE, CRAWL4AI, VISUAL = (
+    "PLAYWRIGHT", "STAGEHAND", "BROWSER_USE", "CRAWL4AI", "VISUAL"
+)
 
 # A task naming a concrete, mechanical operation on a page ZENO can address
 # directly. These do not need a reasoning loop.
@@ -97,6 +100,13 @@ def available() -> dict[str, Any]:
     """What each strategy can actually do on this machine right now."""
     from reyes_agent import integrations
 
+    from reyes_agent.browser.stagehand_adapter import StagehandAdapter
+    stagehand = StagehandAdapter().status()
+    try:
+        from reyes_agent.research.crawler import manager as crawler
+        crawl_state = crawler.status() if hasattr(crawler, "status") else {"state": "STANDBY"}
+    except Exception:
+        crawl_state = {"state": "DISABLED"}
     return {
         "deterministic": {
             "backend": "playwright (via browser_controller/browser_runtime)",
@@ -111,4 +121,38 @@ def available() -> dict[str, Any]:
             "fallback": ("Playwright + ZENO's own vision/grounding loop, which handles "
                          "most navigation without a second agent framework"),
         },
+        "stagehand": stagehand,
+        "research": {"backend": "Crawl4AI/ZENO crawler", **crawl_state},
+        "visual": {"backend": "computer-use/vision", "ready": False,
+                   "fallback": "existing UIA/OCR/screenshot verification"},
     }
+
+
+@dataclass(frozen=True)
+class BackendRoute:
+    primary: str
+    fallbacks: tuple[str, ...]
+    reason: str
+    refused: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"primary": self.primary, "fallbacks": list(self.fallbacks),
+                "reason": self.reason, "refused": self.refused}
+
+
+def choose_backend(task: str, *, dom_known: bool = False, visual_only: bool = False,
+                   extraction: bool = False) -> BackendRoute:
+    """The Phase 5 hierarchy; one backend runs at a time."""
+    legacy = choose(task)
+    if legacy.refused:
+        return BackendRoute(PLAYWRIGHT, (), legacy.reason, refused=True)
+    text = str(task or "").casefold()
+    if visual_only or any(marker in text for marker in ("canvas", "visual only", "image button")):
+        return BackendRoute(VISUAL, (PLAYWRIGHT,), "DOM is unavailable; visual verification required")
+    if extraction or any(marker in text for marker in ("research", "extract articles", "compare sources")):
+        return BackendRoute(CRAWL4AI, (PLAYWRIGHT,), "research/extraction avoids an interactive agent loop")
+    if dom_known or legacy.strategy == DETERMINISTIC:
+        return BackendRoute(PLAYWRIGHT, (STAGEHAND,), "known deterministic DOM operation")
+    if any(marker in text for marker in ("find the", "changing site", "layout changed", "self heal")):
+        return BackendRoute(STAGEHAND, (PLAYWRIGHT, BROWSER_USE), "known goal on an unstable DOM")
+    return BackendRoute(BROWSER_USE, (STAGEHAND, PLAYWRIGHT, VISUAL), "open-ended multi-step website task")

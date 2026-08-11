@@ -130,9 +130,10 @@ _SPECIALISTS: dict[str, dict] = {
                   "take_screenshot", "critique_current_design", "design_capabilities", "learning_mode"},
     },
     "titan": {
-        "description": "TITAN -- Business Intelligence. Market research, business tracking, pricing/strategy notes -- analysis only, never spends money.",
+        "description": "TITAN -- Business and Data Intelligence. Verified local dataset analysis, market research and strategy -- never spends money.",
         "prompt": (
-            "You are TITAN, ZENO's business specialist -- market research "
+            "You are TITAN, ZENO's business and data specialist -- calculated "
+            "CSV/JSON/Parquet results must come from inspect_dataset/query_dataset, never guessing; market research "
             "(web_search/get_news), tracking business/freelance work "
             "(track_work), and drafting strategy/pricing notes. You give "
             "analysis and recommendations only -- you have no tool that "
@@ -145,6 +146,7 @@ _SPECIALISTS: dict[str, dict] = {
             "what to buy."
         ),
         "tools": {"track_work", "list_work", "update_work_status", "web_search", "get_news", "write_note",
+                   "inspect_dataset", "query_dataset",
                    "get_investment_policy", "portfolio_report", "check_trade_against_policy",
                    "investment_performance_report"},
     },
@@ -508,6 +510,23 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
     _active.specialist = specialist
     _worker_budget.used = 0
 
+    from reyes_agent.security.capabilities import agent_scope
+    service_map = {
+        "aris": {"web"}, "tosin": {"github", "mcp"},
+        "titan": {"web"}, "oracle": {"web"}, "hermes": {"web"},
+    }
+    capability_scope = agent_scope(
+        specialist,
+        allowed_tools={item["name"] for item in allowed_tools},
+        allowed_services=service_map.get(specialist, set()),
+        filesystem_scopes=(config.VAULT_PATH, config.PROJECT_ROOT, __import__("pathlib").Path.home() / "Desktop",
+                           __import__("pathlib").Path.home() / "Documents"),
+        network_scopes=("api.github.com", "ntfy.sh") if specialist == "tosin" else (),
+        secret_broker_rules=service_map.get(specialist, set()),
+        approval_level=2,
+    )
+    capability_scope.__enter__()
+
     history: list[dict] = [{"role": "user", "content": task}]
 
     try:
@@ -554,6 +573,7 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
         # thread would inherit a stale parent identity and a spent budget.
         _active.specialist = prev_specialist
         _worker_budget.used = prev_budget
+        capability_scope.__exit__(None, None, None)
         if scope_token is not None:
             agent_teams.restore_scope(scope_token)
 

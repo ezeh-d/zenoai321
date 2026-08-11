@@ -396,7 +396,9 @@ def agent_introduction(agent: str) -> str:
         "maintenance, scheduled checks), intelligence (undo history, "
         "situation, universal search, simulation, Health Center, personal "
         "relationship graph and mission-resume state), phase3 (episodic history, "
-        "structured documents, temporal graph, engineering/device/sandbox status). "
+        "structured documents, temporal graph, engineering/device/sandbox status), "
+        "analytics (read-only CSV/JSON/Parquet analysis), and phase5 (private "
+        "network and optional integration status). "
         "Call this FIRST when a request "
         "clearly needs one of those, then use the tools it unlocks."
     ),
@@ -406,7 +408,8 @@ def agent_introduction(agent: str) -> str:
             "group": {
                 "type": "string",
                 "enum": ["missions", "campaigns", "investing", "council", "work",
-                          "creative", "comms", "admin", "intelligence", "phase3"],
+                          "creative", "comms", "admin", "intelligence", "phase3",
+                          "analytics", "phase5"],
             }
         },
         "required": ["group"],

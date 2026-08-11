@@ -31,7 +31,13 @@ def speak(text: str, stop_event: threading.Event) -> None:
     if config.TTS_PROVIDER == "sapi":
         _speak_sapi(text, stop_event)
     elif config.TTS_PROVIDER == "elevenlabs":
-        _speak_elevenlabs(text, stop_event)
+        try:
+            _speak_elevenlabs(text, stop_event)
+        except TTSError:
+            # Provider failure must not make ZENO mute. Heavy local engines
+            # remain lazy and SAPI is the final proven Windows fallback.
+            from reyes_agent.voice.tts_router import speak_fallback
+            speak_fallback(text, stop_event)
     else:
         raise TTSError(f"Unknown TTS_PROVIDER '{config.TTS_PROVIDER}'.")
 

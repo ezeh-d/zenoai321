@@ -13,8 +13,9 @@ user's stored preference and the poll cadence stays modest.
 DESIGN
 ------
 * Settings persist to the vault as JSON and survive restarts.
-* Every notification carries a state: NEW -> READ / ACTION_REQUIRED ->
-  REPLIED / DISMISSED.
+* Every notification carries the shared state vocabulary: UNREAD, READ,
+  ACTION_REQUIRED or RESOLVED. Legacy NEW/REPLIED rows are migrated in place;
+  DISMISSED remains accepted as a compatibility input and maps to RESOLVED.
 * De-duplication is by content fingerprint within a window, so the same
   alert re-firing every poll cannot spam the user -- the existing record's
   `count` increments instead of a new row appearing.
@@ -32,6 +33,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -40,12 +42,18 @@ from reyes_agent import config
 _DB_PATH = config.VAULT_PATH / "07-System" / "heartbeat" / "state.db"
 _SETTINGS_PATH = config.VAULT_PATH / "07-System" / "notification_settings.json"
 
-NEW = "NEW"
+UNREAD = "UNREAD"
 READ = "READ"
 ACTION_REQUIRED = "ACTION_REQUIRED"
-REPLIED = "REPLIED"
-DISMISSED = "DISMISSED"
-STATES = (NEW, READ, ACTION_REQUIRED, REPLIED, DISMISSED)
+RESOLVED = "RESOLVED"
+STATES = (UNREAD, READ, ACTION_REQUIRED, RESOLVED)
+
+# Import compatibility for callers written before the Phase 5 vocabulary was
+# standardised. New records never persist these legacy state names.
+NEW = UNREAD
+REPLIED = RESOLVED
+DISMISSED = RESOLVED
+_STATE_ALIASES = {"NEW": UNREAD, "REPLIED": RESOLVED, "DISMISSED": RESOLVED}
 
 PRIORITIES = ("low", "normal", "high", "urgent")
 _PRIORITY_RANK = {p: i for i, p in enumerate(PRIORITIES)}
@@ -114,7 +122,20 @@ def _connect() -> sqlite3.Connection:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_notif_fp ON notifications(fingerprint, ts)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_notif_state ON notifications(state, ts)")
+    conn.execute("UPDATE notifications SET state = ? WHERE state = 'NEW'", (UNREAD,))
+    conn.execute("UPDATE notifications SET state = ? WHERE state IN ('REPLIED', 'DISMISSED')", (RESOLVED,))
     return conn
+
+
+@contextmanager
+def _connection():
+    """Commit/rollback and always release the Windows SQLite handle."""
+    conn = _connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 @dataclass
@@ -178,7 +199,7 @@ def notify(title: str, body: str = "", *, source: str = "zeno",
     settings = load_settings()
     deliver, reason = _delivery_decision(priority, settings)
 
-    with _lock, _connect() as conn:
+    with _lock, _connection() as conn:
         row = conn.execute(
             "SELECT id, count, state FROM notifications "
             "WHERE fingerprint = ? AND ts >= ? ORDER BY id DESC LIMIT 1",
@@ -216,6 +237,23 @@ def notify(title: str, body: str = "", *, source: str = "zeno",
             notification_bus.publish({"type": "zeno_notification", **payload})
         except Exception:  # noqa: BLE001 -- delivery must not break recording
             pass
+        # Remote push is optional and potentially slow. Submit one finite,
+        # bounded job to the existing worker pool; never block the publisher
+        # or create a notification-specific thread.
+        try:
+            from reyes_agent.kernel import get_kernel
+            from reyes_agent.notification_channels import dispatch, status as push_status
+
+            severity = ("APPROVAL_REQUIRED" if action_required else
+                        "ERROR" if priority == "urgent" else
+                        "WARNING" if priority == "high" else "INFO")
+            if push_status().get("state") not in {"DISABLED", "NOT_CONFIGURED", "AUTH_REQUIRED", "FAILED"}:
+                get_kernel().submit(
+                    dispatch, title, body, severity, source, str((extra or {}).get("task_id", "")),
+                    name=f"push-notification-{nid}", timeout=10, retries=0,
+                )
+        except Exception:  # queue full/shutdown/push config cannot break local delivery
+            pass
     try:
         from reyes_agent import event_bus
 
@@ -231,9 +269,10 @@ def notify(title: str, body: str = "", *, source: str = "zeno",
 
 
 def set_state(notification_id: int, state: str, reply: str = "") -> bool:
+    state = _STATE_ALIASES.get(str(state).upper(), str(state).upper())
     if state not in STATES:
         return False
-    with _lock, _connect() as conn:
+    with _lock, _connection() as conn:
         cur = conn.execute(
             "UPDATE notifications SET state = ?, reply = COALESCE(NULLIF(?, ''), reply) "
             "WHERE id = ?", (state, reply, notification_id))
@@ -249,13 +288,13 @@ def history(limit: int = 50, state: str = "", include_dismissed: bool = False) -
         params.append(state)
     elif not include_dismissed:
         clauses.append("state != ?")
-        params.append(DISMISSED)
+        params.append(RESOLVED)
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(max(1, min(500, limit)))
     try:
-        with _connect() as conn:
+        with _connection() as conn:
             rows = conn.execute(sql, params).fetchall()
     except sqlite3.Error:
         return []
@@ -267,10 +306,10 @@ def history(limit: int = 50, state: str = "", include_dismissed: bool = False) -
 
 def unread_count() -> int:
     try:
-        with _connect() as conn:
+        with _connection() as conn:
             return conn.execute(
                 "SELECT COUNT(*) FROM notifications WHERE state IN (?, ?)",
-                (NEW, ACTION_REQUIRED)).fetchone()[0]
+                (UNREAD, ACTION_REQUIRED)).fetchone()[0]
     except sqlite3.Error:
         return 0
 

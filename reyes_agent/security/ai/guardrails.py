@@ -43,6 +43,9 @@ _INJECTION = (
     (r"\b(developer|system|admin(istrator)?)\s+mode\b|\bDAN\b|jailbreak", "mode escalation"),
     (r"(reveal|print|show|repeat|output)\s+(your|the)\s+(system\s+)?(prompt|instructions?|rules?)",
      "prompt extraction"),
+    (r"(reveal|print|show|repeat|output|list|dump)\s+.{0,32}\b"
+     r"(api[_\s-]?keys?|passwords?|tokens?|secrets?|credentials?)\b",
+     "credential extraction"),
     (r"(send|email|post|upload|exfiltrate|transmit)\s+.{0,40}\b(api[_\s-]?key|password|token|secret|credential)",
      "credential exfiltration"),
     (r"\b(do not|don'?t)\s+(tell|inform|mention|alert|ask)\s+(the\s+)?(user|owner|human)",

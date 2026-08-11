@@ -627,6 +627,17 @@ def run_worker(parent: str, worker_name: str, task: str) -> str:
               "capability": status})
 
     allowed = [t for t in tool_definitions(groups=set(GROUP_NAMES)) if t["name"] in worker.tools]
+    from reyes_agent.security.capabilities import agent_scope
+    capability_scope = agent_scope(
+        f"{parent}:{worker_name}",
+        allowed_tools={item["name"] for item in allowed},
+        allowed_services={"web"} if any(name in worker.tools for name in ("web_search", "get_news")) else set(),
+        filesystem_scopes=(config.VAULT_PATH, config.PROJECT_ROOT,
+                           __import__("pathlib").Path.home() / "Desktop",
+                           __import__("pathlib").Path.home() / "Documents"),
+        approval_level=1,
+    )
+    capability_scope.__enter__()
     system = (
         f"{config.SYSTEM_PROMPT}\n\n{worker.prompt}\n\n"
         f"You are a WORKER reporting to {parent.upper()}, not to ZENO or Divine "
@@ -684,6 +695,7 @@ def run_worker(parent: str, worker_name: str, task: str) -> str:
         return f"Worker {worker_name.upper()} failed: {type(exc).__name__}: {exc}"
     finally:
         _depth.value = prev
+        capability_scope.__exit__(None, None, None)
         _publish("agent.worker_finished",
                  {"agent": worker_name, "parent": parent, "worker": worker_name,
                   "duration_ms": int((time.time() - started) * 1000),

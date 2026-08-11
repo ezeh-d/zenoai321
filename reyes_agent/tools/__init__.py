@@ -173,6 +173,10 @@ TOOL_GROUPS: dict[str, str] = {
     "skill_list": "skills", "skill_inspect": "skills", "skill_scan": "skills",
     "skill_approve": "skills", "skill_disable": "skills", "skill_delete": "skills",
     "skill_run": "skills",
+    # Phase 5 data/private-network tools are loaded only for matching turns.
+    "phase5_status": "phase5", "inspect_dataset": "analytics",
+    "query_dataset": "analytics", "private_network_status": "phase5",
+    "notification_summary": "phase5",
     # Worker teams. Grouped ONLY to keep call_worker out of ZENO's core
     # payload -- ZENO delegates to a commander, it never calls a commander's
     # worker itself, so a core schema here would be pure per-turn token cost
@@ -434,6 +438,36 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     if tool is None:
         return f"Error: no tool named '{name}' is registered."
 
+    # The model only sees a scoped tool list, but model output is untrusted.
+    # Enforce the active specialist/worker profile again at the execution
+    # boundary so prompt injection cannot manufacture an out-of-role call.
+    from reyes_agent.security.capabilities import authorize_arguments, authorize_tool
+    capability_ok, capability_reason, capability_actor = authorize_tool(name)
+    if not capability_ok:
+        try:
+            from reyes_agent import audit, event_bus
+            audit.log("capability_denied", actor=capability_actor, action=name,
+                      policy="agent_capability_profile", outcome="blocked",
+                      reason=capability_reason)
+            event_bus.publish("security.capability_denied", {
+                "agent": capability_actor, "tool": name, "reason": capability_reason,
+            }, source="tools")
+        except Exception:  # denial reporting must never permit execution
+            pass
+        return f"Blocked: {capability_reason}. Nothing ran."
+    arguments_ok, arguments_reason, capability_actor = authorize_arguments(tool_input)
+    if not arguments_ok:
+        try:
+            from reyes_agent import audit, event_bus
+            audit.log("capability_denied", actor=capability_actor, action=name,
+                      policy="agent_capability_profile", outcome="blocked", reason=arguments_reason)
+            event_bus.publish("security.capability_denied", {
+                "agent": capability_actor, "tool": name, "reason": arguments_reason,
+            }, source="tools")
+        except Exception:
+            pass
+        return f"Blocked: {arguments_reason}. Nothing ran."
+
     # Contextual Phase 3 policy does not replace permissions.py; it is the
     # constitution facade over that same authority and adds immutable critical
     # action denial. Every registered tool reaches this point.
@@ -522,7 +556,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, phase3_tools, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, ocr_tools, phase3_tools, phase5_tools, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

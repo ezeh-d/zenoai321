@@ -9,6 +9,39 @@ Status vocabulary, used strictly:
 Last updated: 2026-08-10. See `AGENT.md` for the dated engineering log
 behind each entry.
 
+## Phase 5 real-world power layer — READY WITH EXTERNAL LIMITATIONS (2026-08-10)
+
+ZENO now enforces formal agent capability profiles at the common tool boundary:
+exact tools, service rules, approved filesystem roots, network scopes, approval
+level and credential-broker policy. The broker performs allowlisted service
+operations without placing raw credentials in agent context or audit receipts.
+Agent Vault and Infisical remain external, not falsely connected.
+
+The browser stack has one lazy routing hierarchy (Playwright → optional
+Stagehand → optional browser-use/Crawl4AI → existing visual fallback), and
+bounded recovery requires verification. One sandbox interface selects AIO,
+E2B or a restricted local backend; untrusted code is denied until a strong
+sandbox is actually configured. The local backend is explicitly not an OS
+security boundary.
+
+Working local backends are DuckDB 1.5.5, sqlite-vec 0.1.9, ONNX Runtime,
+Windows SAPI fallback and the installed Tailscale transport. Tailscale has zero
+peers and ZENO service exposure remains `NOT_CONFIGURED`; connectivity never
+authorizes a peer. Notification Center uses `UNREAD`, `READ`,
+`ACTION_REQUIRED`, `RESOLVED` and closes every SQLite handle. ntfy/Gotify are
+real optional adapters but no remote destination is configured. Kokoro, Piper,
+SenseVoice, OpenVINO, Stagehand, AIO/E2B, Agent Vault, Infisical, RustDesk and
+Wasmtime remain disabled/not configured rather than simulated. Moshi was
+rejected as mandatory on this 8 GiB dual-core host.
+
+Verification: the initial complete matrix passed 50/50 standalone files in
+276.52 seconds plus compilation; Phase 5 contracts pass 21/21 after finding and
+fixing a real Notification Center database-handle leak. A 30-second live idle
+sample measured 3.84% total-machine CPU and 359.62 MiB across ZENO/WebView2;
+the host remained responsive, one Mini Orb was visible, the dashboard stayed
+lazy, queue depth was zero and real Mini Orb microphone audio was present.
+Full details are in `PHASE5_REAL_WORLD_POWER_REPORT.md`.
+
 ---
 
 ## Phase 1 — Core Architecture · DONE

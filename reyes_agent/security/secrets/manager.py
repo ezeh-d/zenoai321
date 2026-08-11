@@ -47,6 +47,8 @@ KNOWN_KEYS = (
     "GEMINI_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "ANTHROPIC_API_KEY",
     "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY", "NETLIFY_AUTH_TOKEN",
     "HOME_ASSISTANT_TOKEN", "LANGFUSE_SECRET_KEY", "QDRANT_API_KEY",
+    "GITHUB_TOKEN", "AGENT_VAULT_TOKEN", "INFISICAL_TOKEN",
+    "NTFY_TOKEN", "GOTIFY_TOKEN", "STAGEHAND_TOKEN",
 )
 
 
@@ -86,15 +88,32 @@ def get(key: str, default: str = "") -> str:
         return default
 
     module = _keyring()
+    local_value = ""
     if module is not None:
         try:
             value = module.get_password(SERVICE, name)
             if value:
-                return value
+                local_value = value
         except Exception:  # noqa: BLE001
             pass          # a broken credential store falls through, never raises
 
-    return os.environ.get(name) or default
+    local_value = local_value or os.environ.get(name, "")
+    use_infisical = (name != "INFISICAL_TOKEN" and
+                     os.environ.get("ZENO_INFISICAL_ENABLED", "").casefold() in {"1", "true", "yes", "on"})
+    if use_infisical:
+        from reyes_agent.security.secrets import infisical_backend
+        token = ""
+        if module is not None:
+            try:
+                token = module.get_password(SERVICE, "INFISICAL_TOKEN") or ""
+            except Exception:
+                pass
+        remote = infisical_backend.get(name, token=token or os.environ.get("INFISICAL_TOKEN", ""))
+        if remote and os.environ.get("ZENO_ENV", "development").casefold() == "production":
+            return remote
+        if not local_value and remote:
+            return remote
+    return local_value or default
 
 
 def source_of(key: str) -> Source:
@@ -166,6 +185,11 @@ def describe() -> dict[str, Any]:
     for key in KNOWN_KEYS:
         source = source_of(key)
         entries.append({"key": key, "where": source.where, "set": source.found})
+    try:
+        from reyes_agent.security.secrets import infisical_backend
+        infisical = infisical_backend.status()
+    except Exception:
+        infisical = {"state": "DISABLED", "ready": False}
     return {
         "state": "ONLINE" if module is not None else "DEGRADED",
         "os_credential_store": module is not None,
@@ -174,7 +198,7 @@ def describe() -> dict[str, Any]:
         "configured": sum(1 for e in entries if e["set"]),
         "in_keyring": sum(1 for e in entries if e["where"] == KEYRING),
         "in_environment": sum(1 for e in entries if e["where"] == ENVIRONMENT),
-        "keys": entries,
+        "keys": entries, "infisical": infisical,
         "note": "Values are never returned by this call, logged, or put in a prompt.",
     }
 

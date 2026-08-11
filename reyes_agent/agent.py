@@ -113,6 +113,24 @@ def run_agent(
     except Exception:
         pass
 
+    # Phase 5 schemas stay out of ordinary turns. This keyword gate is local
+    # and sub-millisecond; it starts no service and adds only the relevant
+    # read-only tools when the owner's request can use them.
+    normalized_latest = latest.casefold()
+    if any(marker in normalized_latest for marker in (
+        "analyse this csv", "analyze this csv", "analyse this data", "analyze this data",
+        "parquet", "dataset", "monthly totals", "data quality", "duckdb",
+    )):
+        enabled_groups.add("analytics")
+    if any(marker in normalized_latest for marker in (
+        "phase 5 status", "tailscale", "private network", "push notification",
+        "agent vault", "sandbox status",
+        "what did i miss", "notifications",
+    )):
+        enabled_groups.add("phase5")
+    if enabled_groups & {"analytics", "phase5"} and config.MODEL_PROVIDER != "ollama":
+        tools = tool_definitions(groups=enabled_groups)
+
     # Skills stay lazy. An explicit skill/routine request or a real trigger
     # match exposes only the small durable-skill control group. The match is
     # context for the existing planner, never an automatic execution bypass.
