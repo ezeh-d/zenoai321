@@ -57,6 +57,14 @@ GOALS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "logo_design": ((), ("opencv", "computer_control", "web_research")),
     "business_analysis": ((), ("web_research", "semantic_search", "agents",
                                "duckdb", "gemini")),
+    # Pure reasoning. It needs a model and nothing else -- leaving these
+    # unmapped made decomposition pessimistic, marking "write the copy" as
+    # impossible when it is the one thing an LLM assistant is certain to
+    # manage. `reasoning` lists both providers so either satisfies it.
+    "content_writing": ((), ("gemini", "openai", "ollama", "semantic_search")),
+    "reasoning": ((), ("gemini", "openai", "ollama")),
+    "summarisation": ((), ("gemini", "openai", "ollama")),
+    "reporting": ((), ("gemini", "openai", "semantic_search")),
 }
 
 # Words that point at a goal. Matched against the request, longest first so
@@ -89,6 +97,12 @@ _HINTS: dict[str, tuple[str, ...]] = {
     "logo_design": ("logo", "brand mark", "design a logo"),
     "business_analysis": ("what can we automate", "analyse this business",
                           "analyze this business", "my business"),
+    "content_writing": ("write the campaign copy", "write copy", "draft the copy",
+                        "write a post", "write an article", "copywriting"),
+    "reasoning": ("decide the offer", "decide", "work out", "think through",
+                  "choose between"),
+    "summarisation": ("summarise", "summarize", "tl;dr", "condense"),
+    "reporting": ("prepare a report", "write a report", "produce a report"),
 }
 
 

@@ -21,13 +21,20 @@ from __future__ import annotations
 # manager facade on top.
 from reyes_agent.skills import models, constitution      # no intra-package deps
 from reyes_agent.skills import registry                  # needs the two above
-from reyes_agent.skills import executor, learner         # need registry
-from reyes_agent.skills import manager                   # needs everything
+from reyes_agent.skills import confidence                 # reads a skill's history
+from reyes_agent.skills import versions                   # needs registry
+from reyes_agent.skills import executor, learner          # need registry
+from reyes_agent.skills import correction                 # needs registry + versions
+from reyes_agent.skills import demonstration              # needs registry
+from reyes_agent.skills import composer                   # needs registry + capabilities
+from reyes_agent.skills import manager                    # needs everything
 from reyes_agent.skills.models import APPROVED, LEARNED, OBSERVED, RETIRED, Skill, Step
 
 __all__ = ["Skill", "Step", "OBSERVED", "LEARNED", "APPROVED", "RETIRED",
            "models", "constitution", "registry", "learner", "executor", "manager",
-           "observe", "learn", "suggest", "approve", "run", "status"]
+           "composer", "demonstration", "correction", "versions", "confidence",
+           "observe", "learn", "suggest", "approve", "run", "status",
+           "compose", "watch", "correct", "rollback"]
 
 observe = manager.observe
 learn = manager.learn
@@ -35,3 +42,7 @@ suggest = manager.suggest
 approve = manager.approve
 run = manager.run
 status = manager.status
+compose = composer.compose
+watch = demonstration.generalise
+correct = correction.correct
+rollback = versions.rollback
