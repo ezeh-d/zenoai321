@@ -71,7 +71,8 @@ def start(*, token: str = "", prefer: str = "", port: int = 0) -> Started:
                          port=port or pairing.TLS_PORT)
     if not link.ok:
         return Started(reason=link.reason)
-    if not (link.cert and link.key):
+    plain = link.transport == pairing.LAN_HTTP
+    if not plain and not (link.cert and link.key):
         return Started(reason="no certificate is available for that transport")
 
     with _lock:
@@ -100,11 +101,13 @@ def start(*, token: str = "", prefer: str = "", port: int = 0) -> Started:
     # connection closes with no response, which is exactly what happened when
     # this module first used a thread. A child process runs uvicorn in ITS
     # main thread, which is the path already proven here.
+    tls = ("" if plain else
+           f", ssl_certfile=r'{link.cert}', ssl_keyfile=r'{link.key}'")
     runner = (
         "import uvicorn;"
         "from reyes_agent.web import app;"
         f"uvicorn.run(app, host='0.0.0.0', port={link.port}, log_level='warning',"
-        f" access_log=False, ssl_certfile=r'{link.cert}', ssl_keyfile=r'{link.key}')"
+        f" access_log=False{tls})"
     )
     try:
         from reyes_agent import config

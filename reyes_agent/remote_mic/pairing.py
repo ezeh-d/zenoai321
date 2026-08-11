@@ -48,12 +48,27 @@ from reyes_agent.capabilities import inventory
 
 TAILSCALE = "tailscale"
 LAN_TLS = "lan_https"
+LAN_HTTP = "lan_http_flagged"
 TUNNEL = "cloudflare"
 NONE = "none"
+
+# Plain HTTP over the LAN. Normally useless for a microphone page, because
+# the browser blocks getUserMedia outside a secure context -- EXCEPT when the
+# owner has told their browser to treat this specific origin as secure. That
+# is a real, supported Chrome setting, it needs no app install, and it is
+# scoped to one origin rather than disabling the protection globally.
+#
+# It is never chosen automatically. `build()` returns it only when asked,
+# because handing out an HTTP link to someone who has not set the flag
+# produces exactly the silent failure this module exists to prevent.
+CHROME_FLAG = "chrome://flags/#unsafely-treat-insecure-origin-as-secure"
 
 DEFAULT_PORT = 8765
 # A separate HTTPS port so the plain-HTTP desktop server keeps working.
 TLS_PORT = 8766
+# The LAN microphone listener. Its own port, because ZENO's server on
+# DEFAULT_PORT is bound to loopback and the phone cannot reach it there.
+LAN_HTTP_PORT = 8768
 
 CERT_DAYS = 825
 
@@ -265,6 +280,31 @@ def build(*, token: str = "", port: int = TLS_PORT, prefer: str = "") -> Link:
                                 "Tap Advanced, then Proceed. You only do this once.",
                                 "Allow the microphone when the browser asks.",
                             ])
+
+    # Plain HTTP, and ONLY when explicitly asked for. The owner has to tell
+    # their phone's browser to trust this exact origin first, so the QR is
+    # useless without the flag -- which is why it is never the default.
+    if prefer == LAN_HTTP:
+        address = lan_ip()
+        if not address:
+            return Link(NONE, reason="I cannot work out this machine's LAN address")
+        # ZENO's own server binds LOOPBACK on DEFAULT_PORT, so the phone
+        # cannot reach it there however correct the address looks. This
+        # listener needs a port of its own, bound to the network.
+        lan_port = port if port not in (0, DEFAULT_PORT, TLS_PORT) else LAN_HTTP_PORT
+        origin = f"http://{address}:{lan_port}"
+        url = f"{origin}/mic{query}"
+        return Link(LAN_HTTP, url, address, lan_port, trusted=False,
+                    qr_png=_qr(url),
+                    steps=[
+                        "Keep the phone on the same Wi-Fi as this computer.",
+                        f"On the phone, open Chrome and go to: {CHROME_FLAG}",
+                        f"Put this in the box: {origin}",
+                        "Set the dropdown to Enabled, then tap Relaunch.",
+                        "Now scan the code (or type the address). The browser will "
+                        "treat it as secure, so the microphone works.",
+                        "Allow the microphone when it asks.",
+                    ])
 
     # 3. Cloudflare, only if the owner already set it up.
     public = os.environ.get("ZENO_PHONE_PUBLIC_HOST", "").strip()
