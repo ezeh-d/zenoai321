@@ -1,0 +1,163 @@
+{
+  "project_name": "ZENO",
+  "owner_name": "Divine",
+  "institution": "Redeemer's University",
+  "generated_at": 1786457584.5658317,
+  "history": {
+    "commits": 54,
+    "first": "2026-08-05",
+    "last": "2026-08-11",
+    "active_days": 5
+  },
+  "scale": {
+    "modules": 402,
+    "tests_passing": 0
+  },
+  "features": [
+    {
+      "feature": "Voice conversation",
+      "status": "WORKING",
+      "detail": "speech recognition"
+    },
+    {
+      "feature": "Local AI fallback",
+      "status": "WORKING",
+      "detail": "runs without the internet"
+    },
+    {
+      "feature": "Desktop automation",
+      "status": "WORKING",
+      "detail": "reads and drives applications"
+    },
+    {
+      "feature": "Browser automation",
+      "status": "WORKING",
+      "detail": "real selectors, not screen positions"
+    },
+    {
+      "feature": "Memory",
+      "status": "WORKING",
+      "detail": "remembers across sessions"
+    },
+    {
+      "feature": "Specialist agents",
+      "status": "WORKING",
+      "detail": "delegates to specialists"
+    },
+    {
+      "feature": "Web research",
+      "status": "WORKING",
+      "detail": "fetches and cites real pages"
+    },
+    {
+      "feature": "Video rendering",
+      "status": "WORKING",
+      "detail": "renders and verifies real files"
+    },
+    {
+      "feature": "Documented in-progress work",
+      "status": "PARTIAL",
+      "detail": "9 areas are recorded as partial with their limits named"
+    }
+  ],
+  "technologies": [
+    {
+      "name": "Python",
+      "provenance": "open-source library",
+      "what_for": "the language the system is written in"
+    },
+    {
+      "name": "ZENO architecture",
+      "provenance": "owner",
+      "what_for": "the assistant's own design, workflows and integration"
+    },
+    {
+      "name": "FastAPI",
+      "provenance": "open-source library",
+      "what_for": "the local web API and dashboard"
+    },
+    {
+      "name": "Playwright",
+      "provenance": "open-source library",
+      "what_for": "browser automation"
+    },
+    {
+      "name": "OpenCV",
+      "provenance": "open-source library",
+      "what_for": "image and camera processing"
+    },
+    {
+      "name": "NumPy",
+      "provenance": "open-source library",
+      "what_for": "audio and numeric processing"
+    },
+    {
+      "name": "psutil",
+      "provenance": "open-source library",
+      "what_for": "process and resource monitoring"
+    },
+    {
+      "name": "comtypes / UI Automation",
+      "provenance": "open-source library",
+      "what_for": "reading Windows application controls"
+    },
+    {
+      "name": "ffmpeg",
+      "provenance": "open-source library",
+      "what_for": "video and audio processing"
+    },
+    {
+      "name": "Blender",
+      "provenance": "open-source library",
+      "what_for": "3D rendering"
+    },
+    {
+      "name": "Node.js",
+      "provenance": "open-source library",
+      "what_for": "web tooling"
+    },
+    {
+      "name": "Google Gemini",
+      "provenance": "AI service",
+      "what_for": "language model"
+    },
+    {
+      "name": "Deepgram",
+      "provenance": "AI service",
+      "what_for": "speech recognition"
+    },
+    {
+      "name": "Claude and Codex",
+      "provenance": "built with AI coding assistance",
+      "what_for": "coding assistance during development"
+    }
+  ],
+  "recent_work": [
+    "feat(creative): design system drives site generation; audit the roadmap partials",
+    "feat(creative): vendor the ui-ux-pro-max design data, register Magic MCP",
+    "feat(creative): real Blender backend, and fix PATH-only app detection",
+    "feat(creative): 3D website engine and a timeline that renders real video",
+    "feat(creative): media rights engine, real render verification, SEO artefacts",
+    "feat(connectors): scoped SaaS connections, workflow routing, temporary specialists",
+    "feat(capabilities): decomposition, composition, demonstration, correction, acquisition",
+    "docs(coord): flag the stt refactor test fallout and the inventory cache",
+    "feat(capabilities): cached inventory and an engine that will not bluff",
+    "Build secure ZENO Phase 5 real-world integrations",
+    "docs(coord): record the health fix and correct the duplicate-process claim",
+    "fix(health): parallel bounded checks and a single-flight cache"
+  ],
+  "company_tasks": [],
+  "challenges": [
+    "Response latency \u2014 making a spoken reply feel like conversation rather than a wait.",
+    "Microphone and audio reliability across devices.",
+    "Automation that verifies what it did instead of assuming it worked.",
+    "Keeping the system honest about what is finished and what is not."
+  ],
+  "lessons": [
+    "How to integrate separate systems \u2014 speech, models, automation \u2014 into one.",
+    "Debugging problems that only appear when the pieces run together.",
+    "Why verifying an action matters more than performing it.",
+    "Working with APIs, version control and testing in a real project."
+  ],
+  "attribution_note": "Custom architecture, integration and workflows were built by the owner. Libraries, AI models and coding assistants are named separately and were not written by him."
+}
