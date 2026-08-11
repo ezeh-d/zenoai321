@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ZENO Remote Microphone</title><style>
+:root{color-scheme:dark;--blue:#7aa2ff;--panel:#101727;--muted:#9aa7c2;--red:#ff6681}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#060a14;color:#f3f6ff;font:16px system-ui;padding:24px}
+main{max-width:480px;margin:auto}.head{display:flex;gap:14px;align-items:center}.orb{width:54px;height:54px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,#7ca4ff 35%,#32317d 75%);box-shadow:0 0 20px #5f82df}
+.card{background:var(--panel);border:1px solid #263453;border-radius:18px;padding:18px;margin:18px 0}.muted{color:var(--muted)}button{width:100%;border:0;border-radius:13px;padding:14px;font:700 16px system-ui;background:var(--blue);color:#061026;margin-top:10px}button.stop{background:var(--red)}button:disabled{opacity:.45}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#8490a8;margin-right:7px}.live .dot{background:#45dfa1;box-shadow:0 0 12px #45dfa1}.meter{height:6px;background:#222d45;border-radius:8px;overflow:hidden;margin-top:14px}.meter span{display:block;height:100%;width:0;background:#62d8ff;transition:width .15s}.hide{display:none}a{color:#a9c2ff}
+</style></head><body><main>
+<div class="head"><div class="orb"></div><div><b>ZENO</b><br><span class="muted">Secure phone microphone</span></div></div>
+<section id="login" class="card"><h2 id="loginTitle">Connect this phone</h2><p class="muted" id="loginWhy">Pairing uses the code in the QR link. Nothing to install, no passkey.</p><button id="unlock">Pair and continue</button><p id="loginNote" class="muted"></p></section>
+<section id="controls" class="card hide"><h2 id="state"><span class="dot"></span>Ready</h2><p id="detail" class="muted">Audio stays an input. ZENO listens, thinks, and speaks on the PC.</p><div class="meter"><span id="meter"></span></div><button id="start">Use this phone as ZENO's microphone</button><button id="stop" class="stop hide">Stop microphone</button><p id="quality" class="muted"></p></section>
+<section class="card"><b>Privacy</b><p class="muted">The browser indicator remains visible while the microphone is active. Closing this page stops the stream. Phone audio is not saved by this page.</p></section>
+</main><script>
+const $=id=>document.getElementById(id);let csrf='',device=localStorage.getItem('zeno_phone_device')||'',pc=null,stream=null,statsTimer=0,audioCtx=null,analyser=null,meterTimer=0;
+function b64(v){return v.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(v.length/4)*4,'=')}function bytes(v){return Uint8Array.from(atob(b64(v)),c=>c.charCodeAt(0))}function options(o){if(o.challenge)o.challenge=bytes(o.challenge);for(const k of ['user','allowCredentials','excludeCredentials']){if(o[k]?.id)o[k].id=bytes(o[k].id);if(Array.isArray(o[k]))o[k].forEach(x=>x.id&&(x.id=bytes(x.id)))}return o}function credential(c){const enc=v=>btoa(String.fromCharCode(...new Uint8Array(v))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');const r={id:c.id,rawId:enc(c.rawId),type:c.type,response:{}};for(const[k,v]of Object.entries(c.response))if(v instanceof ArrayBuffer)r.response[k]=enc(v);return r}
+/* FastAPI returns `detail` as a STRING for HTTPException but as an ARRAY OF
+   OBJECTS for 422 validation errors. `Error(d.detail)` on that array
+   stringifies to the literal "[object Object]" -- which is exactly what this
+   phone was showing. Everything thrown here goes through readable() first. */
+function readable(d,r){const pick=v=>{if(!v)return'';if(typeof v==='string')return v;
+  if(Array.isArray(v))return v.map(pick).filter(Boolean).join('; ');
+  if(typeof v==='object')return v.msg||v.detail||v.message||v.reason||'';return String(v)};
+ const said=pick(d&&(d.detail??d.message??d.error));
+ if(said)return said;
+ if(r&&r.status===401)return'This phone is not paired yet. Scan the QR code on the PC again.';
+ if(r&&r.status===403)return'The pairing code has expired or was already used. Show a new QR code on the PC.';
+ if(r)return'The PC answered '+r.status+' ('+(r.statusText||'no reason given')+').';
+ return'Could not reach ZENO on the PC. Check both are on the same Wi-Fi.'}
+function safe(e){/* never let a token reach the screen or the logs */
+ return String(e&&e.message||e||'Something went wrong').replace(/[A-Za-z0-9_-]{24,}/g,'***')}
+async function api(path,data={}){let r;
+ try{r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Zeno-CSRF':csrf},body:JSON.stringify(data)})}
+ catch(e){throw Error('Could not reach ZENO on the PC. Check both are on the same Wi-Fi.')}
+ const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(readable(d,r));return d}
+function status(name,detail,live=false){$('state').classList.toggle('live',live);$('state').innerHTML='<span class="dot"></span>'+name;$('detail').textContent=detail}
+/* The QR link carries ?t=<one-time token>. That token IS the proof: it is
+   single-use, expires in minutes, and buys exactly one permission --
+   remote_audio_send. Passkey verification stays in phone.html for when ZENO
+   is served over real HTTPS; it cannot run on an http:// LAN origin. */
+const _q=new URLSearchParams(location.search);const pairToken=_q.get('token')||_q.get('t')||'';
+function phoneName(){const u=navigator.userAgent;const m=u.match(/\(([^;)]+;\s*)?([^;)]+)\)/);
+ return((navigator.userAgentData&&navigator.userAgentData.platform)||(m&&m[2])||'Phone').trim().slice(0,60)}
+async function unlock(){const b=$('unlock');b.disabled=true;
+ try{
+  if(!pairToken)throw Error('This link has no pairing code in it. Scan the QR code on the PC screen rather than typing the address.');
+  $('loginNote').textContent='Pairing with ZENO...';
+  const d=await api('/api/phone/pair/local',{token:pairToken,device_name:phoneName()});
+  csrf=d.csrf;device=d.device_id;localStorage.setItem('zeno_phone_device',device);
+  if(!(d.scopes||[]).includes('remote_audio_send'))throw Error('ZENO paired this phone but did not grant microphone permission.');
+  /* Strip the token out of the address bar. It is spent, but it should not
+     sit in history, in a screenshot, or in a shared link. */
+  history.replaceState({},'',location.pathname);
+  $('login').classList.add('hide');$('controls').classList.remove('hide');
+  $('quality').textContent='Paired as '+d.name+' - microphone only';
+  status('Paired','Tap below to start sending audio to ZENO.');
+  start();
+ }catch(e){$('loginNote').textContent=safe(e);b.disabled=false}}
+function iceComplete(conn){if(conn.iceGatheringState==='complete')return Promise.resolve();return new Promise(resolve=>{const done=()=>{if(conn.iceGatheringState==='complete'){conn.removeEventListener('icegatheringstatechange',done);resolve()}};conn.addEventListener('icegatheringstatechange',done);setTimeout(resolve,3000)})}
+async function start(){try{if(!isSecureContext)throw Error('This browser will not hand over the microphone on a plain http address. On the phone open chrome://flags, search for "Insecure origins treated as secure", add '+location.origin+', set it to Enabled, then relaunch Chrome and scan the code again.');
+if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw Error('This browser has no microphone API. Use Chrome on the phone.');status('Requesting microphone','Use the browser permission once; it remains under browser control.');stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});pc=new RTCPeerConnection({iceServers:[]});stream.getAudioTracks().forEach(track=>pc.addTrack(track,stream));pc.onconnectionstatechange=()=>{const s=pc?.connectionState||'closed';status(s==='connected'?'Listening on phone':s,s==='connected'?'Say “ZENO” followed by your command.':'Secure WebRTC '+s,s==='connected');if(['failed','closed','disconnected'].includes(s))stop(false)};const offer=await pc.createOffer({offerToReceiveAudio:false});await pc.setLocalDescription(offer);await iceComplete(pc);const answer=await api('/api/phone/mic/offer',{sdp:pc.localDescription.sdp,type:pc.localDescription.type});await pc.setRemoteDescription(answer);$('start').classList.add('hide');$('stop').classList.remove('hide');startMeter();statsTimer=setInterval(sendStats,5000)}catch(e){const n=(e&&e.name)||'';
+ status('Microphone unavailable',
+  n==='NotAllowedError'?'Permission was refused. Tap the lock icon beside the address, allow the microphone, then try again.':
+  n==='NotFoundError'?'This phone reports no microphone.':
+  n==='NotReadableError'?'Another app is holding the microphone. Close it and try again.':safe(e));
+ stop(false)}}
+function startMeter(){audioCtx=new AudioContext();analyser=audioCtx.createAnalyser();analyser.fftSize=256;audioCtx.createMediaStreamSource(stream).connect(analyser);const data=new Uint8Array(analyser.frequencyBinCount);const tick=()=>{if(!analyser)return;analyser.getByteTimeDomainData(data);let sum=0;for(const v of data){const n=(v-128)/128;sum+=n*n}$('meter').style.width=Math.min(100,Math.sqrt(sum/data.length)*280)+'%';meterTimer=setTimeout(tick,150)};tick()}
+async function sendStats(){if(!pc)return;let out={network:navigator.connection?.effectiveType||''};try{for(const report of (await pc.getStats()).values()){if(report.type==='remote-inbound-rtp'&&report.kind==='audio'){out.rtt_ms=(report.roundTripTime||0)*1000;out.jitter_ms=(report.jitter||0)*1000;out.packets_lost=report.packetsLost||0}if(report.type==='outbound-rtp'&&report.kind==='audio')out.packets_sent=report.packetsSent||0}if(navigator.getBattery)out.battery=(await navigator.getBattery()).level;await api('/api/phone/mic/metrics',out);const s=await fetch('/api/phone/mic/status').then(r=>r.json());$('quality').textContent='Source: '+s.selector.selected+' • frames '+s.received_frames}catch(e){$('quality').textContent='Telemetry delayed: '+e.message}}
+async function stop(notify=true){clearInterval(statsTimer);clearTimeout(meterTimer);statsTimer=meterTimer=0;analyser=null;if(audioCtx){audioCtx.close();audioCtx=null}if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}if(pc){pc.close();pc=null}if(notify&&csrf)api('/api/phone/mic/close').catch(()=>{});$('meter').style.width='0';$('start').classList.remove('hide');$('stop').classList.add('hide');status('Stopped','Phone microphone is off.')}
+$('unlock').onclick=unlock;$('start').onclick=start;$('stop').onclick=()=>stop(true);addEventListener('pagehide',()=>stop(true));
+if(!pairToken){$('loginNote').textContent='No pairing code in this link. Scan the QR code shown on the PC.';$('unlock').disabled=true}
+else{$('loginNote').textContent='Ready to pair. This code works once and expires in a few minutes.'}
+</script></body></html>

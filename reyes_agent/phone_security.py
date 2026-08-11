@@ -241,9 +241,20 @@ class PhoneSecurity:
             conn.execute("INSERT INTO device_roles(device_id,role,updated) VALUES(?,?,?)",
                          (device_id, TRUSTED_USER, time.time()))
 
+        # Open the session here rather than making the phone log in again.
+        # There is nothing else it COULD log in with: a token-paired device has
+        # no passkey, so a second step would only be a second thing to fail.
+        # Possession of the one-time token was the proof, and it is now spent.
+        now = time.time()
+        token_value, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+        with self._connection() as conn:
+            conn.execute("INSERT INTO sessions VALUES(?,?,?,?,?)",
+                         (_hash(token_value), device_id, _hash(csrf),
+                          now + SESSION_TTL_S, now))
         self._audit("device_paired_local", device_id, name=name, scopes=scopes)
         return {"device_id": device_id, "name": name, "state": TRUSTED,
-                "scopes": scopes, "method": "ONE_TIME_TOKEN"}
+                "scopes": scopes, "method": "ONE_TIME_TOKEN",
+                "session": token_value, "csrf": csrf}
 
     def _valid_pair_hash(self, token_hash: str) -> bool:
         with self._connection() as conn:

@@ -2763,7 +2763,7 @@ class PhoneLocalPairRequest(BaseModel):
 
 
 @app.post("/api/phone/pair/local")
-def phone_pair_local(req: PhoneLocalPairRequest, request: Request) -> dict[str, Any]:
+def phone_pair_local(req: PhoneLocalPairRequest, request: Request) -> Response:
     """LAN pairing with a one-time token. No WebAuthn, no biometrics.
 
     WebAuthn is unavailable on an http:// origin, so on the local network it
@@ -2788,7 +2788,20 @@ def phone_pair_local(req: PhoneLocalPairRequest, request: Request) -> dict[str, 
         raise HTTPException(403, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"Pairing failed: {type(exc).__name__}") from exc
-    return {"state": "PAIRED", **paired}
+
+    session = paired.pop("session")
+    response = Response(json.dumps({"state": "PAIRED", **paired}),
+                        media_type="application/json")
+    # `secure` MUST follow the real scheme. A Secure cookie is silently
+    # DROPPED by the browser on an http:// origin -- the phone would pair,
+    # look successful, then fail every later call with 401 because it never
+    # stored the session. That is exactly the "connected but nothing happens"
+    # symptom. Over LAN HTTP the session's protection is that it is
+    # unguessable, expires in 30 minutes, and carries one scope.
+    response.set_cookie("zeno_phone_session", session, httponly=True,
+                        secure=request.url.scheme == "https",
+                        samesite="strict", max_age=1800, path="/")
+    return response
 
 
 @app.post("/api/phone/login/options")
