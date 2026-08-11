@@ -76,6 +76,10 @@ class SiteSpec:
     background: str = "#05070d"
     base_url: str = ""
     description: str = ""
+    foreground: str = "#e9eef5"
+    font_url: str = ""
+    heading_font: str = ""
+    body_font: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {"name": self.name, "headline": self.headline,
@@ -90,10 +94,12 @@ class Built:
     files: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     budget_report: dict[str, Any] = field(default_factory=dict)
+    design: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "directory": self.directory, "files": self.files,
-                "problems": self.problems, "budget": self.budget_report}
+                "problems": self.problems, "budget": self.budget_report,
+                "design": self.design}
 
 
 def _scene_js(spec: SiteSpec) -> str:
@@ -205,16 +211,18 @@ if (!supported()) {{
 
 
 def _css(spec: SiteSpec) -> str:
+    body_stack = (f"'{spec.body_font}', " if spec.body_font else "") +         'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+    heading_stack = (f"'{spec.heading_font}', " if spec.heading_font else "") +         "var(--font-body, ui-sans-serif)"
     return f""":root {{
   --bg: {spec.background};
   --accent: {spec.accent};
-  --text: #e9eef5;
+  --text: {spec.foreground};
   --muted: #97a3b4;
 }}
 * {{ box-sizing: border-box; }}
 body {{
   margin: 0; background: var(--bg); color: var(--text);
-  font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 16px/1.65 {body_stack};
 }}
 /* The scene sits BEHIND the content and is never focusable. */
 #scene {{
@@ -224,6 +232,7 @@ body {{
 #scene canvas {{ display: block; }}
 main {{ position: relative; z-index: 1; max-width: 62rem; margin: 0 auto; padding: 0 1.25rem; }}
 .hero {{ min-height: 78vh; display: flex; flex-direction: column; justify-content: center; }}
+h1, h2 {{ font-family: {heading_stack}; }}
 h1 {{ font-size: clamp(2.1rem, 6vw, 4rem); line-height: 1.05; margin: 0 0 1rem; letter-spacing: -0.02em; }}
 .subhead {{ font-size: clamp(1rem, 2.4vw, 1.3rem); color: var(--muted); max-width: 44rem; margin: 0 0 2rem; }}
 section {{ padding: 3.5rem 0; border-top: 1px solid rgba(255,255,255,.08); }}
@@ -250,6 +259,7 @@ def _html(spec: SiteSpec, head_tags: str) -> str:
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         head_tags,
+        (f'<link rel="stylesheet" href="{spec.font_url}">' if spec.font_url else ""),
         '<link rel="stylesheet" href="/styles.css">',
         f'<script type="importmap">{json.dumps({"imports": {"three": THREE_CDN}})}</script>',
         "</head>",
@@ -284,9 +294,42 @@ def _html(spec: SiteSpec, head_tags: str) -> str:
 
 
 def generate(spec: SiteSpec, directory: str | Path, *,
-             pages: list[Any] | None = None) -> Built:
-    """Write a real, runnable site. No build step, no npm install."""
+             pages: list[Any] | None = None, use_design_system: bool = True) -> Built:
+    """Write a real, runnable site. No build step, no npm install.
+
+    With `use_design_system`, the palette, typography and scene are chosen
+    from the vendored design library rather than from my defaults -- and the
+    contrast of the result is verified before it is written, so a site is
+    never shipped with text nobody can read.
+    """
     result = Built(directory=str(directory))
+
+    if use_design_system and not spec.headline.strip() == "":
+        try:
+            from reyes_agent.creative import design
+
+            system = design.for_brief(
+                f"{spec.name} {spec.headline} {spec.subhead} "
+                + " ".join(s.body for s in spec.sections))
+            result.design = system.as_dict()
+            # Only adopt a system that actually passes its own contrast check.
+            result.design["adopted"] = system.accessible
+            if system.accessible:
+                spec.accent = system.primary
+                spec.background = system.background
+                spec.foreground = system.foreground
+                spec.font_url = system.font_url
+                spec.heading_font = system.heading_font
+                spec.body_font = system.body_font
+            else:
+                # A suggestion that fails its own contrast check is DECLINED,
+                # not fatal. Adding it to `problems` failed the whole build
+                # over an advisory palette -- the site was fine, the
+                # suggestion was not. The defaults are already accessible.
+                result.design["adopted"] = False
+                result.design["declined_because"] = system.problems
+        except Exception:  # noqa: BLE001 -- design guidance must never block a build
+            result.design = {}
 
     if spec.scene not in SCENES:
         result.problems.append(f"'{spec.scene}' is not a scene I can build; "

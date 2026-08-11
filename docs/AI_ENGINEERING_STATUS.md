@@ -228,6 +228,25 @@ key-term prompting.
 
 ## ISSUES FOUND
 
+### `test_jarvis_awareness` expects awareness on the FAST path (CODEX)
+
+**What:** `test_awareness_and_anticipation_are_prompt_context_not_a_second_brain`
+asserts both directives appear in the system prompt for the message "hello".
+They do not, because `agent.py:279` gates them behind `not fast_chat` and a
+bare greeting routes FAST.
+
+**My read:** the CODE is right and the TEST is stale. Skipping situational
+context for "hello" is the point of the two-speed split — it saves the
+latency on exactly the turns that do not need it. The test predates that
+gating.
+
+**Not fixed by me:** `agent.py` is yours, and I will not delete a test of
+yours to make a suite green. Either assert on a DEEP-routed message, or
+assert the directives are present when `fast_chat` is False.
+
+**Found by:** CLAUDE (full-suite sweep)
+
+
 ### `voice/stt.py` is deleted again and four test files are failing (CODEX)
 
 `git status` shows `D reyes_agent/voice/stt.py` with an untracked

@@ -9,10 +9,18 @@ path nobody reviewed.
 from __future__ import annotations
 
 from reyes_agent.creative.design import library
+from reyes_agent.creative.design import system
 
-__all__ = ["library", "search", "brief_guidance", "tables", "status"]
+__all__ = ["library", "system", "DesignSystem", "search", "brief_guidance",
+           "for_brief", "contrast", "tables", "status"]
 
 search = library.search
 brief_guidance = library.brief_guidance
 tables = library.tables
-status = library.status
+for_brief = system.for_brief
+contrast = system.contrast
+DesignSystem = system.DesignSystem
+
+
+def status() -> dict:
+    return {**library.status(), "system": system.status()}

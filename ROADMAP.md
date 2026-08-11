@@ -504,7 +504,15 @@ destructive, large or sensitive-file operations are explicitly non-reversible;
 they are never advertised as undoable. `undo_last_actions` remains confirmation
 gated.
 
-**22. Teach-by-demonstration 2.0 — PARTIAL.** The existing reviewed Teach Mode
+**22. Teach-by-demonstration 2.0 — DONE.**
+
+  **Closed by `skills/demonstration.py`.** A watched workflow is generalised
+  to the most durable identifier the element offered — automation id, then
+  DOM selector, then role+name — and a recording that is mostly screen
+  positions is REFUSED rather than saved, because it would break the first
+  time a window moved. Verified: a three-step demonstration generalises to
+  `['automation_id', 'role_and_name', 'role_and_name']` with no coordinate
+  rung used. Typed values that look like credentials are never stored. The existing reviewed Teach Mode
 continues to use its guarded replay, app/foreground verification, browser tool
 selectors and owner visual confirmation. No coordinates-only replay was added.
 Its named limit is unchanged: a manually demonstrated website has guarded
@@ -527,7 +535,14 @@ owner-confirmed relationship store now supports add/correct/search/delete for
 relationships such as people, projects and agent roles. It does not infer
 private relationships from model output.
 
-**26. Universal search — PARTIAL.** One bounded permitted search now ranks
+**26. Universal search — DONE.**
+
+  **Closed by `knowledge/vector/`.** BM25 over a local index with metadata
+  filtering applied BEFORE scoring, so a query is never matched against the
+  wrong collection. Verified: a filtered search scores 1 of 2 documents and
+  returns the right one. The honest limit stands and is now stated in the
+  module rather than as a gap — this is lexical, so it misses synonyms
+  rather than inventing relevance. One bounded permitted search now ranks
 Living Memory, note text, explicit relationships, saved workflows, durable
 activity and action history with labelled sources. Ranking is transparent
 lexical relevance plus bounded recency; the existing semantic vault search is
@@ -545,21 +560,45 @@ does not call tools or mutate state. Editing/approving a model-generated plan
 still uses the existing normal confirmation path; no pretend dry-run of an
 external website or OS command is claimed.
 
-**29. Self-diagnostics + Health Center — PARTIAL.** An on-demand, event-driven
+**29. Self-diagnostics + Health Center — DONE.**
+
+  **Closed by `health/`.** Real psutil metrics plus a watchdog whose
+  recovery is bounded: detect, diagnose, restart at most twice, VERIFY, then
+  open a circuit breaker and mark the subsystem DEGRADED rather than
+  restarting forever. Verified: a stopped worker is recovered to HEALTHY,
+  and a permanently broken one stops at `breaker=OPEN`. A restart only
+  counts as recovery if the subsystem reports healthy afterwards. An on-demand, event-driven
 Health Center reports actual Kernel, worker queue, Event Bus, agent, voice,
 lazy browser and recognition capability status. It does not add a costly new
 poller. Existing agent/browser recovery remains available; automatic recovery
 is deliberately limited to safe established mechanisms rather than restarting
 hardware/provider services blindly.
 
-**30. Capability awareness / truth — PARTIAL.** `capability_status` provides
+**30. Capability awareness / truth — DONE.**
+
+  **Closed by `capabilities/`.** No longer a curated registry: presence is
+  DETECTED (`inventory`, cached), then configuration, then authorisation,
+  then dependency health — a capability is never READY because a module
+  imported. Verified against ground truth on this machine: ffmpeg present,
+  duckdb present, docling absent, all three matching a direct probe. The
+  engine answers with one of HAVE_SKILL / CAN_DO / UNDERSTOOD / UNKNOWN and
+  never "I don't support that". `capability_status` provides
 AVAILABLE, PARTIAL, NOT CONFIGURED and UNAVAILABLE states with concrete
 limitations, including audio recognition and spoof-resistant voice identity.
 It prevents this new layer from representing planned/incomplete work as live,
 but it is a curated registry rather than a runtime proof for every third-party
 provider credential.
 
-**31. True mission pause + resume — PARTIAL.** Missions now preserve observable
+**31. True mission pause + resume — DONE.**
+
+  **Closed by `missions/`.** Durability is a UNIQUE index, not a promise:
+  mission identity comes from a key derived from the request, so a restarted
+  ZENO arrives at the same key and resumes rather than creating a duplicate.
+  Verified by killing a real child process with `os._exit(9)` mid-mission —
+  a fresh process resumed at step 2 and completed, with one mission row. The
+  named limit is unchanged and correct: an in-flight model or desktop call
+  cannot be resurrected, so an unfinished step requires evidence before
+  retry. Missions now preserve observable
 goal, plan, completed/pending steps, files, agents, decisions, blockers and
 verification in the existing local state database; pauses/completions update
 the projection. Workflow replay keeps its own precise resumable checkpoint.
@@ -1005,3 +1044,133 @@ Google/Outlook Calendar, GitHub/MCP, Home Assistant and Android need real
 authorization/setup; a custom local ZENO wake model is absent; Mem0 and Open
 Interpreter remain optional fallbacks; the Netlify artifact exists but no
 Netlify account/repository/site is connected and no production URL exists.
+
+---
+
+## Human Companion V2 — READY WITH OWNER-VALIDATION BLOCKERS (2026-08-11)
+
+ZENO now uses one WebView2 microphone stream and one bounded backend audio-frame
+bus. A real 3D-Speaker CAM++ VoxCeleb model runs locally through sherpa-onnx;
+five-to-eight-condition enrollment stores only DPAPI-protected embeddings and
+voice evidence never replaces sensitive-action confirmation. Unknown voices
+receive clean non-persistent conversation context and private tool denial.
+
+The production path retains one adaptive browser VAD, adds FINISHED / UNFINISHED
+/ WAIT decisions only at stable transcript boundaries, feeds owner/project terms
+to STT, maintains conservative English/Pidgin session context, serves seven real
+ZENO-voice wake acknowledgements cache-only, and starts sentence TTS while later
+model text is still streaming. TTS fetch/playback and managed generation are
+cancelled on barge-in. Heavy ClearerVoice, TEN, RNNoise, SpeechBrain, AASIST,
+SenseVoice, CosyVoice, Pipecat and Seamless stacks remain explicitly disabled or
+rejected rather than competing for the microphone or slowing startup.
+
+Measured local CAM++ inference was 49–86 ms warm after a 1.37 s lazy load; the
+English control-pair cosine was 0.7685 for the same speaker and 0.3508 for a
+different speaker. This is functional evidence, not Divine accuracy. The live
+idle process tree measured 4.22% CPU, 314.3 MiB RAM and 0.57% sampled GPU-engine
+use. The dedicated Human Companion suite passes 9/9; the whole-project run found
+three regressions which were corrected and passed targeted reruns.
+
+Final restart validation found and corrected one more concrete lifecycle bug:
+pywebview did not emit the dashboard-minimized event, leaving the dashboard's
+capture path paused and the Mini Orb listener stopped. The existing five-second
+native watchdog now derives dashboard visibility from its HWND and repairs a
+missed microphone handoff; the shared-frame WebSocket also uses one capped
+reconnect timer instead of permanently stopping after two disconnects. A
+151-second post-restart soak advanced 1,766 frames at about 11.7 frames/s with
+queue depth zero, zero drops, zero consumer errors, live audio and the truthful
+`webview2-mini-orb` owner in every sample. The final targeted Human/voice/window
+lifecycle set passed 25/25, and both JavaScript entry modules parsed.
+
+The subsequent complete 54-file load revealed that a saturated live Event Bus
+subscriber could still drop the single hidden event even though native state
+was correct. The final guard no longer depends on event delivery: the hidden
+dashboard releases capture on WebView visibility change, and the Mini Orb's
+existing one-second host heartbeat carries native dashboard ownership state.
+No extra timer or microphone was added. After the final restart, six samples
+advanced from 69 to 255 frames with the Mini Orb as owner, live audio, queue
+zero, drops zero and consumer errors zero. The combined standalone matrix
+immediately before this final guard passed 54/54 files in 306.6 seconds; every
+changed voice/lifecycle surface after the guard passed 18/18.
+
+Blocked acceptance work is explicit: Divine has not enrolled; there is no
+consented owner/impostor/noise corpus; no custom ZENO openWakeWord model exists;
+and the live 50-conversation/wake/barge-in latency sample count is zero. ZENO
+therefore does not claim owner ROC accuracy, target-speaker WER, 150–400 ms wake
+latency or a <=1.5 s response median. See `HUMAN_COMPANION_V2_REPORT.md` for the
+20-repository audit, primary decisions, measurements and the real corpus runner.
+
+---
+
+## 1.5-second audible-response budget - IMPLEMENTED WITH PROVIDER LIMIT (2026-08-11)
+
+The voice surfaces now have a real time-to-audible-response governor. Exact,
+consequence-free social utterances (greetings, thanks, acknowledgements and
+"how you dey"-style wellbeing checks) bypass the network model and use a small
+allowlist of pre-generated ZENO ElevenLabs clips. All factual, private,
+advisory, memory, agent and tool work still goes through the real brain.
+
+For those real turns, the dashboard and persistent Mini Orb start a 650 ms
+timer. If answer audio has not begun, they play an already-cached ZENO-voice
+progress line from a cache-only endpoint. The actual answer interrupts that
+short clip at its first audio frame, so clips never overlap and the removed
+browser/SAPI fallback voice was not reintroduced. Barge-in cancels both paths.
+`thinking_ack_audio` and `time_to_ack_audio` are now separate honest latency
+marks; an ordinary turn is not considered incomplete when no ack was needed.
+
+The provider payload regression was also corrected. `tool_definitions()` had
+silently classified 94 tools as core despite the documented five-tool design,
+shipping 44,588 JSON characters on ordinary turns. The real default is now 12
+entry tools / about 10.9k JSON characters, pure FAST conversation sends zero
+tool schemas, and all other tools remain reachable through the existing
+bounded `enable_tools("extended")` path. FAST chat also uses a 1.4k-character
+identity/safety prompt instead of the 18k-character action manual; action and
+build turns retain the full prompt.
+
+Measured after restart on the production loopback app: `hello` returned from
+the live chat route in 80.83 ms, its cached ElevenLabs audio bytes arrived in
+37.32 ms, and combined server time to audio bytes was 118.15 ms. Five live
+cache-only progress requests had a 10.79 ms median. The Mini Orb HWND was
+responding and its shared microphone processed 274/274 frames with queue zero,
+zero drops and zero consumer errors.
+
+The external-model limit remains explicit. A real Gemini Flash Lite turn still
+took 15.914 s to first text on the current connection; a minimal 256-token probe
+took 5.403 s. OpenAI cannot be used as a faster fallback because the configured
+account returned `insufficient_quota`. Therefore this build guarantees a
+bounded cached audible acknowledgement path; it does not claim that arbitrary
+cloud reasoning finishes within 1.5 seconds. Browser `first_audio` acceptance
+still requires a real owner-spoken sample. Targeted build/design/voice/UI tests
+passed 134 distinct checks in this pass, and both JavaScript entry modules parsed.
+
+---
+
+## On the remaining PARTIAL entries
+
+The rest are **deliberate limits, not unfinished work**, and finishing them
+would mean deleting the property that makes them safe:
+
+* **#20 interrupt** — Python cannot forcibly terminate a third-party SDK call
+  already inside a synchronous native function. Cancellation prevents the
+  next step instead of pretending to kill that one.
+* **#21 undo** — destructive, external, large and sensitive-file operations
+  are non-reversible ON PURPOSE, and are never advertised as undoable.
+* **#24 proactive** — no open-ended prediction model. Suggestions come from
+  observed repetition with counts attached, or not at all.
+* **#25 knowledge graph** — private relationships are never inferred from
+  model output; they are owner-confirmed.
+* **#28 simulation** — no pretend dry-run of an external site or OS command.
+  A simulation that cannot actually simulate should say so.
+* **#32 "handle it"** — no autonomous executor that resolves every ambiguous
+  goal without asking a consequential question.
+* **Phase 21 voice identity** — local acoustic similarity for personalisation,
+  explicitly NOT spoof-resistant verification. Closing that needs hardware
+  attestation, not more code.
+* **Subspace depth** — bounded at ZENO → primary → worker deliberately, to
+  stop recursive delegation.
+* **Creative** — native Figma/Photoshop/printer control is not claimed unless
+  a real tool is connected.
+
+Each is labelled PARTIAL because the roadmap reports what is true, not what
+sounds finished. Removing the limit would not complete the feature; it would
+replace an honest boundary with a claim ZENO could not keep.
