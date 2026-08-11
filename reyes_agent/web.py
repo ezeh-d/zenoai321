@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import (Cookie, Depends, FastAPI, File, HTTPException, Request,
+from fastapi import (Cookie, Depends, FastAPI, File, Form, HTTPException, Request,
                      UploadFile, WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -155,13 +155,14 @@ async def _no_cache(request, call_next):
     # Phone endpoints are intended to be reachable only through Cloudflare
     # Access. These headers also make the browser surface safe when it is
     # opened directly on loopback during desktop pairing.
-    if request.url.path.startswith(("/phone", "/pair", "/api/phone")):
+    if request.url.path.startswith(("/phone", "/pair", "/mic", "/api/phone")):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
-            "style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self'; base-uri 'none'"
+            "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+            "media-src 'self' blob:; base-uri 'none'"
         )
     return response
 
@@ -256,6 +257,24 @@ def _boot_background_services() -> None:
 
     _try("heartbeat", heartbeat.start_background)
     _try("proactive", proactive.start_background)
+
+    # Generate the configured ZENO-voice realtime phrases once, well after first
+    # render and on the existing bounded pool.  The realtime wake route is
+    # cache-only and will never wait for this provider work.
+    prewarm = os.environ.get("ZENO_WAKE_ACK_PREWARM", "true").strip().casefold() not in {"0", "false", "no", "off"}
+    if prewarm and config.ELEVENLABS_API_KEY and config.ELEVENLABS_VOICE_ID:
+        from reyes_agent.worker_pool import PRIORITY_MAINTENANCE, get_worker_pool
+
+        def _queue_ack_warm() -> None:
+            handle = get_worker_pool().submit(
+                lambda _context: __import__("reyes_agent.voice_manager", fromlist=["warm_realtime_phrases"])
+                .warm_realtime_phrases(),
+                name="voice-realtime-cache", priority=PRIORITY_MAINTENANCE,
+                timeout=120, with_context=True,
+            )
+            del handle
+
+        _try("voice-realtime-cache", _queue_ack_warm)
 
     with _boot_lock:
         _boot_state["background_services"] = started
@@ -354,9 +373,48 @@ async def _on_shutdown() -> None:
             await _event_loop_probe_task
         except Exception:  # noqa: BLE001
             pass
+    from reyes_agent.audio.manager import get_audio_manager
+    from reyes_agent.remote_mic import get_remote_mic_runtime
     from reyes_agent.kernel import get_kernel
 
+    await get_remote_mic_runtime().shutdown()
+    get_audio_manager().shutdown()
     get_kernel().shutdown()
+
+
+@app.websocket("/api/audio/frames")
+async def shared_audio_frames(websocket: WebSocket) -> None:
+    """Receive the one WebView2 PCM stream without blocking the event loop.
+
+    Authentication is the first websocket message rather than a query-string
+    token, so the desktop capability does not leak into access logs or URLs.
+    Frame consumers run on AudioManager's one bounded worker.
+    """
+    await websocket.accept()
+    try:
+        import asyncio
+
+        hello = await asyncio.wait_for(websocket.receive_json(), timeout=3.0)
+        supplied = str(hello.get("token") or "") if isinstance(hello, dict) else ""
+        if _DESKTOP_MIC_TOKEN and not hmac.compare_digest(supplied, _DESKTOP_MIC_TOKEN):
+            await websocket.close(code=1008, reason="native microphone capability required")
+            return
+        from reyes_agent.audio.manager import get_audio_manager
+
+        manager = get_audio_manager()
+        requested_source = str(hello.get("source") or "mini-orb") if isinstance(hello, dict) else "mini-orb"
+        source = requested_source if requested_source in {"mini-orb", "dashboard"} else "unknown"
+        await websocket.send_json({"ready": True, "format": "pcm_s16le/16000/mono"})
+        while True:
+            data = await websocket.receive_bytes()
+            manager.publish(data, sample_rate=16_000, source=f"webview2-{source}")
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 
 @app.post("/api/internal/prepare-shutdown")
@@ -516,6 +574,43 @@ def tts(req: TTSRequest) -> Response:
     return Response(content=audio, media_type="audio/mpeg")
 
 
+@app.get("/api/voice/wake-ack")
+def cached_wake_ack() -> Response:
+    """Cache-only local wake acknowledgement; this route never uses network."""
+    from reyes_agent.voice_manager import cached_wake_acknowledgement
+
+    cached = cached_wake_acknowledgement()
+    if cached is None:
+        return Response(status_code=204, headers={"X-Zeno-Ack-State": "CACHE_EMPTY"})
+    phrase, audio = cached
+    return Response(content=audio, media_type="audio/mpeg", headers={
+        "X-Zeno-Ack-State": "CACHED", "X-Zeno-Ack-Phrase": phrase,
+        "Cache-Control": "no-store",
+    })
+
+
+@app.get("/api/voice/thinking-ack")
+def cached_thinking_ack() -> Response:
+    """Cache-only audible progress; a slow model can never delay this route."""
+    from reyes_agent.voice_manager import cached_thinking_acknowledgement
+
+    cached = cached_thinking_acknowledgement()
+    if cached is None:
+        return Response(status_code=204, headers={"X-Zeno-Ack-State": "CACHE_EMPTY"})
+    phrase, audio = cached
+    return Response(content=audio, media_type="audio/mpeg", headers={
+        "X-Zeno-Ack-State": "CACHED", "X-Zeno-Ack-Phrase": phrase,
+        "Cache-Control": "no-store",
+    })
+
+
+@app.get("/api/voice/latency-policy")
+def voice_latency_policy() -> dict[str, object]:
+    from reyes_agent.voice.latency_governor import diagnostics
+
+    return diagnostics()
+
+
 class ChatRequest(BaseModel):
     message: str
     voice_identity: dict[str, Any] | None = None
@@ -525,6 +620,11 @@ class ChatRequest(BaseModel):
     # seconds apart and only the first is what the owner experiences.
     turn_id: str = ""
     turn_kind: str = "typed"
+
+
+class VocabularyCorrectionRequest(BaseModel):
+    heard: str
+    intended: str
 
 
 class HeartbeatRequest(BaseModel):
@@ -662,6 +762,25 @@ def phase5_status() -> dict[str, Any]:
     """On-demand Phase 5 truth; starts no optional model or service."""
     from reyes_agent.phase5 import status
     return status()
+
+
+@app.get("/api/human-companion/status")
+def human_companion_status() -> dict[str, Any]:
+    from reyes_agent.human_companion import status
+
+    return status()
+
+
+@app.post("/api/vocabulary/correction")
+def vocabulary_correction(req: VocabularyCorrectionRequest, request: Request) -> dict[str, Any]:
+    """Persist an explicit local owner correction; never infer one."""
+    _require_desktop_mic_token(request)
+    from reyes_agent.voice.vocabulary import add_correction
+
+    try:
+        return {"ok": True, **add_correction(req.heard, req.intended)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/wake/status")
@@ -813,6 +932,28 @@ def _end_turn(turn_id: str) -> None:
         from reyes_agent import conversation_state
 
         conversation_state.end_turn(turn_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _fast_local_reply(message: str):
+    """Return only a policy-approved trivial social reply, if any."""
+    try:
+        from reyes_agent.voice.latency_governor import reply_for
+
+        return reply_for(message)
+    except Exception:  # noqa: BLE001 -- optimisation never gates the real brain
+        return None
+
+
+def _mark_fast_reply(turn_id: str) -> None:
+    """Record truthful local stages without pretending a model was called."""
+    try:
+        from reyes_agent import latency
+
+        for mark_name in ("intent_ready", "context_ready", "first_sentence_ready"):
+            latency.mark(turn_id, mark_name)
+        latency.finish(turn_id)
     except Exception:  # noqa: BLE001
         pass
 
@@ -993,6 +1134,15 @@ def chat(req: ChatRequest) -> dict[str, Any]:
         return {"reply": control_reply, "tool_calls": [], "interrupted": True}
     update_situation(recent_command=message, current_task="conversation", current_step="planning")
 
+    fast_reply = _fast_local_reply(message)
+    if fast_reply is not None:
+        turn_id = _open_turn(message, req.turn_id, kind=req.turn_kind)
+        _mark_fast_reply(turn_id)
+        return {
+            "reply": fast_reply.text, "tool_calls": [], "interrupted": False,
+            "local_fast_path": True, "intent": fast_reply.intent,
+        }
+
     from reyes_agent.worker_pool import PRIORITY_BRAIN, get_worker_pool
 
     voice_identity = _validated_voice_identity(req.voice_identity, req.voice_identity_proof)
@@ -1033,6 +1183,16 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
 
     voice_identity = _validated_voice_identity(req.voice_identity, req.voice_identity_proof)
     turn_id = _open_turn(message, req.turn_id, kind=req.turn_kind)
+    fast_reply = _fast_local_reply(message)
+
+    if fast_reply is not None:
+        def immediate():
+            _mark_fast_reply(turn_id)
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 'responding', 'local': True})}\n\n"
+            yield f"data: {json.dumps({'type': 'text', 'text': fast_reply.text, 'local': True, 'intent': fast_reply.intent})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'local': True})}\n\n"
+
+        return StreamingResponse(immediate(), media_type="text/event-stream")
 
     def generate():
         from reyes_agent.worker_pool import PRIORITY_BRAIN, get_worker_pool
@@ -1142,7 +1302,8 @@ def _read_audio_upload(audio: UploadFile) -> bytes:
 
 @app.post("/api/transcribe")
 def transcribe_audio(request: Request, audio: UploadFile = File(...),
-                     speaker_audio: UploadFile | None = File(None)) -> dict[str, Any]:
+                     speaker_audio: UploadFile | None = File(None),
+                     pending_text: str = Form("")) -> dict[str, Any]:
     """Transcribe one VAD-bounded browser clip without starting an agent turn.
 
     The desktop UI calls this from its single processed microphone stream.
@@ -1163,6 +1324,8 @@ def transcribe_audio(request: Request, audio: UploadFile = File(...),
         from reyes_agent.performance_monitor import measure
         from reyes_agent.confidence import record
         from reyes_agent import speaker_identity
+        from reyes_agent.voice.turn import detect as detect_turn
+        from reyes_agent.voice.language_context import observe as observe_language
 
         context.progress("transcribing")
         identity = (speaker_identity.identify(speaker_bytes) if speaker_bytes else {
@@ -1173,13 +1336,15 @@ def transcribe_audio(request: Request, audio: UploadFile = File(...),
         })
         with measure("voice_stt"):
             result = transcribe_result(audio_bytes)
-        transcript = str(result["transcript"]).strip()
+        transcript = " ".join(part for part in (str(pending_text).strip(), str(result["transcript"]).strip()) if part)
         confidence = result.get("confidence")
         record("speech", confidence, "Deepgram final alternative" if confidence is not None else
                "Deepgram response did not provide a confidence value")
         signed_identity, proof = _issue_voice_identity(identity)
-        return {"transcript": transcript, "confidence": confidence,
-                "speaker": {**identity, **signed_identity}, "speaker_proof": proof}
+        turn = detect_turn(transcript)
+        language = observe_language(transcript)
+        return {"transcript": transcript, "confidence": confidence, "turn": turn,
+                "language": language, "speaker": {**identity, **signed_identity}, "speaker_proof": proof}
 
     from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
 
@@ -1892,6 +2057,19 @@ class TurnMarkRequest(BaseModel):
     source: str = "browser"
 
 
+class WakeAckMarkRequest(BaseModel):
+    detected_at: float
+    audio_started_at: float
+    phrase: str = ""
+    source: str = "mini-orb"
+
+
+class BargeInMarkRequest(BaseModel):
+    detected_at: float
+    audio_stopped_at: float
+    source: str = "browser"
+
+
 @app.post("/api/turn/mark")
 def turn_mark(req: TurnMarkRequest) -> dict[str, Any]:
     from reyes_agent import conversation_state, latency
@@ -1906,6 +2084,31 @@ def turn_mark(req: TurnMarkRequest) -> dict[str, Any]:
             turn_id=req.turn_id, detail=req.detail)
         transition = result.as_dict()
     return {"marked": stored, "transition": transition}
+
+
+@app.post("/api/diagnostics/wake-ack")
+def wake_ack_mark(req: WakeAckMarkRequest) -> dict[str, Any]:
+    from reyes_agent import latency
+
+    try:
+        return latency.record_wake_ack(
+            detected_at=req.detected_at, audio_started_at=req.audio_started_at,
+            phrase=req.phrase, source=req.source,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/diagnostics/barge-in")
+def barge_in_mark(req: BargeInMarkRequest) -> dict[str, Any]:
+    from reyes_agent import latency
+
+    try:
+        return latency.record_barge_in(
+            detected_at=req.detected_at, audio_stopped_at=req.audio_stopped_at, source=req.source,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/turn/end")
@@ -2226,8 +2429,8 @@ def speaker_enroll(clips: list[UploadFile] = File(...)) -> dict[str, Any]:
     from reyes_agent import speaker_identity
     from reyes_agent.worker_pool import PRIORITY_VOICE, get_worker_pool
 
-    if not 3 <= len(clips) <= 8:
-        raise HTTPException(400, "Provide 3 to 8 short Divine voice recordings.")
+    if not 5 <= len(clips) <= 8:
+        raise HTTPException(400, "Provide 5 to 8 varied Divine voice recordings.")
     audio_clips = [_read_audio_upload(clip) for clip in clips]
     if sum(len(clip) for clip in audio_clips) > 20 * 1024 * 1024:
         raise HTTPException(413, "Voice-profile recordings exceed the 20 MiB combined limit.")
@@ -2400,6 +2603,21 @@ class PhoneCommandRequest(BaseModel):
     timestamp: float
     message: str
 
+class PhoneMicOfferRequest(BaseModel):
+    sdp: str
+    type: str = "offer"
+
+class PhoneMicMetricsRequest(BaseModel):
+    rtt_ms: float | None = None
+    jitter_ms: float | None = None
+    packets_lost: int | None = None
+    packets_sent: int | None = None
+    battery: float | None = None
+    network: str = ""
+
+class PhoneScopesRequest(BaseModel):
+    scopes: list[str]
+
 def _phone_origin(request: Request) -> tuple[str, str]:
     """Return the externally-visible HTTPS origin/RP ID.
 
@@ -2409,7 +2627,13 @@ def _phone_origin(request: Request) -> tuple[str, str]:
     """
     host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
     host = host.split(":", 1)[0].lower()
+    tailscale_identity = bool(request.headers.get("tailscale-user-login"))
     proto = request.headers.get("x-forwarded-proto", request.url.scheme).lower()
+    # Tailscale Serve terminates a valid tailnet HTTPS certificate and then
+    # uses loopback HTTP for the private backend hop. It supplies a verified
+    # identity header and retains the public .ts.net Host.
+    if tailscale_identity and host.endswith(".ts.net"):
+        proto = "https"
     if proto != "https" or not host or host in {"127.0.0.1", "localhost"}:
         raise HTTPException(503, "Secure Phone Companion hostname is not configured.")
     configured = os.environ.get("ZENO_PHONE_PUBLIC_HOST", "").strip().lower()
@@ -2433,6 +2657,10 @@ def _phone_session(request: Request, zeno_phone_session: str | None = Cookie(def
 @app.get("/pair")
 def phone_page() -> FileResponse:
     return FileResponse(_STATIC_DIR / "phone.html")
+
+@app.get("/mic")
+def phone_mic_page() -> FileResponse:
+    return FileResponse(_STATIC_DIR / "mic.html")
 
 @app.post("/api/phone/admin/pairing")
 def phone_create_pairing(request: Request) -> dict[str, Any]:
@@ -2460,13 +2688,42 @@ def phone_devices(request: Request) -> list[dict[str, Any]]:
     return get_phone_security().devices()
 
 @app.post("/api/phone/admin/devices/{device_id}/{state}")
-def phone_set_device(device_id: str, state: str, request: Request) -> dict[str, bool]:
+async def phone_set_device(device_id: str, state: str, request: Request) -> dict[str, bool]:
     _loopback(request)
     from reyes_agent.phone_security import get_phone_security
     try:
         get_phone_security().set_device(device_id, state=state.upper())
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if state.upper() in {"LOCKED", "REVOKED", "EXPIRED"}:
+        from reyes_agent.remote_mic import get_remote_mic_runtime
+        await get_remote_mic_runtime().close(device_id)
+    return {"ok": True}
+
+@app.post("/api/phone/admin/devices/{device_id}/scopes")
+def phone_set_device_scopes(device_id: str, req: PhoneScopesRequest,
+                            request: Request) -> dict[str, Any]:
+    """Desktop-only capability editor; remote audio is never ambient authority."""
+    _loopback(request)
+    allowed = _PHONE_SCOPES | {"remote_audio_send"}
+    scopes = {str(item).strip().lower() for item in req.scopes}
+    if not scopes <= allowed:
+        raise HTTPException(400, "Unknown phone capability.")
+    from reyes_agent.phone_security import get_phone_security
+    get_phone_security().set_device(device_id, scopes=scopes)
+    return {"ok": True, "scopes": sorted(scopes)}
+
+@app.get("/api/phone/admin/mic/status")
+def phone_admin_mic_status(request: Request) -> dict[str, Any]:
+    _loopback(request)
+    from reyes_agent.remote_mic import get_remote_mic_runtime
+    return get_remote_mic_runtime().status()
+
+@app.post("/api/phone/admin/mic/stop/{device_id}")
+async def phone_admin_mic_stop(device_id: str, request: Request) -> dict[str, bool]:
+    _loopback(request)
+    from reyes_agent.remote_mic import get_remote_mic_runtime
+    await get_remote_mic_runtime().close(device_id)
     return {"ok": True}
 
 
@@ -2500,6 +2757,40 @@ def phone_pair_complete(req: PhoneCredentialRequest, request: Request) -> dict[s
         raise HTTPException(403, f"Secure device verification failed: {exc}") from exc
     return {"state": "PENDING_APPROVAL", "device_id": device_id}
 
+class PhoneLocalPairRequest(BaseModel):
+    token: str = ""
+    device_name: str = ""
+
+
+@app.post("/api/phone/pair/local")
+def phone_pair_local(req: PhoneLocalPairRequest, request: Request) -> dict[str, Any]:
+    """LAN pairing with a one-time token. No WebAuthn, no biometrics.
+
+    WebAuthn is unavailable on an http:// origin, so on the local network it
+    leaves the phone stuck on "Verify this device". This path proves
+    possession of the QR code instead, and grants ONLY remote_audio_send --
+    the phone becomes a microphone and nothing more.
+
+    The WebAuthn endpoints above are untouched and become the right path
+    again the moment ZENO is served over real HTTPS.
+    """
+    from reyes_agent.phone_security import get_phone_security
+
+    token = (req.token or "").strip()
+    if not token:
+        raise HTTPException(400, "No pairing code was supplied. Scan the QR code "
+                                 "again, or open the link it contains.")
+    try:
+        paired = get_phone_security().pair_local(token, req.device_name)
+    except PermissionError as exc:
+        # A plain string, never a structure -- the phone renders `detail`
+        # directly, and an object here is what produced "[object Object]".
+        raise HTTPException(403, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"Pairing failed: {type(exc).__name__}") from exc
+    return {"state": "PAIRED", **paired}
+
+
 @app.post("/api/phone/login/options")
 def phone_login_options(req: PhoneLoginRequest, request: Request) -> dict[str, Any]:
     from reyes_agent.phone_security import get_phone_security
@@ -2525,6 +2816,91 @@ def phone_login_complete(req: PhoneCredentialRequest, request: Request) -> Respo
 def phone_status(request: Request, session=Depends(_phone_session)) -> dict[str, Any]:
     return {"desktop": "ready", "device_id": session["device_id"], "device": session["name"],
             "scopes": json.loads(session["scopes"]), "runtime": _boot_state["phase"]}
+
+
+def _remote_mic_command(context, message: str, identity: dict[str, Any],
+                        requested_turn_id: str, device_id: str) -> dict[str, Any]:
+    """Route remote audio through the established brain and desktop voice."""
+    from reyes_agent.phone_security import get_phone_security
+    from reyes_agent.remote_access import policy
+    from reyes_agent.voice_manager import cached_audio, speak_cached_queued, speak_queued
+
+    device = next((item for item in get_phone_security().devices()
+                   if item["device_id"] == device_id), None)
+    if not device or device["state"] != "TRUSTED":
+        raise PermissionError("Remote microphone device is no longer trusted.")
+    decision = policy.evaluate(message, scopes=set(device["scopes"]))
+    if not decision.allowed:
+        reply = decision.reason
+        hit = cached_audio(reply)
+        speak_cached_queued(hit) if hit else speak_queued(reply)
+        return {"reply": reply, "tool_calls": [], "blocked": True}
+
+    turn_id = _open_turn(message, requested_turn_id, kind="voice")
+    try:
+        from reyes_agent import latency
+        latency.mark(turn_id, "stt_final")
+    except Exception:
+        pass
+    fast_reply = _fast_local_reply(message)
+    if fast_reply is not None:
+        _mark_fast_reply(turn_id)
+        result = {"reply": fast_reply.text, "tool_calls": [], "local_fast_path": True}
+    else:
+        result = _conversation_turn(context, message, voice_identity=identity, turn_id=turn_id)
+    reply = str(result.get("reply") or "")
+    hit = cached_audio(reply)
+    speak_cached_queued(hit) if hit else speak_queued(reply)
+    _end_turn(turn_id)
+    return result
+
+
+@app.post("/api/phone/mic/offer")
+async def phone_mic_offer(req: PhoneMicOfferRequest, request: Request,
+                          session=Depends(_phone_session)) -> dict[str, str]:
+    if not config.REMOTE_MIC_ENABLED:
+        raise HTTPException(503, "Remote microphone is disabled on this ZENO.")
+    scopes = set(json.loads(session["scopes"]))
+    if "remote_audio_send" not in scopes:
+        raise HTTPException(403, "This phone does not have REMOTE_AUDIO_SEND capability.")
+    from reyes_agent.remote_access import policy
+    if not policy.check_rate("remote_mic_offer", session["device_id"]).allowed:
+        raise HTTPException(429, "Too many microphone connection attempts.")
+    if len(req.sdp) > 128_000 or req.type != "offer":
+        raise HTTPException(400, "Invalid WebRTC offer.")
+    from reyes_agent.remote_mic import get_remote_mic_runtime
+    runtime = get_remote_mic_runtime()
+    runtime.set_command_handler(_remote_mic_command)
+    try:
+        return await runtime.offer(session["device_id"], req.sdp, req.type,
+                                   session_expires=float(session["expires"]))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/api/phone/mic/metrics")
+def phone_mic_metrics(req: PhoneMicMetricsRequest, request: Request,
+                      session=Depends(_phone_session)) -> dict[str, bool]:
+    if "remote_audio_send" not in set(json.loads(session["scopes"])):
+        raise HTTPException(403, "REMOTE_AUDIO_SEND capability required.")
+    from reyes_agent.remote_mic import get_remote_mic_runtime
+    get_remote_mic_runtime().client_metrics(session["device_id"], req.model_dump())
+    return {"ok": True}
+
+
+@app.post("/api/phone/mic/close")
+async def phone_mic_close(request: Request, session=Depends(_phone_session)) -> dict[str, bool]:
+    from reyes_agent.remote_mic import get_remote_mic_runtime
+    await get_remote_mic_runtime().close(session["device_id"])
+    return {"ok": True}
+
+
+@app.get("/api/phone/mic/status")
+def phone_mic_status(request: Request, session=Depends(_phone_session)) -> dict[str, Any]:
+    if "remote_audio_send" not in set(json.loads(session["scopes"])):
+        raise HTTPException(403, "REMOTE_AUDIO_SEND capability required.")
+    from reyes_agent.remote_mic import get_remote_mic_runtime
+    return get_remote_mic_runtime().status()
 
 @app.post("/api/phone/command")
 def phone_command(req: PhoneCommandRequest, request: Request, session=Depends(_phone_session)) -> dict[str, Any]:

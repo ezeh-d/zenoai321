@@ -33,7 +33,10 @@ PENDING_APPROVAL = "PENDING_APPROVAL"
 TRUSTED, LOCKED, REVOKED, EXPIRED = "TRUSTED", "LOCKED", "REVOKED", "EXPIRED"
 OWNER, TRUSTED_USER, GUEST, SERVICE = "OWNER", "TRUSTED_USER", "GUEST", "SERVICE"
 DEVICE_ROLES = {OWNER, TRUSTED_USER, GUEST, SERVICE}
-DEFAULT_SCOPES = {"status", "talk", "missions", "agents", "saved_routines"}
+REMOTE_AUDIO_SEND = "remote_audio_send"
+DEFAULT_SCOPES = {
+    "status", "talk", "missions", "agents", "saved_routines", REMOTE_AUDIO_SEND,
+}
 PAIR_TTL_S, CHALLENGE_TTL_S, SESSION_TTL_S = 300, 300, 1800
 _DB = Path(os.environ.get("LOCALAPPDATA", str(config.PROJECT_ROOT))) / "ZENO" / "phone" / "devices.sqlite"
 
@@ -193,6 +196,55 @@ class PhoneSecurity:
         self._audit("device_pending", device_id, name=subject["name"])
         return device_id
 
+    def pair_local(self, token: str, device_name: str) -> dict[str, Any]:
+        """Pair over the LAN with a one-time token instead of WebAuthn.
+
+        WebAuthn cannot work on an http:// origin -- `navigator.credentials`
+        needs a secure context, and even behind Chrome's secure-origin flag
+        the relying-party checks are built for a real HTTPS host. On the LAN
+        that leaves the phone stuck on "Verify this device" forever, which is
+        exactly the symptom this exists to remove.
+
+        The token carries the trust instead: it is 32 random URL-safe bytes,
+        stored only as a hash, single-use, and expires with PAIR_TTL_S.
+        Consuming it is what proves the person holding the phone also had
+        physical access to this screen.
+
+        THE SCOPE IS THE POINT. A LAN-paired phone gets REMOTE_AUDIO_SEND and
+        NOTHING else -- no desktop control, no filesystem, no shell, no
+        memory, no mail. It is a microphone, so it is allowed to be a
+        microphone. `finish_registration` grants DEFAULT_SCOPES because it
+        proved possession of a hardware credential; this proved possession of
+        a QR code, which is a weaker claim and gets a narrower grant.
+        """
+        pair_hash = self._pair_hash(token)
+        if pair_hash is None:
+            raise PermissionError(
+                "That pairing code has expired or was already used. "
+                "Generate a new QR code on the computer.")
+
+        name = (str(device_name or "").strip() or "Phone")[:60]
+        device_id = str(uuid.uuid4())
+        scopes = [REMOTE_AUDIO_SEND]
+
+        with self._connection() as conn:
+            conn.execute("UPDATE pairs SET consumed=1 WHERE token_hash=?", (pair_hash,))
+            conn.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
+                # `credential_id` and `public_key` are NOT NULL -- the schema
+                # was written for WebAuthn, where every device has one. A
+                # LAN-paired phone has no credential, so it carries a marked
+                # sentinel rather than a null: it keeps the constraint honest
+                # AND makes token-paired devices identifiable at a glance,
+                # which matters because they are the weaker trust.
+                device_id, name, f"local-token:{device_id}", b"", 0, TRUSTED,
+                json.dumps(scopes), time.time(), None, None, None))
+            conn.execute("INSERT INTO device_roles(device_id,role,updated) VALUES(?,?,?)",
+                         (device_id, TRUSTED_USER, time.time()))
+
+        self._audit("device_paired_local", device_id, name=name, scopes=scopes)
+        return {"device_id": device_id, "name": name, "state": TRUSTED,
+                "scopes": scopes, "method": "ONE_TIME_TOKEN"}
+
     def _valid_pair_hash(self, token_hash: str) -> bool:
         with self._connection() as conn:
             row = conn.execute("SELECT * FROM pairs WHERE token_hash=?", (token_hash,)).fetchone()
@@ -228,6 +280,14 @@ class PhoneSecurity:
         if not row or (trusted and row["state"] != TRUSTED):
             raise PermissionError("This device is not trusted.")
         return row
+
+    def is_device_trusted(self, device_id: str) -> bool:
+        """Cheap revocation check used by long-lived media sessions."""
+        try:
+            self._device(device_id, trusted=True)
+            return True
+        except PermissionError:
+            return False
 
     def session(self, token: str, csrf: str = "", require_csrf: bool = False) -> sqlite3.Row:
         with self._connection() as conn:
