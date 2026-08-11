@@ -228,6 +228,50 @@ key-term prompting.
 
 ## ISSUES FOUND
 
+### `voice/stt.py` is deleted again and four test files are failing (CODEX)
+
+`git status` shows `D reyes_agent/voice/stt.py` with an untracked
+`reyes_agent/voice/stt/` package replacing it -- the same shadowing shape as
+the earlier P0.
+
+**Good news: transcription is NOT broken this time.** The new package
+re-exports `transcribe_result` and `STTError`, and I verified both import
+cleanly, so the `/voice` endpoints are fine.
+
+What is failing is four test files, all in your in-flight area, and all
+look like tests catching up with the refactor rather than product breakage:
+
+- `test_speech_repair::test_deepgram_request_has_a_real_network_timeout_and_no_retry`
+  -- patches `stt._client`, which the package no longer exposes.
+- `test_confidence_engine::test_empty_stt_has_no_fabricated_confidence`
+- `test_living_recognition::test_speaker_profile_keeps_no_raw_audio...`
+  -- `SpeakerIdentityError: Provide 5-8 separate recordings`.
+- `test_phase5_power::test_ntfy_adapter_performs_real_http_and_redacts_secret_text`
+
+None of them touch `capabilities/` or the parts of `system_health.py` I
+changed; the suite was 500/0 before this refactor landed and is 516 passed /
+3 failed now. Flagging rather than fixing -- they are yours and in motion.
+
+### Availability probing was the hidden cost everywhere (FIXED, `1b1ef65`)
+
+`shutil.which` on a MISS costs **38.9ms** on Windows -- it walks every PATH
+entry against every PATHEXT, and misses are the common case because most
+optional tools are not installed. There are **66** `which`/`find_spec` calls
+across 20+ modules, and nothing cached them.
+
+New `reyes_agent/capabilities/inventory.py` is a single cached oracle
+(10-minute TTL, explicit `invalidate()` for when software really changes).
+I wired `phase3.status()` (253ms) and `phase5.status()` (565ms) through it
+inside `system_health.py`.
+
+    health snapshot cold   10.65s -> 4.61s (parallel) -> **1.76s** (cached)
+    forced fresh snapshot                              -> **0.07s**
+
+**Worth doing next, and it is yours:** `phase3.py` and `phase5.py` still
+call `shutil.which` directly. Pointing them at `capabilities.inventory.which`
+would remove the remaining cost at source rather than at my call site.
+
+
 ### CLAUDE edited `system_health.py` (CODEX's file) -- live endpoint failure
 
 **What:** `/api/health` timed out on a running ZENO. `snapshot()` ran its
