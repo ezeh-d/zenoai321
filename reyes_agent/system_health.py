@@ -2,28 +2,91 @@
 
 No polling thread is created. Expensive backends are described from lazy
 adapter state and only activated by their real feature path.
+
+WHY THE CHECKS RUN CONCURRENTLY
+-------------------------------
+Measured on a live ZENO: fifteen sequential checks took **10.65s**, and
+`/api/health` -- which the dashboard polls -- timed out. The time was not
+one pathological backend but several honest ones adding up: PHASE 5
+SERVICES 2.5s, WAKE WORD 2.3s, MCP 2.3s, ADVANCED SERVICES 1.1s.
+
+The checks are independent of each other, so they are gathered in parallel
+and each is bounded: one wedged backend now costs its own timeout instead
+of the whole snapshot. A brief cache then keeps a polling dashboard from
+re-running all fifteen every second.
+
+`force=True` bypasses the cache when a caller genuinely needs this instant.
 """
 
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from reyes_agent.memory.privacy import redact
 
+# Comfortably longer than a build takes. A 4s TTL on a ~5s build is useless:
+# it expires while the build is still running, so consecutive callers never
+# hit it -- observed directly, two /api/health calls costing 6.3s then 5.1s.
+CACHE_TTL_S = 20.0
 
-def snapshot() -> dict[str, Any]:
+# A single check may not hold the snapshot longer than this.
+CHECK_TIMEOUT_S = 5.0
+
+_cache_lock = threading.Lock()
+_build_lock = threading.Lock()
+_cached: dict[str, Any] | None = None
+_cached_at = 0.0
+
+
+def snapshot(*, force: bool = False) -> dict[str, Any]:
+    """Current subsystem health. Cached; see CACHE_TTL_S.
+
+    Concurrent callers share one build. Without that, every dashboard poll
+    that lands while a build is running starts its OWN fifteen checks, and
+    the contention makes each of them slower -- a stampede that gets worse
+    the more clients are watching.
+    """
+    global _cached, _cached_at
+
+    def fresh() -> dict[str, Any] | None:
+        with _cache_lock:
+            if _cached is not None and (time.time() - _cached_at) < CACHE_TTL_S:
+                return dict(_cached, cached=True)
+        return None
+
+    if not force:
+        hit = fresh()
+        if hit is not None:
+            return hit
+
+    with _build_lock:
+        # Someone may have finished building while this caller waited.
+        if not force:
+            hit = fresh()
+            if hit is not None:
+                return hit
+        result = _build()
+        with _cache_lock:
+            _cached, _cached_at = result, time.time()
+    return dict(result, cached=False)
+
+
+def _build() -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
-    def check(name: str, operation: Callable[[], tuple[str, str, dict[str, Any] | None]]) -> None:
+    def check(name: str, operation: Callable[[], tuple[str, str, dict[str, Any] | None]]
+              ) -> dict[str, Any]:
         started = time.perf_counter()
         try:
             state, detail, metrics = operation()
         except Exception as exc:
             state, detail, metrics = "DEGRADED", f"{type(exc).__name__}: {redact(exc, limit=240)}", None
-        checks.append({"system": name, "status": state, "detail": detail,
-                       "latency_ms": round((time.perf_counter() - started) * 1000, 2),
-                       **({"metrics": metrics} if metrics else {})})
+        return {"system": name, "status": state, "detail": detail,
+                "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+                **({"metrics": metrics} if metrics else {})}
 
     def core():
         from reyes_agent.kernel import get_kernel
@@ -149,14 +212,41 @@ def snapshot() -> dict[str, Any]:
         ), {"enabled": data["enabled"], "total": data["total"], "degraded": failed,
             "states": {item["key"]: item["state"] for item in data["services"]}}
 
-    for name, operation in (
+    def phase5_services():
+        from reyes_agent.phase5 import status
+        data = status()
+        working = [item for item in data["integrations"] if item["state"] in {"WORKING", "ONLINE"}]
+        return "ONLINE", f"{len(working)}/{data['total']} integrations operational; remaining services are explicitly gated.", {
+            "working": len(working), "total": data["total"],
+            "states": {item["key"]: item["state"] for item in data["integrations"]},
+        }
+
+    operations = (
         ("ZENO CORE", core), ("ENVIRONMENT", environment), ("IDENTITY", identity),
         ("MODEL PROVIDERS", providers), ("VOICE", voice), ("MEMORY", memory), ("WAKE WORD", wake),
         ("VISION/COMPUTER", integrations), ("BROWSER", browser), ("AGENTS", agents),
         ("CODING SPECIALIST", coding), ("MCP", mcp), ("LOCAL WINDOWS DEVICE", devices),
-        ("ADVANCED SERVICES", advanced_services),
-    ):
-        check(name, operation)
+        ("ADVANCED SERVICES", advanced_services), ("PHASE 5 SERVICES", phase5_services),
+    )
+
+    # Independent checks, so gather them at once. Results are collected back
+    # in declared order -- a dashboard that reorders itself every refresh is
+    # unreadable, and the order is part of the report.
+    with ThreadPoolExecutor(max_workers=len(operations),
+                            thread_name_prefix="zeno-health") as pool:
+        futures = [(name, pool.submit(check, name, operation))
+                   for name, operation in operations]
+        for name, future in futures:
+            try:
+                checks.append(future.result(timeout=CHECK_TIMEOUT_S))
+            except Exception as exc:
+                # A check that will not answer is a health finding in itself,
+                # not a reason for the whole snapshot to fail.
+                checks.append({
+                    "system": name, "status": "DEGRADED",
+                    "detail": (f"did not answer within {CHECK_TIMEOUT_S:.0f}s "
+                               f"({type(exc).__name__})"),
+                    "latency_ms": round(CHECK_TIMEOUT_S * 1000, 2)})
 
     overall = "ONLINE"
     if any(item["status"] in {"FAILED", "ERROR"} for item in checks):
