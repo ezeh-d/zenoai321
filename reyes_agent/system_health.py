@@ -35,6 +35,12 @@ CACHE_TTL_S = 20.0
 # A single check may not hold the snapshot longer than this.
 CHECK_TIMEOUT_S = 5.0
 
+# Availability reports -- which binaries and packages exist -- change only
+# when the owner installs something, so they outlive a health snapshot by a
+# long way. Measured: phase3.status() 253ms and phase5.status() 565ms are
+# almost entirely `shutil.which` misses at 39ms each.
+_AVAILABILITY_TTL_S = 300.0
+
 _cache_lock = threading.Lock()
 _build_lock = threading.Lock()
 _cached: dict[str, Any] | None = None
@@ -201,8 +207,12 @@ def _build() -> dict[str, Any]:
             return "DEGRADED", f"Phase 1 integration import failed: {type(exc).__name__}: {exc}", None
 
     def advanced_services():
+        from reyes_agent.capabilities import inventory
         from reyes_agent.phase3 import status
-        data = status()
+
+        # 253ms of pure availability probing per call, and it changes only
+        # when software is installed. See capabilities/inventory.py.
+        data = inventory.probe("phase3.status", status, ttl_s=_AVAILABILITY_TTL_S)
         failed = sum(1 for item in data["services"]
                      if item["state"] == "DEGRADED" and item["enabled"])
         state = data["state"]
@@ -213,8 +223,10 @@ def _build() -> dict[str, Any]:
             "states": {item["key"]: item["state"] for item in data["services"]}}
 
     def phase5_services():
+        from reyes_agent.capabilities import inventory
         from reyes_agent.phase5 import status
-        data = status()
+
+        data = inventory.probe("phase5.status", status, ttl_s=_AVAILABILITY_TTL_S)
         working = [item for item in data["integrations"] if item["state"] in {"WORKING", "ONLINE"}]
         return "ONLINE", f"{len(working)}/{data['total']} integrations operational; remaining services are explicitly gated.", {
             "working": len(working), "total": data["total"],
