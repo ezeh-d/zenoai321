@@ -294,6 +294,38 @@ class PhoneSecurity:
         self._audit("mic_key_rotated")
         return key
 
+    def refresh_local_scopes(self) -> dict[str, Any]:
+        """Bring already-paired phones up to the current grant.
+
+        A phone paired before this grant widened would otherwise keep the
+        old audio-only scopes until it was re-paired -- so the owner would
+        scan a fresh code to fix something that is not his mistake. Only
+        devices paired by the standing microphone key are touched, and every
+        change is audited.
+        """
+        changed: list[str] = []
+        want = sorted(DEFAULT_SCOPES)
+        with self._connection() as conn:
+            rows = conn.execute(
+                # BOTH local pairing paths. The first version matched only
+                # 'mic-key:%' and left phones paired by the earlier one-time
+                # token stuck on audio-only -- the owner would have had to
+                # work out which code he had scanned to know why one phone
+                # obeyed and another did not.
+                "SELECT device_id,name,scopes FROM devices "
+                "WHERE state=? AND (credential_id LIKE 'mic-key:%' "
+                "                   OR credential_id LIKE 'local-token:%')",
+                (TRUSTED,)).fetchall()
+            for row in rows:
+                if sorted(json.loads(row["scopes"])) == want:
+                    continue
+                conn.execute("UPDATE devices SET scopes=? WHERE device_id=?",
+                             (json.dumps(want), row["device_id"]))
+                changed.append(str(row["name"]))
+        for name in changed:
+            self._audit("local_device_scopes_refreshed", name=name, scopes=want)
+        return {"upgraded": len(changed), "devices": changed, "scopes": want}
+
     def pair_with_mic_key(self, key: str, device_name: str,
                           peer_ip: str = "") -> dict[str, Any]:
         """Pair a phone with the standing key. No expiry, still audio-only.
@@ -318,7 +350,26 @@ class PhoneSecurity:
 
         name = (str(device_name or "").strip() or "Phone")[:60]
         device_id = str(uuid.uuid4())
-        scopes = [REMOTE_AUDIO_SEND]
+
+        # THE PHONE IS A MICROPHONE, NOT A LESSER PRINCIPAL.
+        #
+        # It first carried REMOTE_AUDIO_SEND alone, and that was right for a
+        # pairing credential considered on its own. But it made the remote
+        # microphone useless: every sentence was transcribed perfectly and
+        # then refused with "this device does not have the 'status' scope" --
+        # ZENO could hear the owner and was not allowed to answer him.
+        #
+        # The owner's voice through his own phone is the owner speaking. The
+        # phone is the conduit; the authority belongs to the person. So a
+        # locally-paired phone now carries the same scopes a passkey-verified
+        # device does.
+        #
+        # WHAT DOES NOT WIDEN, AND CANNOT: money movement and security or
+        # credential changes are refused by CATEGORY in remote_access.policy,
+        # before scopes are ever consulted. No scope grants them, so a lost
+        # phone still cannot start either one -- which was the actual point
+        # of keeping the grant narrow.
+        scopes = sorted(DEFAULT_SCOPES)
         now = time.time()
         with self._connection() as conn:
             conn.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,?,?,?,?,?)", (

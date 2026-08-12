@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from reyes_agent.phone_security import PhoneSecurity
+from reyes_agent.phone_security import DEVICE_KEY_AUTH, PhoneSecurity
 
 
 class PhoneSecurityTests(unittest.TestCase):
@@ -40,3 +40,42 @@ class PhoneSecurityTests(unittest.TestCase):
         manual = self.security.create_pair()
         options = self.security.registration_options(manual["manual_code"], "Phone", "zeno.example.com")
         self.assertTrue(options["challenge"])
+
+    def test_standing_mic_key_creates_a_usable_session(self) -> None:
+        """The phone is a microphone, not a lesser principal.
+
+        This asserted audio-only, and that made the remote microphone
+        useless: every sentence was transcribed perfectly and then refused
+        with "this device does not have the 'status' scope" -- ZENO could
+        hear the owner and was not allowed to answer him. The grant now
+        matches a passkey-verified device.
+        """
+        paired = self.security.pair_with_mic_key(
+            self.security.mic_key(), "Test phone", peer_ip="127.0.0.1")
+        session = self.security.session(paired["session"])
+        self.assertEqual(session["auth_level"], DEVICE_KEY_AUTH)
+        self.assertEqual(session["device_id"], paired["device_id"])
+        scopes = set(self.security.devices()[0]["scopes"])
+        self.assertIn("remote_audio_send", scopes)
+        self.assertIn("status", scopes)      # may answer a question
+        self.assertIn("talk", scopes)        # may act on an instruction
+
+    def test_a_paired_phone_still_cannot_touch_money_or_credentials(self) -> None:
+        """What did NOT widen, and cannot.
+
+        Money movement and security changes are refused by CATEGORY, before
+        scopes are consulted -- so no grant reaches them, and a lost phone
+        still cannot start either one.
+        """
+        from reyes_agent.remote_access import policy
+
+        self.security.pair_with_mic_key(
+            self.security.mic_key(), "Test phone", peer_ip="127.0.0.1")
+        scopes = set(self.security.devices()[0]["scopes"])
+        for forbidden in ("transfer 500 to my brother", "change my password",
+                          "disable the firewall"):
+            self.assertFalse(policy.evaluate(forbidden, scopes=scopes).allowed,
+                             forbidden)
+        for allowed in ("what time is it", "open slack"):
+            self.assertTrue(policy.evaluate(allowed, scopes=scopes).allowed,
+                            allowed)
