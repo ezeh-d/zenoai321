@@ -718,8 +718,9 @@ the bounded dashboard cadence and cursor-eye wiring.
 
 ## Multi-level specialist teams and Subspace — PARTIAL
 
-The existing 13 primary specialists now have bounded, on-demand worker-team
-definitions (74 workers total), rather than treating APEX as a special
+The original specialist roster gained bounded, on-demand worker-team
+definitions (the canonical registry now exposes 14 primaries / 77 workers),
+rather than treating APEX as a special
 parallel framework. Workers reuse the current specialist provider turn,
 scoped tool registry, permission path, cancellation check and Event Bus; no
 worker thread, private Event Bus, or recursive worker hierarchy is created.
@@ -762,13 +763,38 @@ numbers, but `agent.worker_started` did not fire. Workers engage for sub-tasks
 that genuinely need their depth. If more eager delegation is wanted, the lever
 is the team-roster guidance in `_run_specialist`, not the architecture.
 
-**Still not live-verified:** the Subspace overlay rendering a multi-worker
-mission on the running desktop process (the endpoint and event payloads it
-consumes are verified; the visual assembly is not), and cancellation
-propagating ZENO → primary → worker against a live provider. Manual summon/dismiss controls are intentionally not
-added: delegation and cancellation continue through the existing permissioned
-mission/agent runtime rather than a dashboard button that could fabricate or
-bypass work.
+**Cancellation ZENO → primary → worker — CLOSED 2026-08-12.** A live provider
+was not what made this true: a real model call proves the model answered, not
+that a stop reaches the worker. `tests/test_subspace_cancellation.py` drives
+the real `run_worker` with a cancel check that fires partway through and
+asserts (a) a stop before the first round never calls the provider, (b) a stop
+between tool rounds runs **no** tool afterwards, and (c) the terminal event
+says `cancelled` and never `success` — a deliberate interruption reported as
+failure is how it turns into a retry.
+
+**Overlay live-verified 2026-08-12 (running desktop process, real endpoint):**
+`zenoSubspace.open()` renders with `display: flex` and the `open` class; the
+summary reads from real server state (`0 active · 0/14 alive · 77 workers`);
+all 14 primaries render; selecting APEX renders its real role and state.
+`/api/hierarchy` returns **14 primaries / 77 workers** — the 13/74 recorded
+above was stale, and a hierarchy that disagrees with the registry would draw a
+team ZENO does not think it has, so a test now pins the two together.
+
+**Found while verifying:** the overlay is now the newer Agent Space module,
+and its `ingest()` does not accept client-supplied events — it only schedules
+a re-read of `/api/hierarchy`. Synthetic worker events therefore render
+nothing, **by design**. That is the correct property (the dashboard cannot be
+made to display work that did not happen), and it is also the reason the last
+item below cannot be closed without a real provider run.
+
+**Still not live-verified:** the overlay rendering a multi-worker mission
+*while real workers are running*. Everything it consumes is verified — the
+endpoint, the payload shape, the `parent` field it nests on, selection, and
+the render path — but the populated visual state needs a genuine delegated
+mission, because the overlay refuses to draw anything else. Manual
+summon/dismiss controls are intentionally not added: delegation and
+cancellation continue through the existing permissioned mission/agent runtime
+rather than a dashboard button that could fabricate or bypass work.
 
 ---
 
@@ -1142,6 +1168,91 @@ bounded cached audible acknowledgement path; it does not claim that arbitrary
 cloud reasoning finishes within 1.5 seconds. Browser `first_audio` acceptance
 still requires a real owner-spoken sample. Targeted build/design/voice/UI tests
 passed 134 distinct checks in this pass, and both JavaScript entry modules parsed.
+
+---
+
+## Remote phone-as-microphone Phase 1 — IMPLEMENTED, DEPLOYMENT GATED (2026-08-11)
+
+ZENO now has one secure phone audio endpoint at `/mic`. Passkey-authenticated
+phones negotiate WebRTC DTLS-SRTP/Opus, and decoded 16 kHz mono frames enter
+the existing bounded `AudioManager`; no second assistant, mic owner, STT,
+brain, or speech pipeline was created. The narrow `remote_audio_send` scope is
+checked independently of a trusted-device label. Revocation/session expiry is
+revalidated, and event-driven quality/hysteresis restores local WebView2 after
+disconnect or sustained poor transport. The lightweight phone page stops all
+timers/tracks on close and the dashboard exposes real phone approval and mic
+status controls.
+
+A latest real two-peer loopback run measured 147.82 ms negotiation and 1,164.91 ms from
+offer start to ten received/decoded frames, selecting `phone:benchmark`. The
+combined remote security, phone, human-companion and response-budget suite
+passed 52/52. A separate critical startup/window/Phase 21/Phase 22/Mini Orb/
+microphone/VAD/visual matrix passed 81/81 (134 distinct checks total after the
+final network-quality regression). Pytest
+collects 663 maintained checks; its all-at-once run exceeded the 15-minute
+command limit without a final result and is not misreported as passing. See
+`REMOTE_MIC_REPORT.md`.
+
+The restarted production host was responsive and the Mini Orb advanced 33
+audio frames over a two-second sample with queue zero, drops zero and consumer
+errors zero. A local-safe voice `hello` plus its exact cached ZENO ElevenLabs
+audio took 1,151.15 ms sequential server time; the independent cache-only
+thinking acknowledgement took 221.75 ms.
+
+Physical-phone acceptance is honestly gated: this checkout currently has
+remote access disabled and no HTTPS Phone Companion host/tunnel configured.
+Mobile browsers will not grant microphone capture to insecure HTTP, so ZENO
+does not open the desktop API to the LAN as a shortcut. TURN/internet NAT
+traversal, locked-phone background capture and multiple selected phones remain
+Phase 2 rather than simulated claims.
+
+---
+
+## Agent Space / Council Deck / switchable Mini Orb — DONE (2026-08-12)
+
+The earlier Subspace projection is now a real **ZENO Agent Space** operating
+view rather than a separate scheduler or a static agent mock-up. The backend
+projects the canonical `agent_runtime` registry, health store, bounded worker
+teams, Event Bus, confirmation queue and configured voices through
+`/api/agent-space`; ZENO remains the executive, policy controller and final
+synthesizer. The live roster currently resolves 14 registered primary agents
+and 77 workers from those runtime sources, with ZENO represented separately as
+master. Legacy `/api/hierarchy` remains available for compatibility.
+
+The desktop overlay provides the five required views: orbital Agent Space,
+active tasks, Council, conversation/handoff flow and per-agent detail. It
+supports carousel arrows, single-click selection, double-click focus, workers,
+allowed tools, voice/health state and real pending approvals. Delegation,
+worker execution and actual speech playback now emit handoff/message/speaking
+lifecycle events, so the view does not invent agent chatter. Presentation-only
+voice commands such as "show all your agents", "focus on Apex" and "show
+active handoffs" open the appropriate view locally without waiting for a
+provider call.
+
+The existing Mini Orb remains the only persistent overlay and keeps ZENO as
+its core identity; a small event-driven badge/accent identifies only the
+currently active specialist. The Phone Companion reads the same projection
+through `/api/phone/agents` and exposes a compact roster, active specialist,
+Council and handoff view. Internal event summaries are allowlisted and passed
+through privacy/credential redaction before either client receives them.
+
+Idle cost is bounded: Agent Space creates no animation loop, refreshes health
+every six seconds only while open and visible, debounces event bursts, and
+clears its timers and DOM on close. The phone shell uses one visible-only
+fallback timer plus its WebSocket and does not cache authenticated API or
+WebSocket traffic. A stale-module cache regression found during live testing
+was fixed with an asset revision, and the card click/double-click arbitration
+now reliably opens the selected agent.
+
+**Verified:** live desktop Agent Space rendered the canonical roster, switched
+between all five views, opened APEX's real seven-worker detail and filtered
+non-runtime test actors from Conversation Flow. The local Phone Companion
+rendered its secure pairing screen with no browser errors. The focused Agent
+Space/phone/event/voice suite passed 32/32 and the broader Human Companion,
+remote microphone, latency, Phase 21/22, VAD, dynamic-agent and Mini Orb suite
+passed 73/73. Physical-phone microphone acceptance still requires a trusted
+device pairing and a browser-secure origin; it is not claimed from the desktop
+browser-only validation.
 
 ---
 
