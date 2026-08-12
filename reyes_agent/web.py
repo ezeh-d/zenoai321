@@ -1065,6 +1065,18 @@ def _conversation_turn(
             def on_tool_call(name: str, tool_input: dict, tool_id: str) -> None:
                 context.check_cancelled()
                 tool_calls.append({"name": name, "input": tool_input})
+                # Say what is being done, while it is being done. A person
+                # asked to check something says "let me look" BEFORE looking;
+                # four silent seconds read as a fault even when the answer is
+                # perfect. Only fires on spoken turns, once per turn, and only
+                # when the work is slow enough for the silence to be felt.
+                if voice_identity is not None:
+                    try:
+                        from reyes_agent.voice import narration
+
+                        narration.narrate(name, spoken_turn=True)
+                    except Exception:  # noqa: BLE001
+                        pass
                 callback = callbacks.get("tool")
                 if callback:
                     callback({"type": "tool", "name": name, "input": tool_input, "id": tool_id})
@@ -1187,6 +1199,12 @@ def chat(req: ChatRequest) -> dict[str, Any]:
         return {"reply": control_reply, "tool_calls": [], "interrupted": True}
     update_situation(recent_command=message, current_task="conversation", current_step="planning")
 
+    try:
+        from reyes_agent.voice import narration
+
+        narration.begin_turn(turn_id)
+    except Exception:  # noqa: BLE001
+        pass
     fast_reply = _fast_local_reply(message)
     if fast_reply is not None:
         turn_id = _open_turn(message, req.turn_id, kind=req.turn_kind)
