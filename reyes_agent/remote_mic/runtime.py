@@ -24,7 +24,48 @@ from reyes_agent.remote_mic.selector import MicrophoneSelector
 from reyes_agent.wake.vad import EnergyVAD
 
 _LOG = logging.getLogger(__name__)
-_WAKE = re.compile(r"^\s*(?:hey\s+|yo\s+)?zeno\b[\s,;:!-]*(.*)$", re.I | re.S)
+# Speech recognition does not hear a name the way it is spelled. Deepgram
+# renders "ZENO" as Zeno, Zeeno, Xeno, Zino, Seno or Zenno depending on accent
+# and how the word is stressed -- and the old pattern accepted exactly one
+# spelling, so a correctly heard wake word was rejected for being spelled the
+# way it sounded.
+_WAKE_SPELLINGS = ("zeno", "zeeno", "xeno", "zino", "seno", "zenno", "zenoh",
+                   "zenor", "xenon", "zeener")
+
+# Short filler the owner naturally says first. Requiring the wake word at
+# character zero rejects "um, zeno" and "ok zeno" -- which are the SAME
+# intent, just spoken by a person rather than typed.
+_LEAD = r"(?:\s*(?:um|uh|er|ok|okay|hey|yo|so|please|abeg)\b[\s,]*){0,2}"
+
+
+def _wake_pattern() -> re.Pattern[str]:
+    """Built from config.WAKE_PHRASES so there is ONE source of truth.
+
+    The hardcoded pattern this replaces accepted only zeno/hey zeno/yo zeno
+    while config listed 'wake up zeno' and 'bro' as well -- so two configured
+    wake phrases silently did nothing on the phone.
+    """
+    from reyes_agent import config
+
+    phrases = [str(p).strip().lower()
+               for p in getattr(config, "WAKE_PHRASES", ["zeno"]) if str(p).strip()]
+    alternatives: list[str] = []
+    for phrase in phrases:
+        if "zeno" in phrase:
+            # Let every spelling stand in for the name inside the phrase, so
+            # "wake up zeno" also matches "wake up zeeno".
+            head = re.escape(phrase.replace("zeno", "\x00")).replace(
+                re.escape("\x00"), f"(?:{'|'.join(_WAKE_SPELLINGS)})")
+            alternatives.append(head)
+        else:
+            alternatives.append(re.escape(phrase))
+    alternatives.sort(key=len, reverse=True)      # longest first: "wake up zeno" before "zeno"
+    return re.compile(
+        rf"^\s*{_LEAD}(?:{'|'.join(alternatives)})\b[\s,;:!.?-]*(.*)$",
+        re.I | re.S)
+
+
+_WAKE = _wake_pattern()
 CommandHandler = Callable[[Any, str, dict[str, Any], str, str], dict[str, Any]]
 
 
@@ -103,8 +144,16 @@ class RemoteTurnConsumer:
                 transcript = str(transcript_result.get("transcript") or "").strip()
                 matched = _WAKE.match(transcript)
                 if not matched:
+                    # The first THREE WORDS, and no more. Logging only a
+                    # character count made this undiagnosable: the wake word
+                    # was being heard and rejected for its spelling, and
+                    # nothing in the record could show that. Three words is
+                    # what it takes to see whether the wake word landed; the
+                    # rest of the sentence is the owner's business.
                     self._emit("remote_mic.wake_rejected", {
-                        "chars": len(transcript), "reason": "wake phrase was not the transcript prefix",
+                        "chars": len(transcript),
+                        "heard_prefix": " ".join(transcript.split()[:3])[:40],
+                        "reason": "wake phrase was not the transcript prefix",
                     })
                     return {"accepted": False, "transcript": transcript}
                 command = matched.group(1).strip()
