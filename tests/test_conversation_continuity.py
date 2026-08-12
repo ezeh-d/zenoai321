@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from reyes_agent.voice import continuity
@@ -46,6 +48,45 @@ class TestFollowUpWindow:
         decision = continuity.consider("and tomorrow?", wake_matched=False)
         assert not decision.accept
         assert decision.needed_wake_word
+
+    def test_a_conversation_survives_an_ordinary_pause(self):
+        """25 seconds was still "say the name every time" with extra steps.
+
+        A pause to think, or to read something off the screen, must not end
+        the conversation -- that was the owner's actual complaint.
+        """
+        assert continuity.FOLLOW_UP_WINDOW_S >= 120
+        continuity.consider("zeno what time is it", wake_matched=True)
+
+        # Actually advance the clock a full minute -- reading the constant
+        # proves nothing about behaviour.
+        real_now = continuity.time.time()
+        continuity.time.time = lambda: real_now + 60
+        try:
+            assert continuity.is_open(), "a one-minute pause must not end it"
+            follow_up = continuity.consider("so what about tomorrow",
+                                            wake_matched=False)
+            assert follow_up.accept and not follow_up.needed_wake_word
+        finally:
+            continuity.time.time = time.time
+
+    @pytest.mark.parametrize("closing", [
+        "zeno standby", "that's all", "thanks zeno", "we're done",
+        "go to sleep", "never mind",
+    ])
+    def test_the_owner_can_end_it_by_saying_so(self, closing):
+        """Ending should feel like ending, not like waiting out a hidden timer."""
+        continuity.consider("zeno hello", wake_matched=True)
+        assert continuity.is_open()
+        continuity.consider(closing, wake_matched=("zeno" in closing))
+        assert not continuity.is_open()
+        assert not continuity.consider("are you there", wake_matched=False).accept
+
+    def test_saying_the_name_inside_a_conversation_still_works(self):
+        """It re-addresses him -- what you do when handing him to someone."""
+        continuity.consider("zeno hello", wake_matched=True)
+        decision = continuity.consider("zeno, meet Engr Bello", wake_matched=True)
+        assert decision.accept and decision.needed_wake_word
 
     def test_a_visit_gets_a_longer_window(self):
         """People take longer to form a question when they are being hosted."""

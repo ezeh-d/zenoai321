@@ -17,8 +17,15 @@ learns within two turns that they are operating a machine rather than
 talking to one. The wake word exists to open a conversation, not to
 punctuate every sentence of it.
 
-So after ZENO answers, a window opens. Inside it, speech is accepted without
-the name. Every exchange extends the window; silence closes it.
+So the wake word OPENS a conversation and then gets out of the way. Inside an
+open conversation, speech is accepted without the name; every exchange
+extends it. It ends when the owner ends it -- "standby", "that's all",
+"thanks ZENO" -- or after a long enough silence that whatever is said next is
+a new conversation rather than a continuation of this one.
+
+Saying "ZENO" is still meaningful inside a conversation: it re-addresses him,
+which is exactly what you do when you hand him to somebody else in the room.
+It is simply no longer REQUIRED on every sentence.
 
 SECOND: talking over someone who has started speaking.
 
@@ -44,14 +51,49 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-# How long after ZENO speaks a follow-up may arrive without the wake word.
-# Long enough to think of the next question, short enough that a room
-# conversation twenty seconds later is not addressed to ZENO.
-FOLLOW_UP_WINDOW_S = 25.0
+def _seconds_env(name: str, default: float) -> float:
+    """A tunable idle time, bounded so neither extreme is reachable.
 
-# During a hosted visit people take longer to formulate questions, and there
-# is a known other participant in the room. Still bounded.
-VISIT_WINDOW_S = 45.0
+    Floor of 30s because anything less recreates the problem this exists to
+    fix. Ceiling of an hour because an open microphone with no end is a
+    different product, and not one the owner asked for.
+    """
+    import os
+
+    try:
+        return max(30.0, min(3600.0, float(os.environ.get(name, default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# HOW LONG THE CONVERSATION STAYS OPEN.
+#
+# The first version of this used 25 seconds, and that was wrong -- it is
+# still "say the name every time" with extra steps, because 25 seconds is
+# shorter than a pause to think, shorter than reading something off the
+# screen, and far shorter than a conversation with a third person in the
+# room. The owner said so plainly, and he was right.
+#
+# The wake word's job is to OPEN a conversation, or to hand ZENO to somebody
+# else. It is not punctuation. So once a conversation is open it stays open
+# through ordinary silences, and closes when the conversation is actually
+# over -- either because the owner said so, or because nothing has been said
+# for long enough that the next thing said is a new conversation.
+FOLLOW_UP_WINDOW_S = _seconds_env("ZENO_CONVERSATION_IDLE_S", 180.0)
+
+# A hosted visit runs longer still: people think before asking, the host and
+# the visitor talk to each other, and being dropped mid-visit is exactly the
+# failure that makes it feel like a machine.
+VISIT_WINDOW_S = _seconds_env("ZENO_VISIT_IDLE_S", 300.0)
+
+# Said out loud, these end it. The owner should be able to close a
+# conversation the way a person does, rather than by waiting for a timer.
+CLOSING_PHRASES = (
+    "standby", "stand by", "that's all", "thats all", "that will be all",
+    "goodbye zeno", "bye zeno", "thanks zeno", "thank you zeno",
+    "that's it for now", "we're done", "were done", "stop listening",
+    "go to sleep", "sleep now", "nevermind", "never mind",
+)
 
 # Below this, an utterance is almost certainly not a command -- "mm", "yeah",
 # a cough picked up as a word. Inside the window these are ignored rather
@@ -111,6 +153,14 @@ def consider(transcript: str, *, wake_matched: bool,
     takes one away.
     """
     text = (transcript or "").strip()
+    low = text.lower().strip(" .,!?")
+
+    # Ending a conversation should feel like ending one. "Standby" or
+    # "that's all" closes it immediately, rather than the owner waiting out
+    # a timer he cannot see.
+    if any(phrase in low for phrase in CLOSING_PHRASES):
+        close("the owner ended the conversation")
+        return Decision(True, False, "closing phrase -- conversation ended", 0.0)
 
     if wake_matched:
         # A named address re-opens the window regardless of its state.
