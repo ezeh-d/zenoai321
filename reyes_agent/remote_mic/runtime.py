@@ -100,6 +100,7 @@ class RemoteTurnConsumer:
         # bounded to "the transcript arrives from a different place", and
         # batch remains underneath as the fallback.
         self._stream: Any = None
+        self._barge_in_pending = False
         self._stream_parts: list[str] = []
         self._stream_confidence = 0.0
         self._stream_lock = threading.RLock()
@@ -187,6 +188,13 @@ class RemoteTurnConsumer:
                     self._pcm.clear()
                     self._silence_s = 0.0
                     self._emit("remote_mic.speech_started", {"source": frame.source})
+                    # Somebody started talking. If ZENO was mid-sentence,
+                    # stop -- talking over a person who has begun speaking is
+                    # the other thing that makes this feel like a machine.
+                    # conversation_state.barge_in() already did this and
+                    # worked; the phone path simply never called it, so it
+                    # was a disconnected wire rather than a missing feature.
+                    self._barge_in_pending = True
                 else:
                     return
             self._pcm.extend(frame.pcm16)
@@ -195,6 +203,14 @@ class RemoteTurnConsumer:
         # by the time they stop, only the last fragment is outstanding.
         # Outside the lock -- a socket must never sit inside the audio path's
         # critical section.
+        if self._barge_in_pending:
+            self._barge_in_pending = False
+            from reyes_agent.voice import continuity
+
+            result = continuity.interrupted(source="phone")
+            if result.get("stopped_speaking"):
+                self._emit("remote_mic.barge_in", result)
+
         stream = self._ensure_stream()
         if stream is not None:
             stream.send(frame.pcm16)
@@ -240,7 +256,27 @@ class RemoteTurnConsumer:
                     transcript_result = transcribe_result(audio)
                     transcript = str(transcript_result.get("transcript") or "").strip()
                 matched = _WAKE.match(transcript)
-                if not matched:
+
+                # Once ZENO has answered somebody, a follow-up does not need
+                # the name again. Requiring it every sentence is the single
+                # most machine-like property a voice system can have, and in
+                # front of a visitor it teaches them within two turns that
+                # they are operating a device rather than talking to one.
+                from reyes_agent.presentation import visit as _visit
+                from reyes_agent.voice import continuity
+
+                decision = continuity.consider(
+                    transcript, wake_matched=bool(matched),
+                    visit=_visit.session().active)
+                if decision.accept and not decision.needed_wake_word:
+                    self._emit("remote_mic.follow_up", {
+                        "window_s_left": decision.window_s_left,
+                        "reason": decision.reason})
+                    command = transcript.strip()
+                elif matched:
+                    command = matched.group(1).strip()
+
+                if not decision.accept:
                     # The first THREE WORDS, and no more. Logging only a
                     # character count made this undiagnosable: the wake word
                     # was being heard and rejected for its spelling, and
@@ -250,10 +286,9 @@ class RemoteTurnConsumer:
                     self._emit("remote_mic.wake_rejected", {
                         "chars": len(transcript),
                         "heard_prefix": " ".join(transcript.split()[:3])[:40],
-                        "reason": "wake phrase was not the transcript prefix",
+                        "reason": decision.reason,
                     })
                     return {"accepted": False, "transcript": transcript}
-                command = matched.group(1).strip()
                 if not command:
                     self._emit("remote_mic.wake_detected", {"waiting_for_command": True})
                     return {"accepted": True, "waiting_for_command": True}

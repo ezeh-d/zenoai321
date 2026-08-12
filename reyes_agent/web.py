@@ -3361,6 +3361,16 @@ def _remote_mic_command(context, message: str, identity: dict[str, Any],
     reply = str(result.get("reply") or "")
     hit = cached_audio(reply)
     speak_cached_queued(hit) if hit else speak_queued(reply)
+    # ZENO has answered, so a follow-up is now plausible without the name.
+    # Opened HERE, on a real reply, rather than on hearing speech -- the
+    # window has to be evidence that a conversation exists, not a hope.
+    try:
+        from reyes_agent.presentation import visit as _visit
+        from reyes_agent.voice import continuity
+
+        continuity.open_window(source="reply", visit=_visit.session().active)
+    except Exception:  # noqa: BLE001
+        pass
     _end_turn(turn_id)
     return result
 
