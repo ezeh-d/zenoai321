@@ -166,3 +166,37 @@ class TestFailover:
         assert "reconnect" in spoken
         for lie in ("switched", "moved", "transferred", "seamless", "kept"):
             assert lie not in spoken
+
+
+class TestLocalAddressAcrossIPVersions:
+    """The QR carries an mDNS name, and Windows answers it with IPv6 FIRST.
+
+    An IPv4-only check refuses every one of those answers -- a phone being
+    told "connect to my Wi-Fi first" while it is already on it. Caught the
+    night before it mattered.
+    """
+
+    @pytest.mark.parametrize("address,local,why", [
+        ("fe80::9c42:c4e5:fc47:ee", True, "link-local: same physical link by definition"),
+        ("fd12:3456::1", True, "unique-local: private by design"),
+        ("::ffff:192.168.1.55", True, "IPv4-mapped, on our LAN"),
+        ("::ffff:8.8.8.8", False, "IPv4-mapped, public"),
+        ("2a00:1450:4009:81f::200e", False, "global IPv6 on somebody else's network"),
+        ("192.168.1.55", True, "plain LAN IPv4"),
+        ("8.8.8.8", False, "public IPv4"),
+        ("127.0.0.1", True, "loopback"),
+        ("not-an-address", False, "garbage"),
+    ])
+    def test_classification(self, address, local, why):
+        assert routes.is_local_address(address) is local, why
+
+    def test_a_zone_index_does_not_break_parsing(self):
+        """Windows hands back fe80::1%12; the zone is not part of the address."""
+        assert routes.is_local_address("fe80::9c42:c4e5:fc47:ee%18") is True
+
+    def test_a_global_ipv6_is_allowed_only_inside_our_own_prefix(self, monkeypatch):
+        """Global IPv6 is internet-routable, so it is never blanket-allowed."""
+        monkeypatch.setattr(routes, "own_ipv6",
+                            lambda: ["2605:59c1:19ef:5310:1f4:860:e8bd:cbb4"])
+        assert routes.is_local_address("2605:59c1:19ef:5310:aaaa:bbbb:cccc:dddd")
+        assert not routes.is_local_address("2605:59c1:9999:5310:aaaa:bbbb:cccc:dddd")

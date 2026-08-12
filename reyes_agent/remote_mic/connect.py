@@ -154,6 +154,60 @@ def standing(*, with_qr: bool = True) -> dict[str, Any]:
     return result
 
 
+def standing_by_address(*, with_qr: bool = True) -> dict[str, Any]:
+    """The standing key printed for each network's literal IP address.
+
+    The mDNS QR is the elegant one -- a single code for both networks -- but
+    it depends on the phone resolving a `.local` name, and a name can resolve
+    to something unreachable. Measured here: this machine's name answers with
+    IPv6 first and a Tailscale address before either LAN address, and the
+    listener binds IPv4 only, so several of those answers are dead ends.
+
+    A literal address has none of those failure modes. It is the code to
+    reach for when it simply has to work.
+
+    Same standing key in every code -- the key authenticates the phone, not
+    the route it arrived by, so all of these stay valid together.
+    """
+    from reyes_agent.phone_security import get_phone_security
+
+    key = get_phone_security().mic_key()
+    offers = []
+    for route in routes.selector().routes():
+        if route.health != routes.READY:
+            continue
+        url = f"{route.origin}/mic?k={key}"
+        entry = {"mode": route.mode, "label": route.label, "ipv4": route.ipv4,
+                 "origin": route.origin, "url": url, "steps": _steps(route)}
+        if with_qr:
+            entry["qr_png"] = pairing._qr(url)
+        offers.append(entry)
+
+    if not offers:
+        return {"ok": False, "reason": (
+            "No network is serving the phone mic. Start the listener, or "
+            "connect to Wi-Fi or switch on Mobile Hotspot.")}
+    return {"ok": True, "offers": offers, "expires": None,
+            "chrome_flag": pairing.CHROME_FLAG,
+            "note": ("One standing key, printed per network. Each address is "
+                     "literal, so nothing depends on name resolution.")}
+
+
+def save_by_address(directory: str | Path = "") -> dict[str, Any]:
+    """Write one QR per available network, keyed to its literal address."""
+    result = standing_by_address()
+    if not result.get("ok"):
+        return result
+    folder = Path(directory) if directory else (Path.home() / "Desktop")
+    folder.mkdir(parents=True, exist_ok=True)
+    for entry in result["offers"]:
+        name = "wifi" if entry["mode"] == routes.LAN_WIFI else "hotspot"
+        target = folder / f"zeno_mic_{name}.png"
+        target.write_bytes(base64.b64decode(entry.pop("qr_png").split(",")[-1]))
+        entry["path"] = str(target)
+    return result
+
+
 def mdns_host() -> str:
     """This machine's `.local` name, which resolves on every local network."""
     import socket as _socket

@@ -211,14 +211,79 @@ def local_subnets() -> list[str]:
     return found
 
 
-def is_local_address(peer_ip: str) -> bool:
-    """Is this address on one of THIS machine's own local networks."""
+def own_ipv6() -> list[str]:
+    """This machine's own IPv6 addresses. Needed to judge a global one."""
     try:
-        peer = ipaddress.ip_address((peer_ip or "").strip())
+        import psutil
+
+        stats = psutil.net_if_stats()
+    except Exception:  # noqa: BLE001
+        return []
+
+    found: list[str] = []
+    for name, addrs in psutil.net_if_addrs().items():
+        if not getattr(stats.get(name), "isup", False):
+            continue
+        if any(hint in name.lower() for hint in _SKIP_HINTS):
+            continue
+        for addr in addrs:
+            if getattr(addr, "family", None) != getattr(socket, "AF_INET6", -1):
+                continue
+            raw = str(addr.address or "").split("%")[0]
+            if raw:
+                found.append(raw)
+    return found
+
+
+def is_local_address(peer_ip: str) -> bool:
+    """Is this address on one of THIS machine's own local networks.
+
+    IPv6 IS NOT OPTIONAL HERE. The QR code carries an mDNS name, and Windows
+    answers that name with IPv6 FIRST -- link-local fe80:: and a global
+    2605:... before any IPv4. An IPv4-only check refuses every one of them,
+    which is a phone being told "connect to my Wi-Fi first" while it is
+    already on it.
+
+    The four cases, and why each is decided the way it is:
+
+      * IPv4-mapped (::ffff:192.168.1.5) -- unwrap and judge as IPv4. Dual
+        stack sockets deliver IPv4 peers in this form.
+      * Link-local (fe80::/10) -- on the same physical link BY DEFINITION.
+        It cannot be routed off the network, so reaching us from one means
+        being on it.
+      * Unique local (fc00::/7) -- private by design, same as 192.168/16.
+      * Global (2605:...) -- routable from the internet, so NEVER blanket
+        allowed. Permitted only when it shares a /64 with one of this
+        machine's own global addresses, which is what "same subnet" means in
+        IPv6. A stranger's address will not match that prefix.
+    """
+    raw = (peer_ip or "").strip().split("%")[0]      # drop any zone index
+    try:
+        peer = ipaddress.ip_address(raw)
     except ValueError:
         return False
     if peer.is_loopback:
         return True
+
+    if peer.version == 6:
+        mapped = getattr(peer, "ipv4_mapped", None)
+        if mapped is not None:
+            return is_local_address(str(mapped))
+        if peer.is_link_local:
+            return True
+        if peer in ipaddress.ip_network("fc00::/7"):
+            return True
+        for mine in own_ipv6():
+            try:
+                candidate = ipaddress.ip_address(mine)
+            except ValueError:
+                continue
+            if candidate.version != 6 or candidate.is_link_local:
+                continue
+            if peer in ipaddress.ip_network(f"{mine}/64", strict=False):
+                return True
+        return False
+
     for mine in local_subnets():
         try:
             if peer in ipaddress.ip_network(f"{mine}/24", strict=False):
