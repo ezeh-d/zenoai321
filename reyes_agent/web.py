@@ -3093,6 +3093,35 @@ def phone_webauthn_enroll_complete(req: PhoneWebAuthnEnrollmentRequest,
         raise HTTPException(403, f"Platform verification enrollment failed: {exc}") from exc
 
 
+@app.get("/api/mode")
+def assistant_mode(request: Request) -> dict[str, Any]:
+    """The live runtime state the Ultron HUD renders.
+
+    Read-only and loopback-free on purpose: the dashboard is already served
+    on loopback, and a page that cannot ask what mode it is in would have to
+    guess -- which is the failure this endpoint exists to prevent.
+    """
+    from reyes_agent import modes
+
+    return {**modes.status(), "runtime": modes.runtime_state().as_dict()}
+
+
+class ModeRequest(BaseModel):
+    mode: str = ""
+
+
+@app.post("/api/mode")
+def set_assistant_mode(req: ModeRequest, request: Request) -> dict[str, Any]:
+    """Change mode. The BACKEND decides; the page reflects."""
+    _loopback(request)
+    from reyes_agent import modes
+
+    result = modes.set_mode(req.mode, source="dashboard")
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("reason", "Unknown mode."))
+    return result
+
+
 @app.get("/api/phone/networks")
 def phone_networks(request: Request) -> dict[str, Any]:
     """Every local route the phone could use -- Wi-Fi and hotspot together.

@@ -784,10 +784,17 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
 </div>
 <div id="subspace-overlay">
   <div class="ws-bar">
-    <span class="ws-title">Agent Subspace</span>
+    <span class="ws-title">ZENO Agent Space</span>
     <span id="subspace-summary" style="font:11px system-ui;color:var(--text-dim);"></span>
-    <button class="ws-mini" id="subspace-scope" title="Switch between the whole roster and only mission participants">All agents</button>
-    <button class="ws-mini" id="subspace-summon" title="Actually start every specialist's worker thread. They become alive and idle -- not working.">Summon all</button>
+    <span class="as-modes">
+      <button class="as-mode active" data-agent-space-mode="space">Agent Space</button>
+      <button class="as-mode" data-agent-space-mode="active">Active Tasks</button>
+      <button class="as-mode" data-agent-space-mode="council">Council</button>
+      <button class="as-mode" data-agent-space-mode="flow">Conversation Flow</button>
+      <button class="as-mode" data-agent-space-mode="detail">Agent Detail</button>
+    </span>
+    <button class="ws-mini" id="subspace-scope" style="display:none" aria-hidden="true">All agents</button>
+    <button class="ws-mini" id="subspace-summon" style="display:none" aria-hidden="true">Summon all</button>
     <button class="ws-close" id="subspace-close" title="Close">&times;</button>
   </div>
   <div id="subspace-body"></div>
@@ -978,7 +985,10 @@ body.focus #agent-team-overview { opacity: 0; }
     <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
       <span class="label">Phone Companion<span class="sub">Secure browser pairing through Cloudflare Access; no same Wi-Fi required</span></span>
       <button id="phone-pair-btn" class="vt-btn">Pair Phone</button>
+      <button id="phone-devices-btn" class="vt-btn">Manage Phones</button>
       <div id="phone-pair-info" style="font:12px ui-monospace,monospace;color:var(--text-dim);word-break:break-all;">Configure Cloudflare Tunnel and Access first.</div>
+      <div id="phone-devices" style="font:12px system-ui;color:var(--text-dim);width:100%;"></div>
+      <div id="phone-mic-status" style="font:12px ui-monospace,monospace;color:var(--text-dim);">Remote mic: standby</div>
     </div>
     <div class="toggle-row">
       <span class="label">Notifications<span class="sub">Show system and ZENO alerts</span></span>
@@ -1029,7 +1039,7 @@ body.focus #agent-team-overview { opacity: 0; }
       <div id="awareness-out" style="font:11px system-ui;color:var(--text-dim);"></div>
     </div>
     <div class="toggle-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
-      <span class="label">Divine voice profile<span class="sub">Three short local recordings; only encrypted feature vectors are kept. It never replaces desktop confirmation.</span></span>
+      <span class="label">Divine voice profile<span class="sub">Five varied local recordings; only DPAPI-protected model embeddings are kept. It never replaces desktop confirmation.</span></span>
       <div style="display:flex;gap:6px;flex-wrap:wrap;"><button id="speaker-record-btn" class="vt-btn">Record sample</button><button id="speaker-delete-btn" class="vt-btn">Delete profile</button></div>
       <div id="speaker-profile-out" style="font:11px system-ui;color:var(--text-dim);"></div>
     </div>
@@ -1083,6 +1093,8 @@ body.focus #agent-team-overview { opacity: 0; }
 <script type="module">
 import { initOrb } from "/static/orb.js?v=7";
 import * as voiceVAD from "/static/vad.js?v=1";
+import { createAudioFrameClient } from "/static/audio_frames.js?v=1";
+import { createAgentSpace } from "/static/agent_space.js?v=3";
 
 const orb = initOrb(document.getElementById("orb-canvas"));
 // Exposed for the dev overlay and for testing orb state/expressions
@@ -1312,7 +1324,11 @@ const agentRing = (() => {
     return Object.entries(state).map(([agent, value]) => ({ agent, active: value.active, state: value.visualState }));
   }
 
-  return { activate, deactivate, lifecycle, participants };
+  function auditMetrics() {
+    return { orbit_timer: orbitTimer !== null };
+  }
+
+  return { activate, deactivate, lifecycle, participants, auditMetrics };
 })();
 window.agentRing = agentRing;
 
@@ -1504,38 +1520,40 @@ const speakerProfileOut = document.getElementById('speaker-profile-out');
 const speakerRecordBtn = document.getElementById('speaker-record-btn');
 const speakerSamples = [];
 let speakerRecording = false;
+const speakerConditions = ['normally', 'quietly', 'quickly', 'casually', 'from a little farther away'];
 async function loadSpeakerProfile() {
   try {
     const profile = await (await fetch('/api/speaker/profile')).json();
     speakerProfileOut.textContent = profile.enrolled
       ? `Enrolled with ${profile.clips} recordings. Raw audio stored: no. ${profile.limitation || ''}`
-      : `Not enrolled. Record ${profile.required_clips || 3} clear samples of Divine in a quiet room.`;
+      : `Not enrolled. Record ${profile.required_clips || 5} varied samples of Divine in a quiet room.`;
   } catch (_e) { speakerProfileOut.textContent = 'Voice-profile status unavailable.'; }
 }
-speakerRecordBtn?.addEventListener('click', async () => {
-  if (speakerRecording) return;
-  speakerRecording = true;
-  try {
-    if (!voiceVAD.mediaStream()) await startAmbientListening();
-    if (!voiceVAD.mediaStream()) throw Error('Microphone is unavailable; enrolment did not start.');
-    finishVADRecording(true);
-    // MediaRecorder.stop() dispatches asynchronously. Give a just-finished
-    // command clip a moment to release its PCM tap before starting the
-    // explicitly requested enrolment sample; otherwise its onstop handler
-    // could terminate the new capture.
-    await new Promise(resolve => setTimeout(resolve, 150));
-    voiceVAD.pauseDetection();
-    if (!voiceVAD.beginPcmCapture()) throw Error('Could not start the local PCM recorder.');
-    speakerProfileOut.textContent = `Sample ${speakerSamples.length + 1}/3: speak normally for five seconds…`;
-    await new Promise(resolve => setTimeout(resolve, 5200));
-    const clip = voiceVAD.endPcmCapture();
+async function captureSpeakerSample() {
+  if (!voiceVAD.mediaStream()) await startAmbientListening();
+  if (!voiceVAD.mediaStream()) throw Error('Microphone is unavailable; enrolment did not start.');
+  finishVADRecording(true);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  voiceVAD.pauseDetection();
+  const index = speakerSamples.length;
+  const prompt = `Sample ${index + 1} of 5. Speak ${speakerConditions[index]} for five seconds.`;
+  speakerProfileOut.textContent = prompt;
+  await speakInBrowser(prompt, { finishTurn: false });
+  if (!voiceVAD.beginPcmCapture()) throw Error('Could not start the local PCM recorder.');
+  speakerProfileOut.textContent = `Recording ${index + 1}/5 now — speak ${speakerConditions[index]}…`;
+  await new Promise(resolve => setTimeout(resolve, 5200));
+  const clip = voiceVAD.endPcmCapture();
+  if (!clip || clip.size < 10_000) throw Error('That sample was too short. Try again in a quieter room.');
+  speakerSamples.push(clip);
+}
+
+async function saveSpeakerSamplesIfComplete() {
+  if (speakerSamples.length < 5) {
+    speakerProfileOut.textContent = `Saved local sample ${speakerSamples.length}/5. Record the next condition; raw audio is discarded after model embedding.`;
     if (ambientEnabled) voiceVAD.resumeDetection();
-    if (!clip || clip.size < 10_000) throw Error('That sample was too short. Try again in a quieter room.');
-    speakerSamples.push(clip);
-    if (speakerSamples.length < 3) {
-      speakerProfileOut.textContent = `Saved local sample ${speakerSamples.length}/3. Record the next one with slightly different natural speech.`;
-      return;
-    }
+    return false;
+  }
+  try {
     speakerProfileOut.textContent = 'Validating and encrypting the new local profile…';
     const form = new FormData();
     speakerSamples.forEach((clip, index) => form.append('clips', clip, `divine-${index + 1}.wav`));
@@ -1544,12 +1562,42 @@ speakerRecordBtn?.addEventListener('click', async () => {
     if (!response.ok) throw Error(data.detail || 'Profile enrolment failed.');
     speakerSamples.length = 0;
     await loadSpeakerProfile();
+    return true;
+  } finally {
+    if (ambientEnabled) voiceVAD.resumeDetection();
+  }
+}
+
+async function recordOneSpeakerSample() {
+  if (speakerRecording) return;
+  speakerRecording = true;
+  try {
+    await captureSpeakerSample();
+    await saveSpeakerSamplesIfComplete();
   } catch (error) {
     voiceVAD.endPcmCapture();
     if (ambientEnabled) voiceVAD.resumeDetection();
     speakerProfileOut.textContent = error.message || 'Profile enrolment failed.';
   } finally { speakerRecording = false; }
-});
+}
+
+async function runVoiceEnrollmentSequence() {
+  if (speakerRecording) return;
+  speakerRecording = true;
+  settingsPanel.classList.add('open');
+  speakerSamples.length = 0;
+  try {
+    while (speakerSamples.length < 5) await captureSpeakerSample();
+    const saved = await saveSpeakerSamplesIfComplete();
+    if (saved) await speakInBrowser('Voice profile saved locally. Raw recordings were discarded.', { finishTurn: false });
+  } catch (error) {
+    voiceVAD.endPcmCapture();
+    if (ambientEnabled) voiceVAD.resumeDetection();
+    speakerProfileOut.textContent = error.message || 'Profile enrolment failed.';
+  } finally { speakerRecording = false; }
+}
+
+speakerRecordBtn?.addEventListener('click', recordOneSpeakerSample);
 document.getElementById('speaker-delete-btn')?.addEventListener('click', async () => {
   await fetch('/api/speaker/profile', {method:'DELETE'});
   speakerSamples.length = 0;
@@ -1638,7 +1686,7 @@ const COMMANDS = [
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map of real links and tags', run: () => openGalaxy() },
   { label: 'Evolution report', hint: 'What ZENO measured about its own performance', run: () => runTurn('Run an evolution report on yourself.') },
   { label: 'Agent Monitor', hint: 'Live worker state, heartbeats, queues, metrics', run: () => openAgentMonitor() },
-  { label: 'Agent Subspace', hint: 'Live ZENO → specialist → worker hierarchy', run: () => openSubspace() },
+  { label: 'Agent Space', hint: 'Live agents, tasks, Council and handoffs', run: () => window.zenoAgentSpace.open() },
   { label: 'Council', hint: 'Every specialist’s face, live state from the event bus', run: () => openCouncil() },
   { label: 'Executive Meeting', hint: 'Every specialist reports status in its own voice', run: () => runTurn('Hold an executive meeting — every agent reports status.') },
   { label: 'New mission...', hint: 'Create a tracked long-term goal', run: () => cmdkAsk('Mission name and what success looks like:') },
@@ -1991,9 +2039,13 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
   if (!text || turnActive) return;
   turnActive = true;
   currentTurnId = newTurnId();
+  if (activeSpeechStream) activeSpeechStream.cancel();
+  const speechStream = createStreamingSpeech(currentTurnId);
+  activeSpeechStream = speechStream;
   const spoken = Object.keys(pendingSpeechMarks).length > 0;
   flushSpeechMarks(currentTurnId);
   reportTurn(currentTurnId, { mark: 'stt_final' });
+  scheduleThinkingAcknowledgement(currentTurnId, spoken);
   sendEl.disabled = true;
   inputEl.disabled = true;
   inputEl.placeholder = 'ZENO is thinking...';
@@ -2100,6 +2152,7 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
           }
           assistantBubble.textContent += evt.text;
           fullReply += evt.text;
+          speechStream.feed(evt.text);
           showCaption(fullReply, ''); // live caption grows as the reply streams in
         } else if (evt.type === 'error') {
           thinkingBubble.remove();
@@ -2112,14 +2165,15 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
       }
     }
     if (!sawText) {
+      speechStream.cancel();
       thinkingBubble.remove(); // tool ran but no final text (e.g. error path already handled it)
       // No speech is coming, so nothing else will ever close this turn.
       endTurn(currentTurnId);
     } else {
-      // Keep this managed turn open until browser audio has ended or a
-      // barge-in cancels it. Releasing it early let a new mic clip start a
-      // second turn while ZENO was still speaking.
-      await speakInBrowser(fullReply);
+      // Text was already fed to the sentence queue as provider tokens
+      // arrived. Flush the last incomplete clause and keep the managed turn
+      // open until real browser playback completes or barge-in cancels it.
+      await speechStream.finish();
     }
     refreshPending();
   } catch (e) {
@@ -2128,6 +2182,7 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
     orb.setState('error');
     endTurn(currentTurnId);   // a failed turn has no audio to wait for
   } finally {
+    cancelThinkingAcknowledgement(currentTurnId);
     dispatchedAgents.forEach((agentId) => orb.setAgentWorking(agentId, false));
     if (window.zenoCompanion) window.zenoCompanion.setWorking(false);  // mission ring off
     setMini(false);  // work done -> pop back to full size with the answer
@@ -2253,13 +2308,88 @@ let serverTtsAvailable = true;
 const _ttsAudioEl = new Audio();
 let pendingBargeTranscript = '';
 let bargeInRequested = false;
+let speechPlaybackResolve = null;
+let speechFetchController = null;
+let activeSpeechStream = null;
+let activeThinkingAck = null;
+let voiceLatencyPolicy = { targetMs: 1500, ackDelayMs: 650, thinkingAck: true };
+
+// Policy is fetched once and remains safely bounded if the endpoint is not
+// available during first render. It changes only the timer; the audio route
+// itself is cache-only and can never fall through to ElevenLabs/network.
+fetch('/api/voice/latency-policy', {cache:'no-store'}).then(r => r.ok ? r.json() : null).then(data => {
+  if (!data) return;
+  voiceLatencyPolicy = {
+    targetMs: Math.max(500, Math.min(5000, Number(data.target_ms) || 1500)),
+    ackDelayMs: Math.max(250, Math.min(1400, Number(data.ack_delay_ms) || 650)),
+    thinkingAck: data.thinking_ack !== false,
+  };
+}).catch(() => {});
+
+function cancelThinkingAcknowledgement(turnId = '') {
+  const pending = activeThinkingAck;
+  if (!pending || (turnId && pending.turnId !== turnId)) return;
+  activeThinkingAck = null;
+  clearTimeout(pending.timer);
+  try { pending.controller.abort(); } catch (_) {}
+  if (pending.audio) {
+    pending.audio.pause();
+    pending.audio.removeAttribute('src');
+  }
+  if (pending.url) URL.revokeObjectURL(pending.url);
+}
+
+function scheduleThinkingAcknowledgement(turnId, spoken) {
+  cancelThinkingAcknowledgement();
+  if (!spoken || !turnId || !voiceLatencyPolicy.thinkingAck) return;
+  const pending = {
+    turnId, timer: 0, controller: new AbortController(), audio: null, url: '',
+  };
+  activeThinkingAck = pending;
+  pending.timer = setTimeout(async () => {
+    if (activeThinkingAck !== pending) return;
+    try {
+      const response = await fetch('/api/voice/thinking-ack', {
+        cache: 'no-store', signal: pending.controller.signal,
+      });
+      if (!response.ok || response.status === 204 || activeThinkingAck !== pending) return;
+      const phrase = response.headers.get('X-Zeno-Ack-Phrase') || "I'm on it.";
+      pending.url = URL.createObjectURL(await response.blob());
+      if (activeThinkingAck !== pending) return;
+      pending.audio = new Audio(pending.url);
+      pending.audio.volume = _ttsAudioEl.volume;
+      const done = () => {
+        if (activeThinkingAck === pending) activeThinkingAck = null;
+        if (pending.url) URL.revokeObjectURL(pending.url);
+        pending.url = '';
+      };
+      pending.audio.onplaying = () => {
+        lastSpokenText = phrase;
+        reportTurn(turnId, { mark: 'thinking_ack_audio' });
+        reportTurn(turnId, { mark: 'first_audio' });
+        compactMicStatus('THINKING', 'working on your request');
+      };
+      pending.audio.onended = done;
+      pending.audio.onerror = done;
+      await pending.audio.play().catch(done);
+    } catch (_) { /* absent cache/cancel never delays or fails the real turn */ }
+  }, voiceLatencyPolicy.ackDelayMs);
+}
 
 async function requestBargeIn() {
   if (bargeInRequested) return;
   bargeInRequested = true;
+  const detectedAt = Date.now() / 1000;
+  if (activeSpeechStream) activeSpeechStream.cancel();
+  cancelThinkingAcknowledgement();
+  if (speechFetchController) speechFetchController.abort();
   _ttsAudioEl.pause();
   _ttsAudioEl.removeAttribute('src');
+  if (speechPlaybackResolve) speechPlaybackResolve();
   window.speechSynthesis.cancel();
+  const stoppedAt = Date.now() / 1000;
+  fetch('/api/diagnostics/barge-in', { method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({detected_at:detectedAt, audio_stopped_at:stoppedAt, source:'dashboard'}) }).catch(() => {});
   // Route through the state machine as well as the interrupt endpoint. That
   // is what CLOSES the interrupted turn, so its remaining events are
   // rejected as stale instead of coming back later and re-asserting
@@ -2270,14 +2400,16 @@ async function requestBargeIn() {
   finally { bargeInRequested = false; currentTurnId = ''; }
 }
 
-async function speakInBrowser(text) {
+async function speakInBrowser(text, { finishTurn = true, resetAudio = true } = {}) {
   if (!text) return;
   // Keep the single processed microphone stream alive during playback so a
   // genuine voice utterance can barge in. The exact self-echo guard rejects
   // ZENO's own reply before it can become a command.
   lastSpokenText = text;
-  window.speechSynthesis.cancel();
-  _ttsAudioEl.pause();
+  if (resetAudio) {
+    window.speechSynthesis.cancel();
+    _ttsAudioEl.pause();
+  }
 
   // ElevenLabs ONLY (user, 2026-08-05: "fix that dual voice issue,
   // elevenlabs only please"). The old browser-voice fallback was the dual
@@ -2288,11 +2420,14 @@ async function speakInBrowser(text) {
   // silent and the caption carries the reply.
   const speakingTurn = currentTurnId;
   reportTurn(speakingTurn, { mark: 'tts_requested' });
+  const controller = new AbortController();
+  speechFetchController = controller;
   try {
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, agent: 'zeno' }),
+      signal: controller.signal,
     });
     if (res.ok) {
       const url = URL.createObjectURL(await res.blob());
@@ -2301,13 +2436,26 @@ async function speakInBrowser(text) {
       if (ambientEnabled) compactMicStatus('SPEAKING', 'ZENO is responding');
       reportTurn(speakingTurn, { state: 'SPEAKING', source: 'browser.tts' });
       await new Promise((resolve) => {
-        _ttsAudioEl.onended = resolve;
-        _ttsAudioEl.onerror = resolve;
+        let finished = false;
+        const done = () => {
+          if (finished) return;
+          finished = true;
+          if (speechPlaybackResolve === done) speechPlaybackResolve = null;
+          resolve();
+        };
+        speechPlaybackResolve = done;
+        _ttsAudioEl.onended = done;
+        _ttsAudioEl.onerror = done;
         // `playing` is the first frame that actually reached the speaker --
         // play() resolving only means playback was accepted, which is a
         // different (and earlier) moment than the owner hearing anything.
-        _ttsAudioEl.onplaying = () => reportTurn(speakingTurn, { mark: 'first_audio' });
-        _ttsAudioEl.play().catch(resolve);
+        _ttsAudioEl.onplaying = () => {
+          // The real answer wins immediately over the short progress line;
+          // two ZENO clips must never overlap.
+          cancelThinkingAcknowledgement(speakingTurn);
+          reportTurn(speakingTurn, { mark: 'first_audio' });
+        };
+        _ttsAudioEl.play().catch(done);
       });
       URL.revokeObjectURL(url);
     } else if (res.status === 503) {
@@ -2315,12 +2463,16 @@ async function speakInBrowser(text) {
       micStatusEl.textContent = 'Voice unavailable — ElevenLabs not configured';
     }
   } catch (e) {
+    speechStream.cancel();
     // Network hiccup: stay silent rather than switching voice mid-sentence.
+  } finally {
+    if (activeSpeechStream === speechStream) activeSpeechStream = null;
+    if (speechFetchController === controller) speechFetchController = null;
   }
   // Audio has finished (or never started). Only the browser knows this
   // moment, so it is what closes the turn server-side -- the state machine
   // must not go IDLE while ZENO is still audibly talking.
-  endTurn(speakingTurn);
+  if (finishTurn) endTurn(speakingTurn);
   if (!turnActive) orb.setState('idle');
   if (recognitionShouldRun && ambientEnabled) {
     voiceVAD.resumeDetection();
@@ -2385,6 +2537,7 @@ function findWakeWord(text) {
 const SETTLE_COMPLETE_MS = 250;    // VAD already observed the configured silence window
 const SETTLE_DEFAULT_MS  = 450;    // short semantic debounce, not a second endpoint timer
 const SETTLE_TRAILING_MS = 1100;   // clearly mid-thought -- allow one extra phrase
+const SETTLE_UNFINISHED_MS = 2500; // backend confirmed an open thought; do not answer it
 const SETTLE_MS = SETTLE_DEFAULT_MS;   // retained: other code reads this
 
 // Words that cannot end a finished instruction. If speech stops here, the
@@ -2451,7 +2604,13 @@ function resolveCorrections(text) {
 }
 window.zenoEndpoint.resolveCorrections = resolveCorrections;
 
-function noteSpeechFragment(chunk) {
+function noteSpeechFragment(chunk, turnState = 'FINISHED') {
+  if (turnState === 'WAIT') {
+    if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
+    micStatusEl.textContent = 'Waiting for you to continue...';
+    compactMicStatus('WAITING', 'you asked ZENO to wait');
+    return;
+  }
   if (!listenBuffer) noteSpeechMark('speech_started');
   listenBuffer = (listenBuffer + ' ' + chunk).trim();
   if (listenBuffer.length > 12 && !turnActive) {
@@ -2470,7 +2629,7 @@ function noteSpeechFragment(chunk) {
     listenBuffer = '';
     settleTimer = null;
     handleHeard(combined);
-  }, endpointDelayFor(listenBuffer));
+  }, turnState === 'UNFINISHED' ? SETTLE_UNFINISHED_MS : endpointDelayFor(listenBuffer));
 }
 
 // --- Persistent Listening ---------------------------------------------
@@ -2486,6 +2645,7 @@ let listeningMode = false;
 // does not pretend it has a confidence signal it never received.
 let lastMicError = '';             // DOMException name, for /api/microphone/diagnose
 let lastSpeechRaw = '';            // exactly what the engine returned
+let previousSpeechRaw = '';        // previous final, used only for an explicit owner correction
 let lastSpeechConfidence = null;   // engine confidence, or null if not given
 let lastSpeechAlternatives = [];   // up to 3 alternates, for disambiguation
 
@@ -2538,6 +2698,81 @@ function isStandbyPhrase(text) {
   return STANDBY_PHRASES.some((p) => t === p || t.endsWith(' ' + p) || t.startsWith(p + ' '));
 }
 
+function createStreamingSpeech(turnId) {
+  // Provider tokens are displayed immediately. Only complete semantic
+  // clauses are sent to TTS, so ZENO starts speaking before the full model
+  // reply exists without reading unstable token fragments aloud.
+  let buffer = '';
+  let chain = Promise.resolve();
+  let cancelled = false;
+  let started = false;
+
+  function enqueue(text) {
+    const chunk = String(text || '').trim();
+    if (!chunk) return;
+    chain = chain.then(async () => {
+      if (cancelled) return;
+      const resetAudio = !started;
+      started = true;
+      await speakInBrowser(chunk, { finishTurn: false, resetAudio });
+    });
+  }
+
+  function drain(force = false) {
+    while (buffer) {
+      const boundary = buffer.search(/[.!?](?:\s|$)/);
+      if (boundary >= 0) {
+        const end = boundary + 1;
+        const candidate = buffer.slice(0, end).trim();
+        buffer = buffer.slice(end).trimStart();
+        enqueue(candidate);
+        continue;
+      }
+      if (!force && buffer.length >= 180) {
+        const split = buffer.lastIndexOf(' ', 180);
+        if (split > 80) {
+          enqueue(buffer.slice(0, split));
+          buffer = buffer.slice(split + 1);
+          continue;
+        }
+      }
+      if (force) { enqueue(buffer); buffer = ''; }
+      return;
+    }
+  }
+
+  return {
+    feed(text) { if (!cancelled) { buffer += String(text || ''); drain(false); } },
+    async finish() {
+      if (!cancelled) drain(true);
+      await chain;
+      if (!cancelled) endTurn(turnId);
+    },
+    cancel() { cancelled = true; buffer = ''; },
+  };
+}
+
+async function playDashboardWakeAck(update) {
+  if (!ambientEnabled || !_ttsAudioEl.paused) return;
+  listeningMode = true;
+  awaitingCommand = true;
+  finishVADRecording(false);
+  try {
+    const response = await fetch('/api/voice/wake-ack', {cache:'no-store'});
+    if (response.status === 204 || !response.ok) return;
+    const phrase = response.headers.get('X-Zeno-Ack-Phrase') || '';
+    const url = URL.createObjectURL(await response.blob());
+    _ttsAudioEl.src = url;
+    orb.setState('listening');
+    await new Promise(resolve => {
+      _ttsAudioEl.onplaying = () => fetch('/api/diagnostics/wake-ack', {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({detected_at:Number(update.ts)||Date.now()/1000, audio_started_at:Date.now()/1000, phrase, source:'dashboard'})}).catch(()=>{});
+      _ttsAudioEl.onended = resolve; _ttsAudioEl.onerror = resolve; _ttsAudioEl.play().catch(resolve);
+    });
+    URL.revokeObjectURL(url);
+  } catch (_error) { /* cache absence/failure must not stop listening */ }
+}
+
 function isMicrophoneRecalibration(text) {
   return /\b(?:recalibrate|calibrate|adjust)\s+(?:the\s+)?(?:microphone|mic|listening sensitivity)\b/i.test(text);
 }
@@ -2546,6 +2781,32 @@ async function handleHeard(transcript) {
   transcript = transcript.trim();
   if (!transcript) return;
   if (looksLikeSelfEcho(transcript)) return;  // ZENO hearing itself
+  const vocabularyCorrection = transcript.match(/^\s*(?:it'?s|it is)\s+(.+?)[.!]?\s*$/i);
+  if (vocabularyCorrection && previousSpeechRaw) {
+    const intended = vocabularyCorrection[1].replace(/[.!]+$/, '').trim();
+    const heard = previousSpeechRaw.trim();
+    if (intended && heard && intended.toLowerCase() !== heard.toLowerCase()) {
+      const token = await desktopMicToken();
+      const headers = {'Content-Type':'application/json'};
+      if (token) headers['X-Zeno-Mic-Token'] = token;
+      const response = await fetch('/api/vocabulary/correction', {method:'POST', headers,
+        body:JSON.stringify({heard, intended})});
+      if (response.ok) {
+        await speakInBrowser(`Got it. When I hear ${heard}, I'll use ${intended}.`, { finishTurn: false });
+        return;
+      }
+    }
+  }
+  if (/\b(?:learn|enrol|enroll|re-?enrol|re-?enroll)\s+(?:my\s+)?voice\b/i.test(transcript)) {
+    const profile = await fetch('/api/speaker/profile').then(r => r.json()).catch(() => ({}));
+    if (profile.enrolled && String(lastVoiceIdentity?.status || '') !== 'OWNER_HIGH') {
+      await speakInBrowser('I need the local dashboard owner to confirm before replacing the saved voice profile.', { finishTurn: false });
+      return;
+    }
+    listeningMode = true;
+    void runVoiceEnrollmentSequence();
+    return;
+  }
   if (isMicrophoneRecalibration(transcript)) {
     voiceVAD.recalibrate();
     micStatusEl.textContent = 'Recalibrating to the room noise...';
@@ -2601,6 +2862,11 @@ async function handleHeard(transcript) {
 
   listeningMode = true;  // session opens here and stays open
   const remainder = (transcript.slice(0, hit.start) + transcript.slice(hit.end)).trim();
+  if (String(lastVoiceIdentity?.status || '') === 'UNKNOWN') {
+    await speakInBrowser("I don't recognize your voice. What's your name and surname?");
+    setListeningUi('listening');
+    return;
+  }
   if (remainder) {
     await runTurn(remainder, lastVoiceIdentity, lastVoiceIdentityProof); // wake word + command in one breath
   } else {
@@ -2746,6 +3012,7 @@ async function transcribeVADClip(blob, speakerBlob = null) {
     micStatusEl.textContent = 'Processing what you said...';
     // Preserve Deepgram's actual final-alternative confidence when supplied.
     // Missing confidence stays unknown; it is never made up client-side.
+    previousSpeechRaw = lastSpeechRaw;
     lastSpeechRaw = transcript;
     lastSpeechConfidence = (typeof result.confidence === 'number' && result.confidence >= 0 && result.confidence <= 1)
       ? result.confidence : null;
@@ -2757,11 +3024,11 @@ async function transcribeVADClip(blob, speakerBlob = null) {
     const speaker = lastVoiceIdentity || {};
     if (speaker.status && speaker.status !== 'NO_PROFILE' && speaker.status !== 'INSUFFICIENT_AUDIO') {
       const score = typeof speaker.confidence === 'number' ? ` (${Math.round(speaker.confidence * 100)}% acoustic similarity)` : '';
-      micStatusEl.textContent = speaker.status === 'OWNER_CONFIRMED'
+      micStatusEl.textContent = speaker.status === 'OWNER_HIGH'
         ? 'Divine voice confirmed' + score + ' — transcribing…'
-        : (speaker.status === 'LIKELY_OWNER' ? 'Likely Divine voice' + score + ' — sensitive data remains protected' : 'Unconfirmed voice' + score + ' — private data remains protected');
+        : (speaker.status === 'OWNER_LIKELY' ? 'Likely Divine voice' + score + ' — sensitive data remains protected' : 'Unconfirmed voice' + score + ' — private data remains protected');
     }
-    noteSpeechFragment(transcript);
+    noteSpeechFragment(transcript, String(result.turn?.state || 'FINISHED'));
   } catch (error) {
     if (ambientEnabled) {
       const timedOut = error && error.name === 'AbortError';
@@ -2820,6 +3087,7 @@ function bindVADHandlers() {
   vadHandlersBound = true;
   voiceVAD.onSpeechStart(() => {
     console.info('[ZENO speech] speech detected');
+    if (!_ttsAudioEl.paused && voiceVAD.capabilities().echo_cancellation === true) void requestBargeIn();
     compactMicStatus('HEARING SPEECH', 'capturing command');
     startVADRecording();
   });
@@ -2859,6 +3127,7 @@ function desktopMicToken() {
     : Promise.resolve('');
   return desktopMicTokenPromise;
 }
+const sharedAudioFrames = createAudioFrameClient({ vad: voiceVAD, token: desktopMicToken });
 function compactMicStatus(status, text, actionRequired = false) {
   const live = document.getElementById('mic-live-status');
   if (live) live.textContent = status + (text ? ' — ' + text : '');
@@ -2993,6 +3262,7 @@ async function openAmbientListening(generation, options = {}) {
     return false;
   }
   bindVADHandlers();
+  void sharedAudioFrames.connect();
   micRecoveryAttempts = 0;
   if (capabilities.used_fallback_device) {
     localStorage.setItem(MIC_DEVICE_STORAGE, capabilities.device_id || '');
@@ -3023,12 +3293,26 @@ function stopAmbientListening() {
   if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
   listenBuffer = '';
   finishVADRecording(true);
+  sharedAudioFrames.close();
   voiceVAD.stop();
   if (micRecoveryTimer) { clearTimeout(micRecoveryTimer); micRecoveryTimer = null; }
   micIndicator.classList.remove('listening');
   micStatusEl.textContent = 'Muted -- click the dot to listen again';
   compactMicStatus('MIC OFF', 'standby');
 }
+
+// WebView2 reliably changes document visibility even on pywebview builds
+// where the native minimized callback is occasionally missed. Release the
+// physical track immediately while hidden so the always-visible Mini Orb can
+// remain the single listener. A real restore may reacquire it; the native
+// heartbeat tells the Mini Orb to yield before that handoff completes.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (ambientEnabled || micStartPromise) stopAmbientListening();
+  } else if (!ambientEnabled && !micStartPromise && window.pywebview?.api) {
+    void startAmbientListening();
+  }
+});
 
 micIndicator.addEventListener('click', () => {
   if (ambientEnabled || micStartPromise) stopAmbientListening();
@@ -3095,6 +3379,49 @@ document.getElementById('phone-pair-btn')?.addEventListener('click', async () =>
   } catch (e) { el.textContent = e.message; }
 });
 
+async function refreshPhoneDevices() {
+  const out = document.getElementById('phone-devices');
+  const mic = document.getElementById('phone-mic-status');
+  try {
+    const [devicesResponse, micResponse] = await Promise.all([
+      fetch('/api/phone/admin/devices'), fetch('/api/phone/admin/mic/status')]);
+    const devices = await devicesResponse.json();
+    const micInfo = await micResponse.json();
+    if (!devicesResponse.ok) throw Error(devices.detail || 'Phone list unavailable');
+    out.replaceChildren();
+    for (const item of devices) {
+      const row = document.createElement('div');
+      row.style.cssText = 'border-top:1px solid var(--border);padding:7px 0';
+      const label = document.createElement('span');
+      label.textContent = `${item.name} — ${item.state} — ${item.scopes.join(', ')}`;
+      row.append(label, document.createElement('br'));
+      for (const [caption, state] of [['Trust', 'TRUSTED'], ['Lock', 'LOCKED'], ['Revoke', 'REVOKED']]) {
+        const button = document.createElement('button'); button.className = 'vt-btn';
+        button.textContent = caption; button.style.margin = '5px 5px 0 0';
+        button.onclick = async () => {
+          await fetch(`/api/phone/admin/devices/${item.device_id}/${state}`, {method:'POST'});
+          await refreshPhoneDevices();
+        };
+        row.append(button);
+      }
+      if (!item.scopes.includes('remote_audio_send')) {
+        const enableMic = document.createElement('button'); enableMic.className = 'vt-btn';
+        enableMic.textContent = 'Enable Phone Mic'; enableMic.style.margin = '5px 5px 0 0';
+        enableMic.onclick = async () => {
+          await fetch(`/api/phone/admin/devices/${item.device_id}/scopes`, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({scopes:[...item.scopes, 'remote_audio_send']})});
+          await refreshPhoneDevices();
+        };
+        row.append(enableMic);
+      }
+      out.append(row);
+    }
+    mic.textContent = `Remote mic: ${micInfo.state.toLowerCase()} • ${micInfo.selector.selected} • ${micInfo.received_frames} frames`;
+  } catch (error) { out.textContent = error.message; }
+}
+document.getElementById('phone-devices-btn')?.addEventListener('click', refreshPhoneDevices);
+
 // Desktop notifications are announced out loud server-side (SAPI, so it
 // still works even with this tab unfocused) -- this stream doesn't
 // re-speak that. It only arms the browser to treat the user's very next
@@ -3123,6 +3450,8 @@ if (!!window.EventSource) {
       handleZenoNotification(data);
     } else if (data.type === 'roll_call' && Array.isArray(data.sequence)) {
       playRollCall(data.sequence);
+    } else if (data.type === 'agent_space') {
+      window.zenoAgentSpace?.open(String(data.focus || ''), String(data.mode || 'space'));
     } else if (data.type === 'workspace_code') {
       openCodeWorkspace(data);
     } else if (data.type === 'workspace_news') {
@@ -4144,6 +4473,20 @@ window.zenoSubspace = {
                   activity: [...subspaceState.activity.keys()] }),
 };
 
+// The premium Agent Space presentation replaces only the legacy Subspace
+// projection. The old functions above stay as compatibility shims for tests
+// and older integrations, but normal UI/events use this controller.
+const agentSpace = createAgentSpace({
+  overlay: subspaceOverlay,
+  body: subspaceBody,
+  detail: document.getElementById('subspace-detail'),
+  summary: document.getElementById('subspace-summary'),
+  modeButtons: [...document.querySelectorAll('[data-agent-space-mode]')],
+});
+document.getElementById('subspace-close').addEventListener('click', agentSpace.close);
+window.zenoAgentSpace = agentSpace;
+window.zenoSubspace = agentSpace;
+
 // --- Situation Room ---------------------------------------------------
 // Renders /api/situation, which composes live subsystem state. Unknown
 // values render as a dash -- a command view that invents numbers is worse
@@ -4918,6 +5261,7 @@ if (window.EventSource) {
     }
     if (type.startsWith('confirmation.') || type.startsWith('tool.')) refreshPending();
     if (type === 'audio.recognized') showRecognizedAudio(update.payload || {});
+    if (type === 'wake.detected') void playDashboardWakeAck(update);
     if (type === 'audio.recognition_started') { systemAudioCaptureActive = update.payload?.source === 'system'; renderAwarenessIndicators(); }
     if (type === 'audio.recognition_finished') { systemAudioCaptureActive = false; renderAwarenessIndicators(); }
     if (type === 'awareness.settings_changed' && document.getElementById('settings-panel').classList.contains('open')) loadAwarenessSettings();
@@ -5006,8 +5350,10 @@ if (performanceAuditEnabled) {
   setInterval(() => {
     const elapsed = Math.max(0.001, (performance.now() - auditStarted) / 1000);
     const orbAudit = orb.auditMetrics ? orb.auditMetrics() : {};
+    const ringAudit = window.agentRing?.auditMetrics ? window.agentRing.auditMetrics() : {};
+    const spaceAudit = agentSpace.state ? agentSpace.state() : {};
     const timers = 1 + (rendererWatchdog !== null ? 1 : 0) + (devRaf !== null ? 1 : 0)
-      + (orbitTimer !== null ? 1 : 0) + (sitClockTimer !== null ? 1 : 0)
+      + (ringAudit.orbit_timer ? 1 : 0) + (spaceAudit.open ? 1 : 0) + (sitClockTimer !== null ? 1 : 0)
       + (orbAudit.particle_loop ? 1 : 0) + (orbAudit.blink_timer ? 1 : 0);
     fetch('/api/performance/frontend', { method: 'POST', keepalive: true,
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
@@ -5062,5 +5408,74 @@ document.getElementById('onboarding-form').addEventListener('submit', async even
 void initializeOnboarding();
 inputEl.focus();
 </script>
+
+<!-- ULTRON: ZENO's serious mode. A SKIN over this same dashboard -- not a
+     second app, not a second agent list. Every value is fetched from
+     /api/mode; this markup decides nothing. -->
+<style>
+:root.ultron { --u-red:#FF3038; --u-cyan:#00CFFF; }
+:root.ultron body { background:#07080B; }
+#ultron-hud{position:fixed;inset:0;z-index:60;display:grid;
+  grid-template-rows:auto 1fr auto;background:
+  radial-gradient(1200px 700px at 50% 40%,#12141A 0%,#07080B 70%);
+  color:#E8EAF0;font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+#ultron-hud.hide{display:none}
+#ultron-hud .u-bar{display:flex;justify-content:space-between;align-items:center;
+  padding:14px 22px;border-bottom:1px solid #1E2230;letter-spacing:.16em;
+  font-size:11px;text-transform:uppercase}
+#ultron-hud .u-bar b{color:var(--u-red);letter-spacing:.22em}
+#ultron-hud .u-main{display:grid;grid-template-columns:1fr minmax(320px,420px) 1fr;
+  gap:18px;padding:18px 22px;min-height:0}
+#ultron-hud .u-panel{background:#0C0E14;border:1px solid #1B1F2B;border-radius:10px;
+  padding:14px 16px;overflow:auto;min-height:0}
+#ultron-hud .u-panel h3{margin:0 0 10px;font-size:10px;letter-spacing:.2em;
+  color:#7A8196;text-transform:uppercase;font-weight:600}
+#ultron-hud .u-core{display:grid;place-items:center}
+#ultron-hud .u-row{display:flex;justify-content:space-between;gap:14px;
+  padding:5px 0;border-bottom:1px solid #14171F;font-size:12px}
+#ultron-hud .u-row span{color:#767D91;letter-spacing:.08em}
+#ultron-hud .u-row b{color:#E8EAF0;font-weight:600;text-align:right;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+#ultron-hud .u-empty{color:#5A6070;font-size:12px;letter-spacing:.14em;
+  padding:10px 0;text-transform:uppercase}
+#ultron-hud .u-evt{font:11px/1.6 ui-monospace,Consolas,monospace;color:#9AA1B4;
+  padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#ultron-hud .u-evt span{color:var(--u-cyan);margin-right:9px}
+#ultron-hud .u-foot{display:flex;gap:10px;padding:12px 22px;
+  border-top:1px solid #1E2230}
+#ultron-hud .u-foot button{background:#12151D;border:1px solid #262B39;
+  color:#C9CEDC;border-radius:7px;padding:8px 14px;font-size:11px;
+  letter-spacing:.12em;cursor:pointer;text-transform:uppercase}
+#ultron-hud .u-foot button:hover{border-color:var(--u-red);color:#fff}
+@media (max-width:1100px){#ultron-hud .u-main{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){#ultron-core{opacity:.85}}
+</style>
+<div id="ultron-hud" class="hide">
+  <div class="u-bar">
+    <div>ZENO SYSTEM &nbsp;·&nbsp; MASTER AI</div>
+    <div><b>ULTRON MODE</b> &nbsp;·&nbsp; SERIOUS MODE ACTIVE</div>
+    <div id="ultron-clock"></div>
+  </div>
+  <div class="u-main">
+    <section class="u-panel"><h3>Active Mission</h3>
+      <div id="ultron-mission"><div class="u-empty">No active mission</div></div>
+    </section>
+    <section class="u-panel u-core"><canvas id="ultron-core" width="340" height="340"></canvas></section>
+    <section class="u-panel"><h3>Live Events</h3>
+      <div id="ultron-events"><div class="u-empty">No events yet</div></div>
+    </section>
+  </div>
+  <div class="u-foot">
+    <button onclick="zenoUltron.set('NORMAL')">Exit Ultron Mode</button>
+    <button onclick="zenoUltron.refresh()">Refresh State</button>
+  </div>
+</div>
+<script src="/static/ultron.js"></script>
+<script>
+setInterval(() => { const c = document.getElementById('ultron-clock');
+  if (c) c.textContent = new Date().toLocaleTimeString() + '  ·  ' +
+    new Date().toLocaleDateString(); }, 1000);
+</script>
+
 </body>
 </html>
