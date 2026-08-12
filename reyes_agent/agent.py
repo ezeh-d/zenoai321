@@ -37,6 +37,7 @@ def run_agent(
     on_stage: OnStage | None = None,
     cancel_check: Callable[[], None] | None = None,
     turn_id: str = "",
+    spoken: bool = False,
 ) -> None:
     """Run the agent to completion for the latest turn already in `history`.
 
@@ -100,6 +101,15 @@ def run_agent(
 
     max_rounds = decision.max_tool_rounds if decision else MAX_TOOL_ROUNDS
     task_kind = decision.model_kind if decision else "general"
+
+    # A pure conversation cannot call a tool.  Sending schemas anyway was
+    # the largest measured contributor to first-token latency, and by
+    # 2026-08-11 the accidental "core" payload had reached 94 tools.  The
+    # cognition decision is local and deterministic; action/memory/research
+    # turns retain the compact core and can widen it on demand.
+    fast_chat = bool(decision is not None and decision.path == "FAST" and decision.modes == ("CHAT",))
+    if fast_chat or not latest:
+        tools = []
 
     # Load the compact advanced group only for a request that can use it.
     # This is a local keyword gate, not another model call, and avoids the
@@ -197,7 +207,13 @@ def run_agent(
         memory_context = get_memory_manager().context_for(latest)
     except Exception:  # noqa: BLE001
         memory_context = system_prompt_block()
-    system = config.SYSTEM_PROMPT + memory_context
+    system = (config.FAST_CHAT_SYSTEM_PROMPT if fast_chat else config.SYSTEM_PROMPT) + memory_context
+    if spoken:
+        # Speech is slower than reading. A three-sentence answer takes about
+        # twelve seconds to say, and the owner stands there for all of it --
+        # so shaving latency off the START of a reply is wasted if the reply
+        # itself runs long.
+        system += config.VOICE_REPLY_STYLE
     try:
         from reyes_agent.user_profiles import owner_context
         system += owner_context()
@@ -267,6 +283,9 @@ def run_agent(
     try:
         from reyes_agent import anticipation, awareness
 
+        # Fast chat may omit tool schemas and use the compact system prompt,
+        # but it must not become context-blind.  These directives are bounded,
+        # cached local projections (no provider call or sensor loop).
         awareness_nudge = awareness.directive()
         if awareness_nudge:
             system += "\n" + awareness_nudge

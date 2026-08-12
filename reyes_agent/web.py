@@ -1099,6 +1099,10 @@ def _conversation_turn(
                         on_stage=on_stage,
                         cancel_check=context.check_cancelled,
                         turn_id=turn_id,
+                        # A voice turn is one ZENO will SAY, so it gets the
+                        # spoken-reply style. `voice_identity` is present
+                        # only on turns that arrived as speech.
+                        spoken=voice_identity is not None,
                     )
                 reply = history[-1]["content"]
             except BaseException:

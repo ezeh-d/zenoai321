@@ -1,0 +1,10 @@
+{
+  "terms": [
+    "ZENO", "Divine", "Codex", "Claude", "Netlify", "OmniParser",
+    "LiveKit", "Utmostcare", "Nigerian Pidgin", "abeg", "wetin", "dey"
+  ],
+  "corrections": {
+    "Xeno": "ZENO",
+    "Zeno AI": "ZENO"
+  }
+}

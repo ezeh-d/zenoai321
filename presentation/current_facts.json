@@ -2,15 +2,15 @@
   "project_name": "ZENO",
   "owner_name": "Divine",
   "institution": "Redeemer's University",
-  "generated_at": 1786457584.5658317,
+  "generated_at": 1786538238.6697347,
   "history": {
-    "commits": 54,
+    "commits": 69,
     "first": "2026-08-05",
-    "last": "2026-08-11",
-    "active_days": 5
+    "last": "2026-08-12",
+    "active_days": 6
   },
   "scale": {
-    "modules": 402,
+    "modules": 430,
     "tests_passing": 0
   },
   "features": [
@@ -133,18 +133,18 @@
     }
   ],
   "recent_work": [
-    "feat(creative): design system drives site generation; audit the roadmap partials",
-    "feat(creative): vendor the ui-ux-pro-max design data, register Magic MCP",
-    "feat(creative): real Blender backend, and fix PATH-only app detection",
-    "feat(creative): 3D website engine and a timeline that renders real video",
-    "feat(creative): media rights engine, real render verification, SEO artefacts",
-    "feat(connectors): scoped SaaS connections, workflow routing, temporary specialists",
-    "feat(capabilities): decomposition, composition, demonstration, correction, acquisition",
-    "docs(coord): flag the stt refactor test fallout and the inventory cache",
-    "feat(capabilities): cached inventory and an engine that will not bluff",
-    "Build secure ZENO Phase 5 real-world integrations",
-    "docs(coord): record the health fix and correct the duplicate-process claim",
-    "fix(health): parallel bounded checks and a single-flight cache"
+    "fix(wake): accept the wake word as it is HEARD, not as it is spelled",
+    "feat(phone-mic): report signal LEVEL, not just stream health",
+    "fix(phone-mic): accept IPv6 peers; prove the receiver carries real audio",
+    "feat(design): enforce the named execution limits instead of documenting them",
+    "test(subspace): close cancellation depth; verify the overlay against reality",
+    "feat(messaging): real Slack/WhatsApp/Telegram/Discord messaging engine",
+    "fix(agents): ZENO can answer who his own agents are",
+    "feat(phone-mic): one permanent QR that works on Wi-Fi and hotspot",
+    "feat(remote-mic): reach the phone over Wi-Fi AND the laptop hotspot",
+    "fix(phone-mic): pair from the QR token and say what actually went wrong",
+    "fix(phone-mic): LAN pairing by one-time token instead of WebAuthn",
+    "feat(remote-mic): working LAN phone-mic via the Chrome secure-origin flag"
   ],
   "company_tasks": [],
   "challenges": [

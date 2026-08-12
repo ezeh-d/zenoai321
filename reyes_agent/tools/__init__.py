@@ -163,6 +163,9 @@ TOOL_GROUPS: dict[str, str] = {
     "coding_inspect": "coding", "coding_execute": "coding",
     "mcp_status": "mcp", "mcp_discover": "mcp", "mcp_read": "mcp", "mcp_action": "mcp",
     "device_status": "devices", "device_observe": "devices", "device_execute": "devices",
+    "visitor_said": "presentation", "visit_topic": "presentation",
+    "owner_directive": "presentation", "visit_status": "presentation",
+    "rehearse_visit": "presentation",
     "design_tool_check": "creative",
     "plan_message_request": "comms", "messaging_status": "comms",
     "agent_roster": "agents", "who_is_agent": "agents",
@@ -575,7 +578,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, agent_identity, messaging_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, agent_identity, messaging_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

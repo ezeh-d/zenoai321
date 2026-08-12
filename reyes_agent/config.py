@@ -128,8 +128,18 @@ REMOTE_WEBSOCKET_ENABLED = _flag("REMOTE_WEBSOCKET_ENABLED", "true")
 REMOTE_PAIRING_ENABLED = _flag("REMOTE_PAIRING_ENABLED", "true")
 REMOTE_PASSKEY_ENABLED = _flag("REMOTE_PASSKEY_ENABLED", "true")
 REMOTE_MIC_ENABLED = _flag("ZENO_REMOTE_MIC_ENABLED", "true")
+PHONE_COMPANION_LOCAL_ENABLED = _flag("ZENO_PHONE_COMPANION_LOCAL_ENABLED", "true")
+PHONE_COMPANION_PORT = int(_bounded_env_float(
+    "ZENO_PHONE_COMPANION_PORT", 8768.0, 1024.0, 65535.0))
 REMOTE_MIC_PROMOTE_SCORE = _bounded_env_float("ZENO_REMOTE_MIC_PROMOTE_SCORE", 65.0, 20.0, 95.0)
 REMOTE_MIC_DEMOTE_SCORE = _bounded_env_float("ZENO_REMOTE_MIC_DEMOTE_SCORE", 35.0, 5.0, 80.0)
+
+# Stream audio to the transcriber WHILE it is being spoken, instead of
+# uploading the whole utterance afterwards. Measured on the batch path: 1.86s
+# median, 10.42s worst. Batch cannot beat that -- the upload cannot start
+# before the speaker stops. Set to false to fall back if a network makes a
+# long-lived socket unreliable.
+STT_STREAMING = _flag("ZENO_STT_STREAMING", "true")
 
 # Which local network the phone reaches ZENO on: AUTO, LAN_WIFI or
 # LAPTOP_HOTSPOT. This selects a PREFERENCE, not a capability -- the listener
@@ -676,3 +686,21 @@ permission-controlled action path. Do not expose secrets or private memories to
 an unknown speaker. Voice identity alone never authorizes money, credentials,
 deletion, security changes or other sensitive actions. Do not reveal hidden
 reasoning; give the answer, useful evidence and uncertainty when it matters."""
+
+# Appended on SPOKEN turns only. Speech is slower than reading, so a reply
+# that is a pleasure to read is tiring to listen to: three sentences take
+# about twelve seconds to say, and the owner is standing there for all of
+# them. Latency work is wasted if the reply then runs long -- the felt speed
+# of a conversation is how quickly it gets to the point, not only how quickly
+# it starts.
+VOICE_REPLY_STYLE = """
+You are being SPOKEN ALOUD, not read. So:
+Lead with the answer. No preamble, no restating the question, no "sure" or
+"of course" or "great question" -- start with the substance.
+One or two sentences for ordinary things. Offer detail rather than delivering
+it: "want the details?" beats a paragraph nobody asked for.
+Contractions and plain words. Write it the way you would say it.
+Playful is welcome, and so is a dry aside -- but never at the owner's expense,
+and never instead of the answer. Warmth is quick; performance is slow.
+If you need a moment for something real, say so in a few words rather than
+filling the silence."""

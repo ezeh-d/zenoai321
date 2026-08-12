@@ -1,0 +1,150 @@
+{
+  "generated_for": "SIWES supervision visit",
+  "siwes": {
+    "start": "2026-07-01",
+    "end": "2026-09-30",
+    "months": 3
+  },
+  "repository": {
+    "first_commit": "2026-08-05",
+    "latest_commit": "2026-08-12",
+    "active_days": 6,
+    "commits": 69,
+    "first_commit_subject": "ZENO AI Operating System \u00e2\u20ac\u201d initial commit",
+    "python_files": 545,
+    "test_files": 64
+  },
+  "gap_before_version_control": {
+    "siwes_start": "2026-07-01",
+    "first_commit": "2026-08-05",
+    "unrecorded_before_git": true,
+    "say": "The repository starts on 2026-08-05, but SIWES started 2026-07-01. The work before that -- including the REYES version and the rename -- has no commit history behind it. What survives of it is the package name, `reyes_agent`, which everything here still imports from."
+  },
+  "stages": [
+    {
+      "name": "Agent Space",
+      "what": "seeing the agents and who is doing what",
+      "evidence_kind": "UNRECORDED",
+      "first_seen": "",
+      "commits": 0,
+      "evidence": "reyes_agent/agent_space.py exists but git has no history for it"
+    },
+    {
+      "name": "REYES became ZENO",
+      "what": "the project began as REYES and was later renamed ZENO",
+      "evidence_kind": "ATTESTED",
+      "first_seen": "",
+      "commits": 0,
+      "evidence": "the package is still called `reyes_agent`, and every module here imports from it. The rename itself predates this repository, so git cannot date it -- the directory name is what survives of it."
+    },
+    {
+      "name": "SIWES began",
+      "what": "Divine's three-month SIWES started 2026-07-01 and runs to 2026-09-30",
+      "evidence_kind": "ATTESTED",
+      "first_seen": "",
+      "commits": 0,
+      "evidence": "supplied by Divine; this is a placement date, not a software artefact."
+    },
+    {
+      "name": "The project started",
+      "what": "Mr BJ and Mr K encouraged Divine and the others to build something of their own during the training, and Divine chose to build an AI assistant",
+      "evidence_kind": "ATTESTED",
+      "first_seen": "",
+      "commits": 0,
+      "evidence": "Divine's account of how it began; nothing in the code records a conversation."
+    },
+    {
+      "name": "Browser automation",
+      "what": "authorised web actions",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-05",
+      "commits": 2,
+      "evidence": "2 commit(s) touching reyes_agent/tools/browser.py"
+    },
+    {
+      "name": "Council mode",
+      "what": "several specialists contributing to one answer",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-05",
+      "commits": 1,
+      "evidence": "1 commit(s) touching reyes_agent/council.py"
+    },
+    {
+      "name": "Version control",
+      "what": "the project came under git",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-05",
+      "commits": 69,
+      "evidence": "69 commits across 6 active days; the first is already titled 'ZENO AI Operating System \u00e2\u20ac\u201d initial commit'."
+    },
+    {
+      "name": "Voice output",
+      "what": "ZENO speaking its replies aloud",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-05",
+      "commits": 3,
+      "evidence": "3 commit(s) touching reyes_agent/voice_manager.py"
+    },
+    {
+      "name": "Wake word",
+      "what": "waking on the word ZENO",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-05",
+      "commits": 1,
+      "evidence": "1 commit(s) touching reyes_agent/voice/wake.py"
+    },
+    {
+      "name": "Speech input",
+      "what": "listening through a microphone",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-06",
+      "commits": 4,
+      "evidence": "4 commit(s) touching reyes_agent/microphone.py"
+    },
+    {
+      "name": "Multi-agent system",
+      "what": "specialist agents working under ZENO",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-07",
+      "commits": 3,
+      "evidence": "3 commit(s) touching reyes_agent/agent_teams.py"
+    },
+    {
+      "name": "Desktop automation",
+      "what": "opening and driving Windows applications",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-10",
+      "commits": 5,
+      "evidence": "5 commit(s) touching reyes_agent/computer"
+    },
+    {
+      "name": "Memory",
+      "what": "remembering context between conversations",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-10",
+      "commits": 3,
+      "evidence": "3 commit(s) touching reyes_agent/memory"
+    },
+    {
+      "name": "Vision",
+      "what": "reading what is on the screen",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-10",
+      "commits": 5,
+      "evidence": "5 commit(s) touching reyes_agent/vision"
+    },
+    {
+      "name": "Phone remote microphone",
+      "what": "using the phone as ZENO's microphone",
+      "evidence_kind": "EVIDENCED",
+      "first_seen": "2026-08-11",
+      "commits": 6,
+      "evidence": "6 commit(s) touching reyes_agent/remote_mic"
+    }
+  ],
+  "evidence_key": {
+    "EVIDENCED": "git can prove the date",
+    "ATTESTED": "the owner's account, with what corroborates it",
+    "UNRECORDED": "it happened; nothing dates it"
+  }
+}

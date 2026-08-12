@@ -92,6 +92,80 @@ class RemoteTurnConsumer:
         self._started = 0.0
         self._busy = False
         self._handler: CommandHandler | None = None
+        # Streaming transcription runs ALONGSIDE the existing segmenter
+        # rather than replacing it. The VAD still decides where a turn
+        # begins and ends -- that logic works and is what wake-word handling
+        # is built on. All that moves is WHEN the audio is uploaded: as it
+        # is spoken, instead of after the speaker stops. So the risk is
+        # bounded to "the transcript arrives from a different place", and
+        # batch remains underneath as the fallback.
+        self._stream: Any = None
+        self._stream_parts: list[str] = []
+        self._stream_confidence = 0.0
+        self._stream_lock = threading.RLock()
+
+    def _streaming_enabled(self) -> bool:
+        from reyes_agent import config
+
+        return bool(getattr(config, "STT_STREAMING", True))
+
+    def _ensure_stream(self) -> Any:
+        """The live socket, started on first speech and reused after that."""
+        if not self._streaming_enabled():
+            return None
+        with self._stream_lock:
+            if self._stream is not None:
+                return self._stream
+            try:
+                from reyes_agent.voice.stt.streaming import StreamingTranscriber
+
+                transcriber = StreamingTranscriber(on_transcript=self._on_stream)
+                if not transcriber.start():
+                    self._emit("remote_mic.stt_stream_unavailable",
+                               {"detail": transcriber.status().get("last_error", "")})
+                    return None
+                self._stream = transcriber
+                return transcriber
+            except Exception as exc:  # noqa: BLE001
+                self._emit("remote_mic.stt_stream_unavailable",
+                           {"detail": f"{type(exc).__name__}: {exc}"})
+                return None
+
+    def _on_stream(self, result: Any) -> None:
+        """Collect finalised fragments as Deepgram promotes them."""
+        with self._stream_lock:
+            if getattr(result, "is_final", False) and getattr(result, "text", ""):
+                self._stream_parts.append(result.text)
+                self._stream_confidence = max(self._stream_confidence,
+                                              float(getattr(result, "confidence", 0.0)))
+
+    def _drain_stream(self, wait_s: float = 0.45) -> tuple[str, float]:
+        """The transcript for the turn that just ended.
+
+        Only the tail is outstanding by now -- everything before it went up
+        while the owner was still talking -- so this waits a fraction of a
+        second rather than for a whole upload.
+        """
+        stream = self._stream
+        if stream is None:
+            return "", 0.0
+        try:
+            stream.finish()
+        except Exception:  # noqa: BLE001
+            pass
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            with self._stream_lock:
+                if self._stream_parts:
+                    # Give a beat for a trailing fragment, then take it.
+                    pass
+            time.sleep(0.05)
+        with self._stream_lock:
+            text = " ".join(self._stream_parts).strip()
+            confidence = self._stream_confidence
+            self._stream_parts.clear()
+            self._stream_confidence = 0.0
+        return text, confidence
 
     def set_handler(self, handler: CommandHandler) -> None:
         self._handler = handler
@@ -117,6 +191,14 @@ class RemoteTurnConsumer:
                     return
             self._pcm.extend(frame.pcm16)
             self._silence_s = 0.0 if voiced else self._silence_s + duration
+        # Upload WHILE the owner is still speaking. This is the whole point:
+        # by the time they stop, only the last fragment is outstanding.
+        # Outside the lock -- a socket must never sit inside the audio path's
+        # critical section.
+        stream = self._ensure_stream()
+        if stream is not None:
+            stream.send(frame.pcm16)
+        with self._lock:
             elapsed = time.monotonic() - self._started
             if (self._silence_s >= 0.55 and elapsed >= 0.55) or elapsed >= 12.0:
                 clip = bytes(self._pcm)
@@ -140,8 +222,23 @@ class RemoteTurnConsumer:
                 context.progress("speaker_verification")
                 identity = speaker_identity.identify(audio)
                 context.progress("remote_stt")
-                transcript_result = transcribe_result(audio)
-                transcript = str(transcript_result.get("transcript") or "").strip()
+
+                # The streamed transcript first: the audio went up as it was
+                # spoken, so this is normally already waiting. Batch stays
+                # underneath -- if streaming produced nothing, the turn is
+                # transcribed the old way rather than lost. Speed must not
+                # cost a turn.
+                streamed, streamed_confidence = self._drain_stream()
+                if streamed:
+                    transcript = streamed
+                    transcript_result = {"transcript": streamed,
+                                         "confidence": streamed_confidence,
+                                         "backend": "deepgram-streaming",
+                                         "latency_s": round(
+                                             time.monotonic() - started, 3)}
+                else:
+                    transcript_result = transcribe_result(audio)
+                    transcript = str(transcript_result.get("transcript") or "").strip()
                 matched = _WAKE.match(transcript)
                 if not matched:
                     # The first THREE WORDS, and no more. Logging only a

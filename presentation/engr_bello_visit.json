@@ -1,0 +1,27 @@
+{
+  "visitor": "Engr Bello",
+  "address_as": [
+    "Engr Bello",
+    "sir"
+  ],
+  "institution": "Redeemer's University",
+  "context": "SIWES supervision visit",
+  "field": "Civil Engineering lecturer, as supplied by the owner",
+  "travelling_from": "Osun State",
+  "visiting": "Ado-Ekiti",
+  "owner": "Divine",
+  "siwes_start": "2026-07-01",
+  "siwes_end": "2026-09-30",
+  "placement": "T21 Services",
+  "project_original_name": "REYES",
+  "project_current_name": "ZENO",
+  "do_not_invent": [
+    "exact academic title",
+    "rank",
+    "department position",
+    "personal history",
+    "private information",
+    "publications",
+    "years of service"
+  ]
+}
