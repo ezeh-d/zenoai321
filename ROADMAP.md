@@ -798,7 +798,7 @@ rather than a dashboard button that could fabricate or bypass work.
 
 ---
 
-## Creative Design + Learning Intelligence â€” PARTIAL, with explicit execution limits
+## Creative Design + Learning Intelligence — DONE, with enforced execution limits
 
 ZEAL remains the one existing Creative Director, now explicitly scoped for
 original logo/brand direction, typography, colour, layout, UI/UX critique,
@@ -820,12 +820,53 @@ Existing image generation and project-writing tools remain the sole execution
 paths, including real SVG/text assets where appropriate; their save-location,
 worker, cancellation and Activity View rules remain unchanged.
 
-**Named limits:** native Figma, Canva, Photoshop, Illustrator, printer and
-vector-editor control is not claimed unless a real tool is connected. Visual
-critique needs an available screenshot/vision provider; otherwise ZENO reports
-that limitation instead of inventing observations. An image generation or
-project write is not reported as completed until its existing tool returns a
-real result.
+**Named limits — now ENFORCED, not documented (2026-08-12).** These were
+prose, and prose cannot stop a claim. `creative/limits.py` measures each
+capability from the thing that would do the work and returns UNAVAILABLE with
+a reason when it cannot. Native Figma, Canva, Photoshop, Illustrator, printer
+and vector-editor control is refused with "there is no connector for X" —
+distinct from an unknown name, because conflating the two is how "I'll open
+Photoshop and fix the kerning" gets said by something that cannot open
+Photoshop. Visual critique requires a configured vision provider; without one
+the capability reads UNAVAILABLE rather than ZENO inventing observations. An
+image generation or project write is still not reported as completed until
+its existing tool returns a real result.
+
+**Measured on this machine:** 3D_DESIGN **AVAILABLE** — Blender 5.2.0 LTS at
+`C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`.
+DESIGN_CRITIQUE, IMAGE_GENERATION and PROJECT_ASSETS AVAILABLE. Everything
+else UNAVAILABLE.
+
+**Magic MCP (21st.dev) is REGISTERED BUT NOT CONNECTED.** It is in
+`servers.json` with `enabled: true`, and npx is on PATH — but
+`TWENTY_FIRST_API_KEY` is unset and it is absent from `ZENO_MCP_ALLOWLIST`, so
+it cannot start. Registered is not connected, and reporting it as available
+because it appears in a config file is the precise class of claim this module
+exists to stop. Setting both gates flips it to AVAILABLE with no code change.
+
+**The bug this closed:** `CAPABILITY_LIBRARY` is a dictionary of sentences,
+and one of them read *"3D_DESIGN: PARTIAL — existing Blender path when
+installed/configured; availability is checked at execution."* Nothing checked.
+Blender had been installed the whole time, and that string would have read
+identically on a machine with none — so it carried no information either way.
+`design_capabilities` now reports measured state first and labels the
+remaining prose as guidance rather than software.
+
+**Caching is deliberately asymmetric.** The first version cached every
+capability for two minutes, which was wrong in the one direction that
+matters: a revoked credential would still read AVAILABLE for the rest of the
+window. Measured, only the Blender probe is expensive (~283 ms); every other
+check reads an environment variable or a small file in under a millisecond.
+So Blender is cached and the credential/allowlist checks — precisely the ones
+that change while ZENO is running — are measured on every call. A warm full
+sweep costs 1 ms, and revoking a gate is noticed immediately.
+
+**New coverage:** `tests/test_design_limits.py` (22 tests) holds the gate:
+each named tool refused with a real reason, unknown capabilities refused
+rather than assumed, a broken probe failing CLOSED, Blender state following
+the real probe in both directions, critique requiring vision, registered-≠-
+connected in all three MCP gate combinations, and no stale permissive answer
+after revocation.
 
 **Regression coverage:** `tests/test_design_learning.py` verifies FAST/DEEP
 routing, original/evidence-based design policy, local persistent/adaptive

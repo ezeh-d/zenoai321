@@ -163,6 +163,7 @@ TOOL_GROUPS: dict[str, str] = {
     "coding_inspect": "coding", "coding_execute": "coding",
     "mcp_status": "mcp", "mcp_discover": "mcp", "mcp_read": "mcp", "mcp_action": "mcp",
     "device_status": "devices", "device_observe": "devices", "device_execute": "devices",
+    "design_tool_check": "creative",
     "plan_message_request": "comms", "messaging_status": "comms",
     "agent_roster": "agents", "who_is_agent": "agents",
     "agent_role_call": "agents", "agent_workers": "agents",

@@ -127,9 +127,56 @@ def foodie_mode(action: str, dish: str = "", steps: list[str] | None = None, ing
     input_schema={"type": "object", "properties": {}},
 )
 def design_capabilities() -> str:
-    from reyes_agent import design_intelligence
+    """Measured state first, guidance second.
 
-    return "\n".join(f"{name}: {detail}" for name, detail in design_intelligence.CAPABILITY_LIBRARY.items())
+    CAPABILITY_LIBRARY is prose, and prose cannot look at the machine -- it
+    said 3D_DESIGN was "PARTIAL ... when installed/configured" while Blender
+    5.2 sat in Program Files, and would have said exactly the same on a
+    machine with no Blender. Anything `limits` can probe is reported from the
+    probe; the rest stays as written guidance, clearly marked as such.
+    """
+    from reyes_agent import design_intelligence
+    from reyes_agent.creative import limits
+
+    measured = limits.capabilities()
+    lines = ["MEASURED ON THIS COMPUTER"]
+    for name, capability in sorted(measured.items()):
+        lines.append(f"  {name}: {capability.state} -- {capability.evidence}"
+                     + (f" ({capability.detail})" if capability.detail else ""))
+
+    probed = set(measured)
+    guidance = [(n, d) for n, d in design_intelligence.CAPABILITY_LIBRARY.items()
+                if n not in probed]
+    if guidance:
+        lines.append("")
+        lines.append("DESIGN GUIDANCE (advice, not connected software)")
+        lines += [f"  {name}: {detail}" for name, detail in guidance]
+    return "\n".join(lines)
+
+
+@register(
+    name="design_tool_check",
+    description=("Check whether ZENO can actually drive a specific design tool "
+                 "or capability before promising it -- Figma, Canva, "
+                 "Photoshop, Illustrator, a printer, a vector editor, Blender "
+                 "3D, UI components, image generation or design critique. "
+                 "Returns the real reason when it cannot."),
+    input_schema={"type": "object", "properties": {
+        "capability": {"type": "string",
+                       "description": "e.g. FIGMA, PHOTOSHOP, 3D_DESIGN, "
+                                      "DESIGN_CRITIQUE, UI_COMPONENTS"}},
+        "required": ["capability"]},
+)
+def design_tool_check(capability: str) -> str:
+    import json
+
+    from reyes_agent.creative import limits
+
+    found = limits.check(capability)
+    allowed, refusal = limits.require(capability)
+    return json.dumps({**found.as_dict(), "allowed": allowed,
+                       "say_instead": refusal,
+                       "connected_now": limits.connected()}, default=str)
 
 
 @register(
