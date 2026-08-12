@@ -102,14 +102,51 @@ def _wake() -> tuple[str, str]:
     return FAILED, f"configured phrase '{phrases[0]}' does not match its own matcher"
 
 
+def _ask_server(path: str) -> dict[str, Any]:
+    """Ask the RUNNING server, not this process.
+
+    Audio arrives in whichever process owns the listener. A runtime object
+    read here reports its own emptiness, which is how this check announced
+    "no phone connected" while a phone was streaming from 192.168.137.226.
+    The state that matters lives over there; loopback is the way to it.
+    """
+    import json
+    import urllib.request
+
+    from reyes_agent import config
+
+    port = int(getattr(config, "PHONE_COMPANION_PORT", 8768))
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}",
+                                    timeout=8) as response:
+            return json.loads(response.read() or b"{}")
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _microphone() -> tuple[str, str]:
     from reyes_agent.audio.manager import get_audio_manager
 
+    # In-process first: when ZENO runs this itself, this IS the right answer.
     state = get_audio_manager().status()
     sources = state.get("sources") or {}
-    active = state.get("active_source") or state.get("physical_owner") or ""
     if sources:
+        active = state.get("active_source") or state.get("physical_owner") or ""
         return READY, f"active source: {active}; {len(sources)} known"
+
+    # Empty here does not mean empty everywhere.
+    remote = _ask_server("/api/phone/mic/levels")
+    remote_sources = remote.get("sources") or {}
+    if remote_sources:
+        # A publishing source IS a working microphone. Silence at the instant
+        # of the check means nobody happens to be talking -- reporting that
+        # as PARTIAL would raise an alarm about a mic that is fine, and a
+        # false alarm before a visit costs as much as a missed fault.
+        loud = [n for n, m in remote_sources.items()
+                if m.get("reads_as") not in ("silence", None)]
+        level = ("speech right now" if loud else
+                 "quiet at this instant, which is normal between sentences")
+        return READY, f"{len(remote_sources)} source(s) publishing -- {level}"
     return PARTIAL, ("no audio source is publishing yet -- connect the phone "
                      "or speak into the laptop microphone")
 
@@ -124,10 +161,16 @@ def _remote_mic() -> tuple[str, str]:
     if not live:
         return PARTIAL, "receiver ready but no network is serving the phone port"
     where = ", ".join(f"{r.label} {r.ipv4}" for r in live)
-    connected = bool(get_remote_mic_runtime().status().get("peer_ip"))
-    return (READY if connected else PARTIAL,
-            f"{where}" + ("; phone connected" if connected else
-                          "; no phone connected yet"))
+    # Same trap as the microphone check: the peer is attached to the process
+    # that owns the listener, so ask the server when this process has none.
+    peer = str(get_remote_mic_runtime().status().get("peer_ip") or "")
+    if not peer:
+        peer = str(_ask_server("/api/phone/mic/network").get("peer_ip") or "")
+    if peer:
+        route = routes.selector().route_for_peer(peer)
+        via = f" via {route.label}" if route else ""
+        return READY, f"{where}; phone connected from {peer}{via}"
+    return PARTIAL, f"{where}; no phone connected yet"
 
 
 def _agents() -> tuple[str, str]:
