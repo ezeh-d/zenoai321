@@ -1,0 +1,38 @@
+{
+  "generated_at": "2026-08-12 15:03:15",
+  "data": {
+    "python_files": 572,
+    "test_files": 67,
+    "commits": 73,
+    "subsystems": [
+      "acceleration",
+      "activity",
+      "agents",
+      "analytics",
+      "audio",
+      "browser",
+      "capabilities",
+      "coding_system",
+      "computer",
+      "connectors",
+      "context",
+      "conversation",
+      "creative",
+      "devices",
+      "engineering",
+      "executors",
+      "health",
+      "knowledge",
+      "learning",
+      "memory",
+      "missions",
+      "models",
+      "network",
+      "notification_channels"
+    ],
+    "subsystem_count": 40,
+    "package_name": "reyes_agent",
+    "package_note": "The package is still named after REYES. Every module here imports from it -- that is what survives of the original name.",
+    "counted_from": "git ls-files and git log, at the moment you asked"
+  }
+}

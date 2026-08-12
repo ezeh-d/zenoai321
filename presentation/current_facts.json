@@ -2,15 +2,15 @@
   "project_name": "ZENO",
   "owner_name": "Divine",
   "institution": "Redeemer's University",
-  "generated_at": 1786538238.6697347,
+  "generated_at": 1786543373.733531,
   "history": {
-    "commits": 69,
+    "commits": 73,
     "first": "2026-08-05",
     "last": "2026-08-12",
     "active_days": 6
   },
   "scale": {
-    "modules": 430,
+    "modules": 438,
     "tests_passing": 0
   },
   "features": [
@@ -133,6 +133,10 @@
     }
   ],
   "recent_work": [
+    "feat(voice): say what you're doing, while you're doing it",
+    "fix(voice): the wake word opens a conversation, it is not punctuation",
+    "feat(voice): stay in the conversation -- follow-ups without the name, and barge-in",
+    "feat(visit): host a SIWES supervision visit as a conversation",
     "fix(wake): accept the wake word as it is HEARD, not as it is spelled",
     "feat(phone-mic): report signal LEVEL, not just stream health",
     "fix(phone-mic): accept IPv6 peers; prove the receiver carries real audio",
@@ -140,11 +144,7 @@
     "test(subspace): close cancellation depth; verify the overlay against reality",
     "feat(messaging): real Slack/WhatsApp/Telegram/Discord messaging engine",
     "fix(agents): ZENO can answer who his own agents are",
-    "feat(phone-mic): one permanent QR that works on Wi-Fi and hotspot",
-    "feat(remote-mic): reach the phone over Wi-Fi AND the laptop hotspot",
-    "fix(phone-mic): pair from the QR token and say what actually went wrong",
-    "fix(phone-mic): LAN pairing by one-time token instead of WebAuthn",
-    "feat(remote-mic): working LAN phone-mic via the Chrome secure-origin flag"
+    "feat(phone-mic): one permanent QR that works on Wi-Fi and hotspot"
   ],
   "company_tasks": [],
   "challenges": [

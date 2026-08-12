@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-08-12 15:03:15",
+  "data": {
+    "learner": "Divine",
+    "language": "Python",
+    "sources": [
+      "W3Schools",
+      "Class Central"
+    ],
+    "certificates": "Not claimed. These are where he learned, not qualifications held -- ask Divine about completion.",
+    "topics": [
+      {
+        "topic": "Functions and modules",
+        "used_for": "Splitting the assistant into subsystems that can be tested on their own",
+        "evidence": "reyes_agent/tools/__init__.py",
+        "language": "Python"
+      },
+      {
+        "topic": "Classes and dataclasses",
+        "used_for": "Modelling things like an agent, a route or a message as one object",
+        "evidence": "reyes_agent/remote_mic/routes.py",
+        "language": "Python"
+      },
+      {
+        "topic": "JSON",
+        "used_for": "Configuration, the agent roster, and the presentation pack that works without internet",
+        "evidence": "reyes_agent/presentation/timeline.py",
+        "language": "Python"
+      },
+      {
+        "topic": "APIs and HTTP",
+        "used_for": "Talking to the speech and language services, and serving the phone",
+        "evidence": "reyes_agent/web.py",
+        "language": "Python"
+      },
+      {
+        "topic": "Async and threading",
+        "used_for": "Audio arriving continuously while the assistant is still answering",
+        "evidence": "reyes_agent/voice/stt/streaming.py",
+        "language": "Python"
+      },
+      {
+        "topic": "Regular expressions",
+        "used_for": "Recognising the wake word across the spellings speech recognition produces",
+        "evidence": "reyes_agent/remote_mic/runtime.py",
+        "language": "Python"
+      },
+      {
+        "topic": "Error handling",
+        "used_for": "Failing closed on a security check rather than guessing",
+        "evidence": "reyes_agent/creative/limits.py",
+        "language": "Python"
+      },
+      {
+        "topic": "Testing with pytest",
+        "used_for": "Proving behaviour rather than asserting it -- including the cases that must NOT happen",
+        "evidence": "tests/test_conversation_continuity.py",
+        "language": "Python"
+      },
+      {
+        "topic": "Git and version control",
+        "used_for": "Tracking the project's history, which is what the timeline is read from",
+        "evidence": ".git",
+        "language": "Python"
+      },
+      {
+        "topic": "Networking",
+        "used_for": "Reaching the phone over Wi-Fi and the laptop hotspot, and telling local addresses from remote ones",
+        "evidence": "reyes_agent/remote_mic/routes.py",
+        "language": "Python"
+      },
+      {
+        "topic": "Security thinking",
+        "used_for": "Deciding what a paired phone may do -- audio only, nothing else",
+        "evidence": "reyes_agent/phone_security.py",
+        "language": "Python"
+      }
+    ],
+    "dropped_for_lack_of_evidence": [],
+    "why_python": "It fits what the project needed: AI integration, automation, APIs, and the backend that serves the phone. Not a language chosen in the abstract.",
+    "note": "Each topic names a file. A topic whose file is missing is removed rather than described."
+  }
+}

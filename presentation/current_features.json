@@ -1,0 +1,50 @@
+{
+  "generated_at": "2026-08-12 15:03:15",
+  "data": [
+    {
+      "feature": "Voice conversation",
+      "status": "WORKING",
+      "detail": "speech recognition"
+    },
+    {
+      "feature": "Local AI fallback",
+      "status": "WORKING",
+      "detail": "runs without the internet"
+    },
+    {
+      "feature": "Desktop automation",
+      "status": "WORKING",
+      "detail": "reads and drives applications"
+    },
+    {
+      "feature": "Browser automation",
+      "status": "WORKING",
+      "detail": "real selectors, not screen positions"
+    },
+    {
+      "feature": "Memory",
+      "status": "WORKING",
+      "detail": "remembers across sessions"
+    },
+    {
+      "feature": "Specialist agents",
+      "status": "WORKING",
+      "detail": "delegates to specialists"
+    },
+    {
+      "feature": "Web research",
+      "status": "WORKING",
+      "detail": "fetches and cites real pages"
+    },
+    {
+      "feature": "Video rendering",
+      "status": "WORKING",
+      "detail": "renders and verifies real files"
+    },
+    {
+      "feature": "Documented in-progress work",
+      "status": "PARTIAL",
+      "detail": "9 areas are recorded as partial with their limits named"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-08-12 15:03:15",
+  "data": [
+    {
+      "q": "What exactly is ZENO?",
+      "from": "visitor profile + timeline"
+    },
+    {
+      "q": "How did the project begin?",
+      "from": "timeline (attested)"
+    },
+    {
+      "q": "What is the difference between REYES and ZENO?",
+      "from": "timeline -- the package is still named reyes_agent"
+    },
+    {
+      "q": "Did you build all this from scratch?",
+      "from": "project evidence + technologies"
+    },
+    {
+      "q": "Did you use AI to build it?",
+      "from": "answered plainly: yes"
+    },
+    {
+      "q": "What actually works today?",
+      "from": "feature status"
+    },
+    {
+      "q": "What problems did you solve?",
+      "from": "engineering challenges, each citing a commit"
+    },
+    {
+      "q": "What have you learned?",
+      "from": "learning portfolio"
+    },
+    {
+      "q": "What work did you do for the company?",
+      "from": "visit topics -- company work"
+    },
+    {
+      "q": "Is there real code behind this?",
+      "from": "code proof"
+    }
+  ]
+}

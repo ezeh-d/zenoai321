@@ -1,0 +1,124 @@
+{
+  "generated_at": "2026-08-12 15:03:15",
+  "data": [
+    {
+      "sha": "803d931",
+      "problem": "The wake word was heard correctly and rejected anyway.",
+      "cause": "Speech recognition writes the name as it SOUNDS -- Zeeno, Xeno, Zino -- and the matcher accepted exactly one spelling. It also disagreed with the configuration, which listed two wake phrases the matcher would never accept.",
+      "fix": "Build the matcher from the configured phrases, and let every known spelling stand in for the name.",
+      "result": "The wake word fires on the owner's own voice. 13 phrasing cases checked, including ones that must NOT fire.",
+      "status": "WORKING",
+      "evidence": {
+        "sha": "803d931",
+        "date": "2026-08-12",
+        "subject": "fix(wake): accept the wake word as it is HEARD, not as it is spelled",
+        "files_changed": 1,
+        "files": [
+          "reyes_agent/remote_mic/runtime.py"
+        ]
+      }
+    },
+    {
+      "sha": "b5361cc",
+      "problem": "The phone was told to join the Wi-Fi it was already on.",
+      "cause": "The QR code carries a hostname, and Windows answers that name with IPv6 first. The check that decides whether a device is on the local network only understood IPv4, so it refused every answer.",
+      "fix": "Judge IPv6 properly -- link-local and unique-local are local by definition; a global address is accepted only inside this machine's own prefix, never blanket.",
+      "result": "Phone audio verified arriving over Wi-Fi and hotspot: 195 and 172 frames received.",
+      "status": "WORKING",
+      "evidence": {
+        "sha": "b5361cc",
+        "date": "2026-08-12",
+        "subject": "fix(phone-mic): accept IPv6 peers; prove the receiver carries real audio",
+        "files_changed": 4,
+        "files": [
+          ".env.example",
+          "reyes_agent/remote_mic/connect.py",
+          "reyes_agent/remote_mic/routes.py",
+          "tests/test_remote_mic_networks.py"
+        ]
+      }
+    },
+    {
+      "sha": "e538af7",
+      "problem": "ZENO could not say who his own agents were.",
+      "cause": "Nothing was lost -- the roster, roles and workers all existed in three separate files. None of them was exposed as something the conversation could ask, so the identity was on disk and unreachable, which looks exactly like forgetting.",
+      "fix": "One identity layer over the existing sources, read without starting any agent.",
+      "result": "14 agents and 77 workers, answerable while every one of them is asleep.",
+      "status": "WORKING",
+      "evidence": {
+        "sha": "e538af7",
+        "date": "2026-08-12",
+        "subject": "fix(agents): ZENO can answer who his own agents are",
+        "files_changed": 4,
+        "files": [
+          "reyes_agent/agents/identity.py",
+          "reyes_agent/tools/__init__.py",
+          "reyes_agent/tools/agent_identity.py",
+          "tests/test_agent_identity.py"
+        ]
+      }
+    },
+    {
+      "sha": "1c68077",
+      "problem": "The phone showed the error message '[object Object]'.",
+      "cause": "The web framework returns its error detail as a STRING for most failures but as an ARRAY OF OBJECTS for validation errors. Turning that array into text produces that literal string.",
+      "fix": "Unwrap every shape the detail can take, and fall back to a real sentence per status code.",
+      "result": "Failures now say what went wrong. Pairing codes are stripped from any message before it reaches the screen.",
+      "status": "WORKING",
+      "evidence": {
+        "sha": "1c68077",
+        "date": "2026-08-11",
+        "subject": "fix(phone-mic): pair from the QR token and say what actually went wrong",
+        "files_changed": 3,
+        "files": [
+          "reyes_agent/phone_security.py",
+          "reyes_agent/static/mic.html",
+          "reyes_agent/web.py"
+        ]
+      }
+    },
+    {
+      "sha": "923b571",
+      "problem": "Automating Slack would have typed into a window it could not read.",
+      "cause": "Slack is an Electron application, and its accessibility tree exposes only the window frame -- no channel list, no messages, no message box.",
+      "fix": "Check readability BEFORE typing, and refuse when the result cannot be verified.",
+      "result": "It reports the real reason instead of sending a message into an unknown conversation and calling it success.",
+      "status": "PARTIAL",
+      "evidence": {
+        "sha": "923b571",
+        "date": "2026-08-12",
+        "subject": "feat(messaging): real Slack/WhatsApp/Telegram/Discord messaging engine",
+        "files_changed": 12,
+        "files": [
+          "reyes_agent/tools/__init__.py",
+          "reyes_agent/tools/messaging/__init__.py",
+          "reyes_agent/tools/messaging/desktop.py",
+          "reyes_agent/tools/messaging/discord.py",
+          "reyes_agent/tools/messaging/intent.py",
+          "reyes_agent/tools/messaging/models.py"
+        ]
+      }
+    },
+    {
+      "sha": "397983a",
+      "problem": "The project claimed a 3D capability was unavailable while the software was installed.",
+      "cause": "Capability status was a hand-written sentence rather than a check. It read the same on a machine with the software and a machine without it.",
+      "fix": "Probe the thing that would do the work; being listed grants nothing, and a probe that errors fails closed.",
+      "result": "Blender 5.2 correctly reported available; tools with no connector are refused by name.",
+      "status": "WORKING",
+      "evidence": {
+        "sha": "397983a",
+        "date": "2026-08-12",
+        "subject": "feat(design): enforce the named execution limits instead of documenting them",
+        "files_changed": 5,
+        "files": [
+          "ROADMAP.md",
+          "reyes_agent/creative/limits.py",
+          "reyes_agent/tools/__init__.py",
+          "reyes_agent/tools/design.py",
+          "tests/test_design_limits.py"
+        ]
+      }
+    }
+  ]
+}
