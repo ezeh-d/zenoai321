@@ -88,6 +88,96 @@ def offer(mode: str = "", *, with_qr: bool = True) -> dict[str, Any]:
     return result
 
 
+def standing(*, with_qr: bool = True) -> dict[str, Any]:
+    """ONE permanent QR that works on Wi-Fi and on the hotspot.
+
+    HOW ONE CODE COVERS TWO NETWORKS
+    --------------------------------
+    A QR holds one URL, and 192.168.1.117 is unreachable from the hotspot, so
+    no IP address can cover both. A NAME can. Windows already publishes this
+    machine over mDNS, and its responder answers PER INTERFACE -- measured
+    here, a query arriving on the hotspot is answered 192.168.137.1 and a
+    query arriving over Wi-Fi is answered 192.168.1.117. The phone therefore
+    resolves the same name to whichever address it can actually reach.
+
+    That also collapses the Chrome secure-origin flag from two entries to
+    one, because http://<name>:8768 is a single origin on both networks.
+
+    WHY IT NEVER EXPIRES
+    --------------------
+    It carries the STANDING key rather than a one-time token. See
+    `PhoneSecurity.pair_with_mic_key`: it is still audio-only, still refused
+    from outside this machine's own networks, and still rotatable in one
+    call. Long-lived, never wider.
+    """
+    from reyes_agent.phone_security import get_phone_security
+
+    host = mdns_host()
+    selector = routes.selector()
+    ready = [r for r in selector.routes() if r.health == routes.READY]
+    if not host:
+        return {"ok": False, "reason": (
+            "I could not determine this computer's local network name, so I "
+            "cannot make a single code for both networks.")}
+    if not ready:
+        return {"ok": False, "reason": (
+            "No network is serving the phone mic yet. Start the listener, or "
+            "connect to Wi-Fi or switch on Mobile Hotspot.")}
+
+    origin = f"http://{host}:{routes.PORT}"
+    url = f"{origin}/mic?k={get_phone_security().mic_key()}"
+    result = {
+        "ok": True,
+        "kind": "STANDING",
+        "url": url,
+        "origin": origin,
+        "host": host,
+        "port": routes.PORT,
+        "expires": None,
+        "expires_note": "This code does not expire and can be scanned again.",
+        "covers": [r.as_dict() for r in ready],
+        "chrome_flag": pairing.CHROME_FLAG,
+        "steps": [
+            "On the phone open Chrome and go to chrome://flags",
+            'Search "Insecure origins treated as secure"',
+            f"Add {origin}, set it to Enabled, then relaunch Chrome",
+            "Scan the code on either Wi-Fi or the laptop hotspot",
+            "Allow the microphone when Chrome asks",
+        ],
+        "fallback": [f"http://{r.ipv4}:{routes.PORT}/mic" for r in ready],
+        "fallback_note": ("If the phone cannot resolve the name, use the "
+                          "matching address for the network it is on -- the "
+                          "same key works at any of them."),
+    }
+    if with_qr:
+        result["qr_png"] = pairing._qr(url)
+    return result
+
+
+def mdns_host() -> str:
+    """This machine's `.local` name, which resolves on every local network."""
+    import socket as _socket
+
+    try:
+        name = _socket.gethostname().split(".")[0].strip()
+    except Exception:  # noqa: BLE001
+        return ""
+    return f"{name}.local" if name else ""
+
+
+def save_standing(destination: str | Path = "") -> dict[str, Any]:
+    """Write the one permanent QR to a file."""
+    result = standing()
+    if not result.get("ok"):
+        return result
+    target = Path(destination) if destination else (
+        Path.home() / "Desktop" / "zeno_mic.png")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(base64.b64decode(result.pop("qr_png").split(",")[-1]))
+    result["path"] = str(target)
+    return result
+
+
 def offer_both(*, with_qr: bool = True) -> dict[str, Any]:
     """One pairing code, printed for every available network.
 

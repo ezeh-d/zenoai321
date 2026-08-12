@@ -10,8 +10,9 @@ front door, not a separate brain. Adds two things the CLIs don't have:
   the perceived-lag fix; the model itself is only as fast as its provider.
 
 Run: python -m reyes_agent.web
-Binds 127.0.0.1:8765. The Phone Companion is reached remotely only through
-the owner-configured Cloudflare Tunnel and Cloudflare Access hostname.
+Binds the desktop surface to 127.0.0.1:8765. When the local Phone Companion
+is enabled, the same process/event loop also listens on 0.0.0.0:8768; the
+remote boundary exposes only the narrow authenticated phone routes there.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import queue
@@ -131,6 +133,8 @@ async def _no_cache(request, call_next):
     allowed, status_code, reason = remote_boundary(
         request.url.path, request.headers,
         enabled=bool(getattr(config, "REMOTE_ACCESS_ENABLED", False)),
+        client_host=(request.client.host if request.client else ""),
+        local_enabled=bool(getattr(config, "PHONE_COMPANION_LOCAL_ENABLED", False)),
     )
     if not allowed:
         try:
@@ -710,7 +714,11 @@ def gesture_action(req: GestureRequest) -> dict[str, Any]:
 
 
 @app.get("/")
-def index() -> FileResponse:
+def index(request: Request) -> FileResponse:
+    from reyes_agent.remote_access.boundary import is_direct_remote
+
+    if is_direct_remote(request.client.host if request.client else ""):
+        return FileResponse(_STATIC_DIR / "phone.html")
     return FileResponse(_STATIC_DIR / "index.html")
 
 
@@ -726,7 +734,15 @@ def favicon() -> FileResponse:
 
 
 @app.get("/api/status")
-def status() -> dict[str, Any]:
+def status(request: Request) -> dict[str, Any]:
+    from reyes_agent.remote_access.boundary import is_direct_remote
+
+    if is_direct_remote(request.client.host if request.client else ""):
+        # Pre-authentication liveness only. Network addresses, tasks, devices,
+        # model/provider details and desktop state remain behind a session.
+        return {"name": config.ASSISTANT_NAME, "pc": "ONLINE",
+                "state": "PAIRING_OR_AUTHENTICATION_REQUIRED",
+                "companion": bool(config.PHONE_COMPANION_LOCAL_ENABLED)}
     from reyes_agent import confirmation
     from reyes_agent.kernel import get_kernel
 
@@ -2625,8 +2641,8 @@ def _phone_origin(request: Request) -> tuple[str, str]:
     X-Forwarded-Proto. Direct loopback is useful only for the desktop admin
     panel and cannot perform WebAuthn registration.
     """
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
-    host = host.split(":", 1)[0].lower()
+    visible_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    host = (request.url.hostname or visible_host.split(":", 1)[0]).lower()
     tailscale_identity = bool(request.headers.get("tailscale-user-login"))
     proto = request.headers.get("x-forwarded-proto", request.url.scheme).lower()
     # Tailscale Serve terminates a valid tailnet HTTPS certificate and then
@@ -2634,8 +2650,21 @@ def _phone_origin(request: Request) -> tuple[str, str]:
     # identity header and retains the public .ts.net Host.
     if tailscale_identity and host.endswith(".ts.net"):
         proto = "https"
+    if proto == "http" and bool(getattr(config, "PHONE_COMPANION_LOCAL_ENABLED", False)):
+        peer = request.client.host if request.client else ""
+        try:
+            peer_private = ipaddress.ip_address(peer).is_private
+            host_private = ipaddress.ip_address(host).is_private
+        except ValueError:
+            peer_private = host_private = False
+        port = request.url.port or 80
+        if peer_private and host_private and port == int(config.PHONE_COMPANION_PORT):
+            # Chrome must independently report this exact origin as a secure
+            # context before the frontend attempts WebAuthn. Accepting the
+            # origin here does not bypass that browser requirement.
+            return f"http://{visible_host.lower()}", host
     if proto != "https" or not host or host in {"127.0.0.1", "localhost"}:
-        raise HTTPException(503, "Secure Phone Companion hostname is not configured.")
+        raise HTTPException(503, "BIOMETRIC_UNAVAILABLE_IN_CURRENT_ORIGIN")
     configured = os.environ.get("ZENO_PHONE_PUBLIC_HOST", "").strip().lower()
     if configured and host != configured:
         raise HTTPException(403, "Unexpected Phone Companion host.")
@@ -2647,16 +2676,44 @@ def _loopback(request: Request) -> None:
 
 def _phone_session(request: Request, zeno_phone_session: str | None = Cookie(default=None)):
     from reyes_agent.phone_security import get_phone_security
+    bearer = request.headers.get("authorization", "")
+    token = zeno_phone_session or (bearer[7:].strip() if bearer.lower().startswith("bearer ") else "")
     try:
-        return get_phone_security().session(zeno_phone_session or "", request.headers.get("x-zeno-csrf", ""),
+        return get_phone_security().session(token, request.headers.get("x-zeno-csrf", ""),
                                             request.method not in {"GET", "HEAD"})
     except PermissionError as exc:
         raise HTTPException(401, str(exc)) from exc
 
+
+def _phone_session_response(payload: dict[str, Any], login: dict[str, Any],
+                            request: Request) -> Response:
+    """Return JSON and persist one scheme-correct HttpOnly phone session."""
+    response = Response(json.dumps(payload), media_type="application/json")
+    response.set_cookie(
+        "zeno_phone_session", login["session"], httponly=True,
+        secure=request.url.scheme == "https", samesite="strict",
+        max_age=1800, path="/",
+    )
+    return response
+
 @app.get("/phone")
 @app.get("/pair")
+@app.get("/chat")
+@app.get("/companion")
 def phone_page() -> FileResponse:
     return FileResponse(_STATIC_DIR / "phone.html")
+
+
+@app.get("/phone-manifest.json")
+def phone_manifest() -> FileResponse:
+    return FileResponse(_STATIC_DIR / "phone-manifest.json",
+                        media_type="application/manifest+json")
+
+
+@app.get("/phone-sw.js")
+def phone_service_worker() -> FileResponse:
+    return FileResponse(_STATIC_DIR / "phone-sw.js",
+                        media_type="application/javascript")
 
 @app.get("/mic")
 def phone_mic_page() -> FileResponse:
@@ -2665,21 +2722,13 @@ def phone_mic_page() -> FileResponse:
 @app.post("/api/phone/admin/pairing")
 def phone_create_pairing(request: Request) -> dict[str, Any]:
     _loopback(request)
-    from reyes_agent.phone_security import get_phone_security
-    pair = get_phone_security().create_pair()
-    host = os.environ.get("ZENO_PHONE_PUBLIC_HOST", "").strip()
-    if not host:
-        raise HTTPException(503, "Set ZENO_PHONE_PUBLIC_HOST after configuring Cloudflare Tunnel and Access.")
-    pair["url"] = f"https://{host}/pair?token={pair.pop('token')}"
-    pair["manual_url"] = f"https://{host}/pair?code={pair['manual_code']}"
-    import base64
-    from io import BytesIO
-    import qrcode
-    image = qrcode.make(pair["url"])
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    pair["qr_png"] = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
-    return pair
+    from reyes_agent import phone_companion
+
+    offer = phone_companion.pairing_offer(all_routes=True)
+    if not offer.get("ok"):
+        raise HTTPException(503, offer.get("reason", "No local companion route is ready."))
+    offer["manual_url"] = offer["origin"] + "/companion?code=" + offer["manual_code"]
+    return offer
 
 @app.get("/api/phone/admin/devices")
 def phone_devices(request: Request) -> list[dict[str, Any]]:
@@ -2759,7 +2808,43 @@ def phone_pair_complete(req: PhoneCredentialRequest, request: Request) -> dict[s
 
 class PhoneLocalPairRequest(BaseModel):
     token: str = ""
+    key: str = ""           # standing microphone key: does not expire
     device_name: str = ""
+
+
+class PhoneStandingMicPairRequest(BaseModel):
+    key: str = ""
+    device_name: str = ""
+
+
+class PhoneCompanionPairRequest(BaseModel):
+    token: str = ""
+    device_name: str = "Divine's Redmi 14C"
+    browser: str = "Chrome"
+    device_public_key: dict[str, Any]
+
+
+class PhoneDeviceAuthRequest(BaseModel):
+    device_id: str
+    challenge: str = ""
+    signature: str = ""
+
+
+class PhoneOutputRequest(BaseModel):
+    output: str = "AUTO"
+
+
+class PhoneRoutePreferenceRequest(BaseModel):
+    route: str = "AUTO"
+
+
+class PhoneTaskRequest(BaseModel):
+    task_id: str
+
+
+class PhoneWebAuthnEnrollmentRequest(BaseModel):
+    credential: dict[str, Any]
+    challenge: str
 
 
 @app.post("/api/phone/pair/local")
@@ -2776,12 +2861,17 @@ def phone_pair_local(req: PhoneLocalPairRequest, request: Request) -> Response:
     """
     from reyes_agent.phone_security import get_phone_security
 
-    token = (req.token or "").strip()
-    if not token:
+    token, key = (req.token or "").strip(), (req.key or "").strip()
+    if not token and not key:
         raise HTTPException(400, "No pairing code was supplied. Scan the QR code "
                                  "again, or open the link it contains.")
+    peer = request.client.host if request.client else ""
     try:
-        paired = get_phone_security().pair_local(token, req.device_name)
+        # The standing key wins when both are present: it is what a phone
+        # re-presents on every reconnect, and it is the one that survives.
+        paired = (get_phone_security().pair_with_mic_key(key, req.device_name, peer)
+                  if key else
+                  get_phone_security().pair_local(token, req.device_name))
     except PermissionError as exc:
         # A plain string, never a structure -- the phone renders `detail`
         # directly, and an object here is what produced "[object Object]".
@@ -2802,6 +2892,127 @@ def phone_pair_local(req: PhoneLocalPairRequest, request: Request) -> Response:
                         secure=request.url.scheme == "https",
                         samesite="strict", max_age=1800, path="/")
     return response
+
+
+@app.post("/api/phone/pair/key")
+def phone_pair_standing_mic(req: PhoneStandingMicPairRequest,
+                            request: Request) -> Response:
+    """Re-pair an audio-only phone using the owner's standing local QR.
+
+    The key is accepted only from a socket peer on one of this laptop's live
+    local networks.  It grants the same single ``remote_audio_send`` scope as
+    the short-lived QR; it is not a companion-control credential.
+    """
+    from reyes_agent.phone_security import get_phone_security
+
+    key = (req.key or "").strip()
+    if not key:
+        raise HTTPException(400, "No standing microphone key was supplied.")
+    try:
+        paired = get_phone_security().pair_with_mic_key(
+            key, req.device_name,
+            peer_ip=(request.client.host if request.client else ""),
+        )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"Pairing failed: {type(exc).__name__}") from exc
+
+    session = paired.pop("session")
+    response = Response(json.dumps({"state": "PAIRED", **paired}),
+                        media_type="application/json")
+    response.set_cookie("zeno_phone_session", session, httponly=True,
+                        secure=request.url.scheme == "https",
+                        samesite="strict", max_age=1800, path="/")
+    return response
+
+
+@app.post("/api/phone/companion/pair/local")
+def phone_companion_pair_local(req: PhoneCompanionPairRequest,
+                               request: Request) -> dict[str, Any]:
+    """Pin a browser-generated device key, pending explicit PC approval."""
+    from reyes_agent.phone_security import get_phone_security
+    from reyes_agent.remote_access import policy
+
+    peer = request.client.host if request.client else "unknown"
+    rate = policy.check_rate("pair", peer)
+    if not rate.allowed:
+        raise HTTPException(429, f"Too many pairing attempts; retry in {rate.retry_after:.0f}s.")
+    try:
+        return get_phone_security().pair_companion_local(
+            req.token, req.device_name, req.device_public_key, req.browser)
+    except (PermissionError, ValueError) as exc:
+        policy.check_rate("pair_failure", peer)
+        raise HTTPException(403, str(exc)) from exc
+
+
+@app.get("/api/phone/companion/pair/status")
+def phone_companion_pair_status(device_id: str) -> dict[str, Any]:
+    from reyes_agent.phone_security import get_phone_security
+
+    try:
+        return get_phone_security().pairing_status(device_id)
+    except PermissionError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/phone/companion/auth/options")
+def phone_companion_auth_options(req: PhoneDeviceAuthRequest,
+                                 request: Request) -> dict[str, Any]:
+    from reyes_agent.phone_security import get_phone_security
+    from reyes_agent.remote_access import policy
+
+    peer = request.client.host if request.client else "unknown"
+    if not policy.check_rate("login", peer).allowed:
+        raise HTTPException(429, "Too many authentication attempts.")
+    try:
+        return get_phone_security().device_authentication_options(req.device_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+
+
+@app.post("/api/phone/companion/auth/complete")
+def phone_companion_auth_complete(req: PhoneDeviceAuthRequest,
+                                  request: Request) -> Response:
+    from reyes_agent.phone_security import get_phone_security
+
+    try:
+        login = get_phone_security().finish_device_authentication(
+            req.device_id, req.challenge, req.signature)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    if login.get("biometric_required"):
+        return Response(json.dumps(login), media_type="application/json")
+    return _phone_session_response(
+        {key: value for key, value in login.items() if key != "session"},
+        login, request)
+
+
+@app.post("/api/phone/webauthn/enroll/options")
+def phone_webauthn_enroll_options(request: Request,
+                                  session=Depends(_phone_session)) -> dict[str, Any]:
+    from reyes_agent.phone_security import get_phone_security
+
+    _, rp_id = _phone_origin(request)
+    try:
+        return get_phone_security().webauthn_enrollment_options(
+            session["device_id"], rp_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+
+
+@app.post("/api/phone/webauthn/enroll/complete")
+def phone_webauthn_enroll_complete(req: PhoneWebAuthnEnrollmentRequest,
+                                   request: Request,
+                                   session=Depends(_phone_session)) -> dict[str, Any]:
+    from reyes_agent.phone_security import get_phone_security
+
+    origin, rp_id = _phone_origin(request)
+    try:
+        return get_phone_security().finish_webauthn_enrollment(
+            session["device_id"], req.credential, req.challenge, origin, rp_id)
+    except Exception as exc:
+        raise HTTPException(403, f"Platform verification enrollment failed: {exc}") from exc
 
 
 @app.get("/api/phone/networks")
@@ -3077,8 +3288,34 @@ def main() -> None:
 
     print(f"{config.ASSISTANT_NAME} panel:")
     print(f"  this machine -> http://127.0.0.1:8765")
-    print("  network access -> disabled (loopback only; Cloudflare Tunnel is required for Phone Companion)")
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    sockets: list[socket.socket] = []
+
+    def bind(host: str, port: int) -> socket.socket:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((host, port))
+        listener.listen(2048)
+        listener.set_inheritable(True)
+        return listener
+
+    try:
+        sockets.append(bind("127.0.0.1", 8765))
+        if bool(getattr(config, "PHONE_COMPANION_LOCAL_ENABLED", False)):
+            try:
+                sockets.append(bind("0.0.0.0", int(config.PHONE_COMPANION_PORT)))
+                print(f"  local phone -> http://<Wi-Fi-or-hotspot-IP>:{config.PHONE_COMPANION_PORT}")
+                print("  phone boundary -> authenticated companion routes only")
+            except OSError as exc:
+                # A companion-port conflict must not take down the desktop.
+                print(f"  local phone -> DEGRADED ({type(exc).__name__}: {exc})")
+        server = uvicorn.Server(uvicorn.Config(app, log_level="warning", access_log=False))
+        server.run(sockets=sockets)
+    finally:
+        for listener in sockets:
+            try:
+                listener.close()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

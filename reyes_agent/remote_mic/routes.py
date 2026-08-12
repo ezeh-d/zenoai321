@@ -178,6 +178,56 @@ def _adapters() -> list[dict[str, str]]:
     return rows
 
 
+def local_subnets() -> list[str]:
+    """This machine's own private IPv4 addresses. No subprocess, ever.
+
+    `_adapters()` enriches addresses with adapter DESCRIPTIONS, which costs a
+    PowerShell call. That is fine for building a UI; it is wrong on a request
+    path, where it once turned a pairing check into a multi-second hang.
+    Subnet membership only needs addresses, and psutil has those in-process.
+    """
+    try:
+        import psutil
+
+        stats = psutil.net_if_stats()
+    except Exception:  # noqa: BLE001
+        return []
+
+    found: list[str] = []
+    for name, addrs in psutil.net_if_addrs().items():
+        if not getattr(stats.get(name), "isup", False):
+            continue
+        if any(hint in name.lower() for hint in _SKIP_HINTS):
+            continue
+        for addr in addrs:
+            if getattr(addr, "family", None) != socket.AF_INET or not addr.address:
+                continue
+            try:
+                parsed = ipaddress.ip_address(addr.address)
+            except ValueError:
+                continue
+            if parsed.is_private and not parsed.is_loopback and not parsed.is_link_local:
+                found.append(addr.address)
+    return found
+
+
+def is_local_address(peer_ip: str) -> bool:
+    """Is this address on one of THIS machine's own local networks."""
+    try:
+        peer = ipaddress.ip_address((peer_ip or "").strip())
+    except ValueError:
+        return False
+    if peer.is_loopback:
+        return True
+    for mine in local_subnets():
+        try:
+            if peer in ipaddress.ip_network(f"{mine}/24", strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _classify(ip: str, alias: str, description: str) -> str:
     """LAN_WIFI, HOTSPOT, or "" for addresses no phone should be sent to."""
     text = f"{alias} {description}".lower()
