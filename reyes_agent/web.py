@@ -953,9 +953,42 @@ def _end_turn(turn_id: str) -> None:
 
 
 def _fast_local_reply(message: str):
-    """Return only a policy-approved trivial social reply, if any."""
+    """Return only a policy-approved local reply, if any.
+
+    Agent Space navigation is presentation-only: it performs no tool work
+    and reads no private content, so a provider call would add only latency.
+    """
     try:
-        from reyes_agent.voice.latency_governor import reply_for
+        import re
+
+        from reyes_agent import agent_runtime, notification_bus
+        from reyes_agent.voice.latency_governor import FastReply, reply_for
+
+        normalized = " ".join(re.sub(r"[^a-z0-9_ ]+", " ", str(message).casefold()).split())
+        mode, focus = "", ""
+        if normalized in {"show me the agent space", "show agent space", "open agent space",
+                          "show all your agents", "show me all your agents"}:
+            mode = "space"
+        elif normalized in {"show council mode", "open council mode", "show the council"}:
+            mode = "council"
+        elif normalized in {"who is active right now", "who s active right now",
+                            "show active agents", "show active tasks"}:
+            mode = "active"
+        elif normalized in {"show active handoffs", "show me all agent conversations",
+                            "show agent conversations", "show conversation flow"}:
+            mode = "flow"
+        elif normalized in {"return to zeno", "focus on zeno", "open zeno"}:
+            mode, focus = "space", "zeno"
+        else:
+            match = re.fullmatch(r"(?:focus on|open) ([a-z0-9_]+)", normalized)
+            aliases = {"hermes": "hermes_comm"}
+            candidate = aliases.get(match.group(1), match.group(1)) if match else ""
+            if candidate in agent_runtime.AGENT_ROLES:
+                mode, focus = "detail", candidate
+        if mode:
+            notification_bus.publish({"type": "agent_space", "mode": mode, "focus": focus})
+            label = (focus or "agent space").replace("hermes_comm", "Hermes").replace("_", " ")
+            return FastReply(f"Opening {label}.", "agent_space")
 
         return reply_for(message)
     except Exception:  # noqa: BLE001 -- optimisation never gates the real brain
@@ -1766,6 +1799,28 @@ def agent_hierarchy() -> dict[str, Any]:
         "agents_alive": health["agents_alive"],
         "agents_total": health["agents_total"],
     }
+
+
+@app.get("/api/agent-space")
+def agent_space_snapshot(limit: int = 60) -> dict[str, Any]:
+    """Canonical, privacy-safe Agent Space projection.
+
+    This composes the existing runtime/teams/Event Bus. It never starts an
+    agent and it is not a second registry or scheduler.
+    """
+    from reyes_agent import agent_space
+
+    return agent_space.snapshot(event_limit=max(10, min(100, limit)))
+
+
+@app.get("/api/agent-space/{agent_id}")
+def agent_space_detail(agent_id: str) -> dict[str, Any]:
+    from reyes_agent import agent_space
+
+    detail = agent_space.agent_detail(agent_id)
+    if detail is None:
+        raise HTTPException(404, "That agent is not registered.")
+    return detail
 
 
 @app.post("/api/agents/summon-all")
@@ -2689,9 +2744,10 @@ def _phone_session_response(payload: dict[str, Any], login: dict[str, Any],
                             request: Request) -> Response:
     """Return JSON and persist one scheme-correct HttpOnly phone session."""
     response = Response(json.dumps(payload), media_type="application/json")
+    visible_scheme = request.headers.get("x-forwarded-proto", request.url.scheme).split(",", 1)[0].strip().lower()
     response.set_cookie(
         "zeno_phone_session", login["session"], httponly=True,
-        secure=request.url.scheme == "https", samesite="strict",
+        secure=visible_scheme == "https", samesite="strict",
         max_age=1800, path="/",
     )
     return response
@@ -3046,6 +3102,42 @@ def phone_network_qr(req: PhoneQrRequest, request: Request) -> dict[str, Any]:
     return result
 
 
+@app.get("/api/phone/mic/levels")
+def phone_mic_levels(request: Request) -> dict[str, Any]:
+    """How LOUD the incoming audio actually is, per source.
+
+    The quality score measures jitter and clipping, so a silent stream can
+    score 86 and look healthy -- which is exactly what happened: frames
+    arriving at 52/s, VAD firing, and every transcript coming back with zero
+    characters. None of the existing status endpoints reported signal LEVEL,
+    so there was no way to tell "the phone is sending speech" from "the phone
+    is sending a stable stream of almost nothing".
+
+    RMS is that missing number. Rough guide for 16-bit audio: under ~150 is
+    effectively silence, 300-800 is faint or distant, 1500+ is someone
+    speaking normally into the phone.
+    """
+    _loopback(request)
+    from reyes_agent.audio.manager import get_audio_manager
+
+    state = get_audio_manager().status()
+    sources = state.get("sources") or {}
+    readable = {}
+    for name, metrics in sources.items():
+        rms = float((metrics or {}).get("rms", 0) or 0)
+        readable[name] = {
+            "rms": round(rms, 1),
+            "noise_floor": round(float((metrics or {}).get("noise_floor", 0) or 0), 1),
+            "score": (metrics or {}).get("score"),
+            "reads_as": ("silence" if rms < 150 else
+                         "faint" if rms < 400 else
+                         "quiet speech" if rms < 1200 else "normal speech"),
+        }
+    return {"active_source": state.get("active_source") or state.get("physical_owner"),
+            "published": state.get("published"), "sources": readable,
+            "guide": "under 150 = silence, 400-1200 = quiet, 1200+ = normal speech"}
+
+
 @app.get("/api/phone/mic/network")
 def phone_mic_network(request: Request) -> dict[str, Any]:
     """Which network the phone is ACTUALLY on, not which one was offered.
@@ -3093,14 +3185,143 @@ def phone_login_complete(req: PhoneCredentialRequest, request: Request) -> Respo
         login = get_phone_security().finish_authentication(req.credential, req.challenge, origin, rp_id)
     except Exception as exc:
         raise HTTPException(403, f"Secure device verification failed: {exc}") from exc
-    response = Response(json.dumps({"device_id": login["device_id"], "csrf": login["csrf"]}), media_type="application/json")
-    response.set_cookie("zeno_phone_session", login["session"], httponly=True, secure=True, samesite="strict", max_age=1800, path="/")
-    return response
+    return _phone_session_response(
+        {"device_id": login["device_id"], "csrf": login["csrf"],
+         "auth_level": login.get("auth_level", "OWNER_VERIFIED")},
+        login, request)
 
 @app.get("/api/phone/status")
 def phone_status(request: Request, session=Depends(_phone_session)) -> dict[str, Any]:
+    from reyes_agent import phone_companion
+
     return {"desktop": "ready", "device_id": session["device_id"], "device": session["name"],
-            "scopes": json.loads(session["scopes"]), "runtime": _boot_state["phase"]}
+            "role": session["role"], "auth_level": session["auth_level"],
+            "scopes": json.loads(session["scopes"]), "runtime": _boot_state["phase"],
+            "audio_output": phone_companion.audio_output(session["device_id"]),
+            "route": phone_companion.route_for_peer(request.client.host if request.client else "")}
+
+
+@app.get("/api/phone/tasks")
+def phone_tasks(request: Request, session=Depends(_phone_session)) -> list[dict[str, Any]]:
+    if "missions" not in set(json.loads(session["scopes"])):
+        raise HTTPException(403, "This phone cannot read missions or tasks.")
+    from reyes_agent import phone_companion
+
+    return phone_companion.tasks()
+
+
+@app.post("/api/phone/tasks/cancel")
+def phone_cancel_task(req: PhoneTaskRequest, request: Request,
+                      session=Depends(_phone_session)) -> dict[str, Any]:
+    if "talk" not in set(json.loads(session["scopes"])):
+        raise HTTPException(403, "This phone cannot cancel tasks.")
+    from reyes_agent import phone_companion
+
+    if not phone_companion.cancel(req.task_id):
+        raise HTTPException(404, "That task is not active or cannot be cancelled.")
+    return {"ok": True, "task_id": req.task_id, "state": "CANCEL_REQUESTED"}
+
+
+@app.get("/api/phone/devices")
+def phone_companion_devices(request: Request,
+                            session=Depends(_phone_session)) -> list[dict[str, Any]]:
+    from reyes_agent.phone_security import OWNER_AUTH, get_phone_security
+
+    devices = get_phone_security().devices()
+    if session["auth_level"] != OWNER_AUTH:
+        devices = [item for item in devices if item["device_id"] == session["device_id"]]
+    safe_keys = {"device_id", "name", "state", "role", "device_type", "browser", "pinned",
+                 "owner_device", "preferred_route", "last_network", "biometric_enabled",
+                 "authentication", "last_activity"}
+    return [{key: item.get(key) for key in safe_keys} for item in devices]
+
+
+@app.get("/api/phone/audio/output")
+def phone_audio_output(request: Request, session=Depends(_phone_session)) -> dict[str, str]:
+    from reyes_agent import phone_companion
+
+    return {"output": phone_companion.audio_output(session["device_id"])}
+
+
+@app.post("/api/phone/audio/output")
+def phone_set_audio_output(req: PhoneOutputRequest, request: Request,
+                           session=Depends(_phone_session)) -> dict[str, str]:
+    from reyes_agent import phone_companion
+
+    try:
+        output = phone_companion.set_audio_output(session["device_id"], req.output)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"output": output}
+
+
+@app.post("/api/phone/route")
+def phone_set_route(req: PhoneRoutePreferenceRequest, request: Request,
+                    session=Depends(_phone_session)) -> dict[str, str]:
+    from reyes_agent.phone_security import get_phone_security
+
+    try:
+        get_phone_security().set_preferred_route(session["device_id"], req.route)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"route": req.route.strip().upper()}
+
+
+@app.post("/api/phone/session/lock")
+def phone_lock_session(request: Request, session=Depends(_phone_session)) -> dict[str, bool]:
+    from reyes_agent.phone_security import get_phone_security
+
+    get_phone_security().end_sessions(session["device_id"])
+    return {"ok": True}
+
+
+@app.get("/api/phone/health")
+def phone_health(request: Request, session=Depends(_phone_session)) -> dict[str, Any]:
+    if "status" not in set(json.loads(session["scopes"])):
+        raise HTTPException(403, "This phone cannot read ZENO health.")
+    from reyes_agent import phone_companion
+
+    return phone_companion.health()
+
+
+@app.get("/api/phone/agents")
+def phone_agents(request: Request, session=Depends(_phone_session)) -> dict[str, Any]:
+    if "agents" not in set(json.loads(session["scopes"])):
+        raise HTTPException(403, "This phone cannot read agent state.")
+    from reyes_agent import agent_space
+
+    return agent_space.snapshot(event_limit=30, phone=True)
+
+
+@app.get("/api/phone/approvals")
+def phone_approvals(request: Request, session=Depends(_phone_session)) -> list[dict[str, Any]]:
+    if "status" not in set(json.loads(session["scopes"])):
+        raise HTTPException(403, "This phone cannot read pending approvals.")
+    from reyes_agent import agent_space
+
+    return agent_space.snapshot(event_limit=10, phone=True)["approvals"]
+
+
+@app.post("/api/phone/tts")
+def phone_tts(req: TTSRequest, request: Request,
+              session=Depends(_phone_session)) -> Response:
+    if "talk" not in set(json.loads(session["scopes"])):
+        raise HTTPException(403, "This phone cannot request speech.")
+    if not req.text.strip() or len(req.text) > 1200:
+        raise HTTPException(400, "Speech text must be between 1 and 1200 characters.")
+    from reyes_agent import phone_companion, voice_manager
+
+    output = phone_companion.audio_output(session["device_id"])
+    if output in {phone_companion.OUTPUT_PC, phone_companion.OUTPUT_HEADSET}:
+        voice_manager.speak_queued(req.text, req.agent)
+        return Response(status_code=204, headers={"X-Zeno-Audio-Output": output})
+    try:
+        audio = voice_manager.synthesize(req.text, req.agent)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, f"Voice generation unavailable: {type(exc).__name__}") from exc
+    if output == phone_companion.OUTPUT_BOTH:
+        voice_manager.speak_cached_queued(audio, req.agent)
+    return Response(audio, media_type="audio/mpeg", headers={"X-Zeno-Audio-Output": output})
 
 
 def _remote_mic_command(context, message: str, identity: dict[str, Any],
@@ -3195,6 +3416,14 @@ def phone_command(req: PhoneCommandRequest, request: Request, session=Depends(_p
     if not req.command_id or not req.nonce or abs(time.time() - req.timestamp) > 60 or len(req.message) > 4000:
         raise HTTPException(400, "Invalid, expired, or oversized command.")
     from reyes_agent.phone_security import get_phone_security
+    from reyes_agent.remote_access import policy
+    rate = policy.check_rate("command", session["device_id"])
+    if not rate.allowed:
+        raise HTTPException(429, f"Too many commands; retry in {rate.retry_after:.0f}s.")
+    decision = policy.evaluate(req.message, scopes=set(json.loads(session["scopes"])))
+    if not decision.allowed:
+        return {"command_id": req.command_id, "blocked": True,
+                "category": decision.category, "response": {"reply": decision.reason}}
     if not get_phone_security().claim_command(session["device_id"], req.command_id, req.nonce):
         raise HTTPException(409, "Duplicate or replayed command.")
     from reyes_agent import event_bus
@@ -3215,6 +3444,8 @@ async def phone_events(websocket: WebSocket) -> None:
     allowed, _, _ = remote_boundary(
         websocket.url.path, websocket.headers,
         enabled=bool(getattr(config, "REMOTE_ACCESS_ENABLED", False)),
+        client_host=(websocket.client.host if websocket.client else ""),
+        local_enabled=bool(getattr(config, "PHONE_COMPANION_LOCAL_ENABLED", False)),
     )
     if not allowed:
         await websocket.close(code=4403)
@@ -3227,9 +3458,18 @@ async def phone_events(websocket: WebSocket) -> None:
     # native client) is allowed; a cross-origin upgrade must be on the
     # allow-list.
     origin = websocket.headers.get("origin", "")
-    if origin and not domains.is_allowed_origin(origin):
-        await websocket.close(code=4403)
-        return
+    if origin:
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(origin)
+        expected_scheme = "https" if websocket.url.scheme == "wss" else "http"
+        same_origin = (parsed.scheme == expected_scheme and
+                       parsed.hostname == websocket.url.hostname and
+                       (parsed.port or (443 if parsed.scheme == "https" else 80)) ==
+                       (websocket.url.port or (443 if expected_scheme == "https" else 80)))
+        if not same_origin and not domains.is_allowed_origin(origin):
+            await websocket.close(code=4403)
+            return
     # Reconnect storms are bounded per client.
     client = websocket.client.host if websocket.client else "unknown"
     if not policy.check_rate("ws_connect", client).allowed:
