@@ -89,9 +89,9 @@ history/subscribers, and freeze records.
 
 ## Honest unresolved limits / release gates
 
-- A true one-hour idle sample and the existing 8-hour/24-hour soak profiles
-  were not run in this interactive session. They remain release gates; short
-  samples cannot prove the one-hour RAM result or rule out slow leaks.
+- The one-hour idle observation has now been completed and is reported in the
+  final addendum below. The longer 8-hour/24-hour profiles remain release gates;
+  one hour cannot rule out every slow resource leak.
 - Native Windows WebView2 orb FPS, window drag/click responsiveness, and the
   absence of the OS-level “Not Responding” banner require a manual target-PC
   run. Headless Chromium measured 53 FPS only.
@@ -100,3 +100,103 @@ history/subscribers, and freeze records.
 - A cancellation request returns control immediately, while a synchronous
   Playwright/SDK call finishes only at its configured I/O timeout; Python cannot
   safely kill that third-party call mid-frame.
+
+## Final validation addendum — 2026-08-12
+
+This pass revalidated the current, much larger checkout rather than relying on
+the August 4 result. It did not rebuild Phase 21 or add a product feature.
+
+### Confirmed defects fixed
+
+1. The recent fast-chat latency path stopped injecting the bounded local
+   awareness and anticipation context. That made an ordinary conversation fast
+   but context-blind. Fast chat still sends no tool schemas, but again receives
+   those cached, provider-free directives.
+2. Windows process-health sampling called `psutil.Process.open_files()`. During
+   the complete suite, the native Windows handle walker raised an access
+   violation while another thread closed a handle. ZENO now uses the cheap
+   process handle count for leak trending and does not enumerate file handles.
+3. Freeze instrumentation omitted the PID, active operation, current thread,
+   worker/event queue depths and system CPU/RAM snapshot. Its worker lookup
+   could also create the global pool while diagnosing a stall, and its published
+   count was capped at the ten displayed records. Reports are now process
+   attributable, cumulative and observational.
+4. The opt-in frontend audit referenced `orbitTimer` outside its JavaScript
+   closure. Normal rendering continued, but audit reporting stopped with a
+   `ReferenceError`. The ring and Agent Space now expose small read-only audit
+   states through their existing public controllers.
+5. One workflow regression test inherited a fake foreground application from a
+   previous test. The production pause-after-step logic was correct; the test
+   now establishes its own initial foreground state.
+6. Windows notification polling created a fresh asyncio loop for every WinRT
+   request. Timed-out WinRT wrappers could retain native handles and development
+   mode exposed allocator corruption. Notification polling now uses one owned
+   loop thread, shields the native completion from cancellation, prevents
+   overlapping requests and releases the owning-loop wrappers during shutdown.
+   Sixty real polls held 333 handles at calls 1, 10, 30 and 60.
+7. The managed worker history retained 100 completed `TaskHandle` objects. Each
+   handle owned Windows synchronization primitives, producing a bounded but
+   unnecessary plateau of roughly 300 handles. History now stores only ten
+   lightweight redacted failure summaries. A 500-task run stayed at 288 handles
+   at tasks 100, 250 and 500, then fell to 268 after shutdown.
+8. A conversation-continuity test replaced the shared `time.time` function and
+   restored the already-replaced reference, freezing wall-clock time for later
+   tests. The test now uses pytest-scoped patching, and job deadlines use
+   `time.monotonic()` so wall-clock adjustment cannot hang timeout handling.
+
+### Fresh measured results
+
+| Scenario | 2026-08-12 result |
+|---|---|
+| Cold backend readiness | 3,381.1 ms to `/api/performance`, 69.6 MiB RSS, 15 threads and zero startup freezes. The native shell still renders before backend readiness. |
+| Repeated command path | 30/30 non-empty local fast-path responses; mean 54.68 ms, median 25.51 ms, p95 291.12 ms, max 301.76 ms. This is command routing, not a new STT corpus. The prior 30/30 real Deepgram result remains the real voice-request evidence. |
+| Browser automation | 21/21 real browser actions including close/reopen recovery; 175 concurrent status probes, zero errors, worst 423.5 ms. |
+| Multi-agent / missions | 10/10 persistent specialists completed; all agent threads were gone after controlled shutdown. A 60-second load run also completed 100/100 missions, 1,000 events and 600 scheduler ticks with four bounded workers and +1.76 MiB RSS. |
+| Agent Monitor / Situation Room | 20 open/close cycles each. Exactly 20 fetches per panel, both overlays closed, and zero panel requests during the following 4.5 seconds. |
+| Renderer audit | Six headless Chromium samples posted successfully. Average frame time 16.67–17.06 ms (about 59–60 FPS), worst 83.3 ms, two running animations, four timers and zero frontend messages/s at idle. This is not a native WebView2 claim. |
+| Responsive HTTP under machine pressure | 525 status probes in 32 seconds, zero errors, mean 10.3 ms, worst 83.0 ms and zero probes over 250 ms. Machine CPU reached 100% and RAM reached about 90%, so recorded event-loop delays are retained as machine-pressure evidence rather than hidden. |
+| One-hour resource observation | After a five-minute warm-up, 121 samples over 3,600.2 seconds measured ZENO RSS 106.0 -> 94.6 MiB (trend -10.43 MiB/hour), CPU mean 2.35% / max 8.0%, threads 18 -> 18 (max 24), and zero worker/event queue depth. Handles were 474 -> 603 with a transient max of 751; a separate five-minute no-sampling drain fell 751 -> 724, so the residual +129 is reported as a monitoring risk, not declared leak-free. The host was heavily constrained: system CPU mean 63.91% / max 98.6%, RAM 80.6% -> 89.0% / max 96.0%, and swap fell 422.5 MiB. `/api/performance` mean was 48.29 ms, max 239.57 ms. |
+
+The current cold readiness is slightly better than the previous 3,521.5 ms
+measurement. Relative to the pre-Phase-21 baseline, even full server readiness
+is also well below the former 6,018–9,224 ms import time. Those are different
+measurement boundaries, so the comparison is directional rather than a claimed
+like-for-like speedup.
+
+### Regression and cleanup verification
+
+- Complete maintained suite: **919 passed**, 5 dependency/deprecation warnings,
+  0 failures in 250.46 seconds.
+- Final focused runtime/Phase 22/conversation/job/website/workflow set:
+  **75 passed**, 4 FastAPI deprecation warnings, 0 failures in 51.97 seconds.
+- A live 60-poll WinRT notification test and a 500-task handle-retention test
+  passed with the stable handle counts recorded above.
+- Real shutdown durability handshake saved the session and flushed events before
+  each owned test server was terminated; every disposable port was released.
+
+### Remaining limits
+
+- Native WebView2 dragging/clicking and the Windows “Not Responding” banner
+  still require observation on the interactive desktop. A temporary native
+  `ZENO Mini Orb` window owned one HWND and Windows reported its host process as
+  responding, but the automation screenshot helper failed, so visual acceptance
+  is not claimed.
+- The renderer's 83.3 ms worst frame exceeds both the 16.7 ms 60 FPS and 33.3 ms
+  30 FPS budgets. It was isolated rather than sustained; native WebView2 must
+  still be watched under the owner's normal workload.
+- During system-wide 100% CPU pressure, the event-loop watchdog recorded real
+  delays despite the HTTP surface remaining responsive. ZENO cannot guarantee a
+  250 ms scheduling budget when the host machine is saturated.
+- In the final warmed one-hour run the watchdog recorded 119 delays: mean
+  433.6 ms, p95 982.7 ms and max 1,759.5 ms; 90 exceeded 250 ms. Those samples
+  coincided with mean 90.5% system CPU and 92.5% RAM, with 84/119 samples at or
+  above 90% CPU and 100/119 at or above 90% RAM. This proves host scheduling
+  pressure affected the backend loop; it does not prove native WebView2 stayed
+  responsive, so the Windows UI acceptance gate remains open.
+- The warmed hour ended 129 handles above its measured start, although it fell
+  148 handles from the transient peak and a separate drain sample also fell.
+  The two confirmed handle-retention bugs are fixed, but an 8-hour/24-hour run
+  without periodic HTTP diagnostics is still required before declaring the
+  process handle count leak-free.
+- The controlled provider and ElevenLabs timeout seams remain deterministic
+  regression tests; this pass did not deliberately black-hole a live provider.

@@ -163,6 +163,15 @@ def _build() -> dict[str, Any]:
         state = "ONLINE" if backend == "READY" else "STANDBY"
         return state, f"Single stream; local model {backend}.", data
 
+    def remote_microphone():
+        from reyes_agent.remote_mic import get_remote_mic_runtime
+        data = get_remote_mic_runtime().status()
+        state = data["state"] if data["state"] in {"ONLINE", "STANDBY"} else "DEGRADED"
+        return state, (
+            f"{data['transport']}; {len(data['peers'])}/{data['peer_limit']} peers; "
+            f"source {data['selector']['selected']}."
+        ), data
+
     def browser():
         from reyes_agent import browser_controller
         data = browser_controller.health()
@@ -235,7 +244,8 @@ def _build() -> dict[str, Any]:
 
     operations = (
         ("ZENO CORE", core), ("ENVIRONMENT", environment), ("IDENTITY", identity),
-        ("MODEL PROVIDERS", providers), ("VOICE", voice), ("MEMORY", memory), ("WAKE WORD", wake),
+        ("MODEL PROVIDERS", providers), ("VOICE", voice), ("REMOTE MICROPHONE", remote_microphone),
+        ("MEMORY", memory), ("WAKE WORD", wake),
         ("VISION/COMPUTER", integrations), ("BROWSER", browser), ("AGENTS", agents),
         ("CODING SPECIALIST", coding), ("MCP", mcp), ("LOCAL WINDOWS DEVICE", devices),
         ("ADVANCED SERVICES", advanced_services), ("PHASE 5 SERVICES", phase5_services),

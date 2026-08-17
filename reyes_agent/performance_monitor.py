@@ -31,6 +31,7 @@ _latencies: dict[str, deque[tuple[float, float]]] = defaultdict(lambda: deque(ma
 _memory_samples: deque[tuple[float, int]] = deque(maxlen=_MAX_SAMPLES)
 _freezes: deque[dict[str, Any]] = deque(maxlen=100)
 _frontend_audits: deque[dict[str, Any]] = deque(maxlen=120)
+_freeze_total = 0
 _last_freeze_at: dict[str, float] = {}
 _last_host_incident_at = 0.0
 
@@ -141,6 +142,7 @@ def snapshot() -> dict[str, Any]:
     with _lock:
         _memory_samples.append((now, rss))
         recent_freezes = list(_freezes)[-10:]
+        freeze_total = _freeze_total
         recent_frontend_audits = list(_frontend_audits)[-12:]
 
     workers: dict[str, Any] = {}
@@ -192,6 +194,7 @@ def snapshot() -> dict[str, Any]:
             pass
 
     return {
+        "pid": os.getpid(),
         "cpu_percent": round(_process.cpu_percent(interval=None), 1),
         "system_cpu_percent": round(psutil.cpu_percent(interval=None), 1),
         "rss_mb": round(rss / 1024 / 1024, 1),
@@ -207,7 +210,7 @@ def snapshot() -> dict[str, Any]:
         "browser": browser,
         "latencies": _latency_snapshot(),
         "memory_trend": _memory_trend(),
-        "freeze_count": len(recent_freezes),
+        "freeze_count": freeze_total,
         "recent_freezes": recent_freezes,
         "frontend_audits": recent_frontend_audits,
     }
@@ -228,6 +231,7 @@ def record_freeze(
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Record an observed >200 ms stall with the information we can prove."""
+    global _freeze_total
     if duration_s < FREEZE_THRESHOLD_S:
         return None
     now = time.time()
@@ -251,15 +255,49 @@ def record_freeze(
             if frame is not None:
                 stacks[thread.name] = traceback.format_stack(frame, limit=20)
         main_stack = stacks.get("MainThread", [])
+    worker_state: dict[str, Any] = {}
+    event_state: dict[str, Any] = {}
+    try:
+        # Diagnostics must be observational: get_worker_pool() lazily creates
+        # worker threads, which would make a freeze report alter the runtime.
+        worker_module = sys.modules.get("reyes_agent.worker_pool")
+        pool = getattr(worker_module, "_global_pool", None) if worker_module else None
+        if pool is not None:
+            metrics = pool.metrics()
+            worker_state = {
+                "queue_depth": metrics.get("queue_depth", 0),
+                "active": metrics.get("active", 0),
+                "active_tasks": [str(item.get("name", ""))[:120]
+                                 for item in metrics.get("active_tasks", [])[:8]],
+            }
+    except Exception:  # noqa: BLE001 -- diagnostics must not worsen a stall
+        pass
+    try:
+        if "reyes_agent.event_bus" in sys.modules:
+            from reyes_agent import event_bus
+
+            events = event_bus.runtime_stats()
+            event_state = {"queue_depth": events.get("persistence_queue_depth", 0)}
+    except Exception:  # noqa: BLE001
+        pass
+    vm = psutil.virtual_memory()
     record = {
+        "pid": os.getpid(),
         "timestamp": now,
         "timestamp_human": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
         "duration_ms": round(duration_s * 1000, 1),
         "subsystem": subsystem,
         "source": source,
         "cpu_percent": round(_process.cpu_percent(interval=None), 1),
+        "system_cpu_percent": round(psutil.cpu_percent(interval=None), 1),
         "rss_mb": round(_process.memory_info().rss / 1024 / 1024, 1),
+        "system_ram_percent": round(vm.percent, 1),
         "threads": _process.num_threads(),
+        "current_thread": threading.current_thread().name,
+        "active_operation": worker_state.get("active_tasks", [""])[0]
+        if worker_state.get("active_tasks") else "idle/unknown",
+        "worker_queue_depth": worker_state.get("queue_depth"),
+        "event_queue_depth": event_state.get("queue_depth"),
         "function": main_stack[-1].strip() if main_stack else "unavailable",
         "call_stack": main_stack,
         "thread_stacks": stacks,
@@ -267,6 +305,7 @@ def record_freeze(
     }
     with _lock:
         _freezes.append(record)
+        _freeze_total += 1
     _write_freeze(record)
     return record
 

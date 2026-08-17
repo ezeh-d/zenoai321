@@ -152,6 +152,7 @@ def test_pause_is_applied_after_a_completed_step_without_replaying_it() -> None:
             "steps": [{"op": "focus", "app": "chrome"}, {"op": "focus", "app": "word"}],
         }), encoding="utf-8")
         engine = make_engine(root)
+        set_foreground("chrome")
         engine._pause_requested.set()
         engine._run_job(FakeContext(), "safe-pause", 0)
         assert engine.status()["mode"] == WORKFLOW_WAITING_FOR_INPUT

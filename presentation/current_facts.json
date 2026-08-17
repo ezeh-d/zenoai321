@@ -2,15 +2,15 @@
   "project_name": "ZENO",
   "owner_name": "Divine",
   "institution": "Redeemer's University",
-  "generated_at": 1786543373.733531,
+  "generated_at": 1786964151.3165686,
   "history": {
-    "commits": 73,
+    "commits": 77,
     "first": "2026-08-05",
     "last": "2026-08-12",
     "active_days": 6
   },
   "scale": {
-    "modules": 438,
+    "modules": 441,
     "tests_passing": 0
   },
   "features": [
@@ -133,6 +133,10 @@
     }
   ],
   "recent_work": [
+    "feat(ultron): serious mode -- one ZENO, operating differently",
+    "fix(phone): the microphone may now be answered, and acted on",
+    "fix(readiness): ask the server, and stop calling silence a fault",
+    "feat(presentation): SIWES evidence hub with receipts attached",
     "feat(voice): say what you're doing, while you're doing it",
     "fix(voice): the wake word opens a conversation, it is not punctuation",
     "feat(voice): stay in the conversation -- follow-ups without the name, and barge-in",
@@ -140,11 +144,7 @@
     "fix(wake): accept the wake word as it is HEARD, not as it is spelled",
     "feat(phone-mic): report signal LEVEL, not just stream health",
     "fix(phone-mic): accept IPv6 peers; prove the receiver carries real audio",
-    "feat(design): enforce the named execution limits instead of documenting them",
-    "test(subspace): close cancellation depth; verify the overlay against reality",
-    "feat(messaging): real Slack/WhatsApp/Telegram/Discord messaging engine",
-    "fix(agents): ZENO can answer who his own agents are",
-    "feat(phone-mic): one permanent QR that works on Wi-Fi and hotspot"
+    "feat(design): enforce the named execution limits instead of documenting them"
   ],
   "company_tasks": [],
   "challenges": [

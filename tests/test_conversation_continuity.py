@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from reyes_agent.voice import continuity
@@ -49,7 +47,7 @@ class TestFollowUpWindow:
         assert not decision.accept
         assert decision.needed_wake_word
 
-    def test_a_conversation_survives_an_ordinary_pause(self):
+    def test_a_conversation_survives_an_ordinary_pause(self, monkeypatch):
         """25 seconds was still "say the name every time" with extra steps.
 
         A pause to think, or to read something off the screen, must not end
@@ -61,14 +59,14 @@ class TestFollowUpWindow:
         # Actually advance the clock a full minute -- reading the constant
         # proves nothing about behaviour.
         real_now = continuity.time.time()
-        continuity.time.time = lambda: real_now + 60
-        try:
-            assert continuity.is_open(), "a one-minute pause must not end it"
-            follow_up = continuity.consider("so what about tomorrow",
-                                            wake_matched=False)
-            assert follow_up.accept and not follow_up.needed_wake_word
-        finally:
-            continuity.time.time = time.time
+        # ``continuity.time`` is Python's shared time module. Directly
+        # assigning and then reading ``time.time`` to restore it retained the
+        # lambda process-wide, freezing every later timeout test.
+        monkeypatch.setattr(continuity.time, "time", lambda: real_now + 60)
+        assert continuity.is_open(), "a one-minute pause must not end it"
+        follow_up = continuity.consider("so what about tomorrow",
+                                        wake_matched=False)
+        assert follow_up.accept and not follow_up.needed_wake_word
 
     @pytest.mark.parametrize("closing", [
         "zeno standby", "that's all", "thanks zeno", "we're done",

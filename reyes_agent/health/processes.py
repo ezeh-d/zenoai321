@@ -48,7 +48,14 @@ def self_metrics() -> dict[str, Any]:
                 "memory_mb": round(memory, 1),
                 "cpu_percent": round(process.cpu_percent(interval=0.0), 1),
                 "threads": process.num_threads(),
-                "open_files": _safe(lambda: len(process.open_files())),
+                # ``psutil.Process.open_files()`` can fault inside the native
+                # Windows handle walker when another thread closes a handle
+                # mid-enumeration (observed during the Phase 22 full-suite
+                # health probe).  ZENO needs a leak trend, not every file
+                # name: Windows' process handle counter is safe, cheap and
+                # covers files, sockets and other kernel resources.
+                "open_files": None,
+                "handles": _safe(process.num_handles) if os.name == "nt" else None,
                 "connections": _safe(lambda: len(process.net_connections(kind="inet"))),
                 "children": len(process.children(recursive=True)),
                 "uptime_s": round(_safe(lambda: __import__("time").time()

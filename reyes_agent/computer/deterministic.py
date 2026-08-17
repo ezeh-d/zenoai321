@@ -30,6 +30,9 @@ _PATTERNS: list[tuple[re.Pattern, str, str]] = [
      "media_control", "action"),
 ]
 
+_NON_APP_RUN_TARGET = re.compile(
+    r"\b(?:test|tests|script|code|project|repository|repo|command)\b", re.I)
+
 
 @dataclass
 class FastResult:
@@ -54,6 +57,13 @@ def match(request: str) -> tuple[str, dict] | None:
         if not argument:
             return tool, {}
         value = (found.groupdict().get("arg") or "").strip()
+        # "run Notepad" is an app launch; "run my tests" or "run this
+        # script" is coding/system work. Treating the latter as an app name
+        # bypasses the coding specialist and produces a misleading launch
+        # failure instead of executing the requested task.
+        if (tool == "open_app" and re.match(r"^(?:please\s+)?run\b", text, re.I)
+                and _NON_APP_RUN_TARGET.search(value)):
+            return None
         if tool == "set_volume":
             try:
                 return tool, {argument: int(value)}

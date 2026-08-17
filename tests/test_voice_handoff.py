@@ -16,12 +16,30 @@ def test_miniorb_reacquires_after_dashboard_hides_and_keeps_persistent_profile()
     desktop = (ROOT / "reyes_agent" / "desktop_app.py").read_text(encoding="utf-8")
     dashboard = (ROOT / "reyes_agent" / "static" / "index.html").read_text(encoding="utf-8")
     assert "desktop.dashboard_hidden" in mini
-    assert "setTimeout(()=>{if(!wakeActive)void startWakeListener();},700)" in mini
+    assert "applyDashboardAudioOwner(state?.dashboard_active===true)" in mini
+    assert "applyDashboardAudioOwner(false)" in mini
     assert "wakeRecoveryAttempts<2" in mini
     assert "capabilities.error==='NotReadableError'" in mini
     assert "desktop.dashboard_opened" in desktop
+    assert "_sync_dashboard_presence" in desktop
+    assert "IsIconic(hwnd)" in desktop
     assert "private_mode=False, storage_path=str(_WEBVIEW_STORAGE)" in desktop
     assert "type === 'desktop.dashboard_hidden' && ambientEnabled" in dashboard
+    assert "if (document.hidden)" in dashboard
+    assert "if (ambientEnabled || micStartPromise) stopAmbientListening();" in dashboard
+    assert "reconnects < 2" not in mini
+    assert "Math.min(30000" in mini
+
+
+def test_native_heartbeat_carries_dashboard_owner_state_after_a_dropped_event() -> None:
+    """The existing heartbeat is the lossless fallback for a saturated Event Bus."""
+    from reyes_agent.desktop_app import _DesktopApi
+
+    api = _DesktopApi()
+    api._dashboard_active = True
+    assert api.host_heartbeat(0.0)["dashboard_active"] is True
+    api._dashboard_active = False
+    assert api.host_heartbeat(0.0)["dashboard_active"] is False
 
 
 def test_miniorb_executes_a_wake_word_command_without_showing_the_dashboard() -> None:

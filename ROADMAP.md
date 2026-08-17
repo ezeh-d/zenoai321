@@ -1297,6 +1297,46 @@ browser-only validation.
 
 ---
 
+## Phase 22 performance validation — COMPLETE WITH NATIVE ACCEPTANCE LIMIT (2026-08-12)
+
+The current expanded checkout has completed its final Phase 22 software pass.
+The maintained suite passes 919/919. Fresh live runs completed 30 repeated
+command-path requests, 21 browser actions with restart recovery, ten specialist
+missions, 100 load missions, 1,000 Event Bus publications, and 20 open/close
+cycles each for Agent Monitor and Situation Room. Closed panels issued no
+further panel requests. Worker and agent shutdown returned their thread counts
+to zero, and owned servers saved session state, flushed events and released
+their ports.
+
+Confirmed cleanup in this pass removed unsafe Windows file-handle enumeration,
+made freeze records PID-specific and cumulative without creating workers,
+restored bounded awareness context to the fast conversation path, repaired the
+opt-in renderer audit, reused one owned WinRT notification loop, stopped worker
+history from retaining completed task synchronization handles, and made job
+deadlines monotonic. Six renderer samples averaged 16.67–17.06 ms per frame,
+with an 83.3 ms worst frame; this is headless Chromium evidence, not a native
+WebView2 claim. Cold backend readiness measured 3,381.1 ms while the existing
+native shell remained independent of backend readiness.
+
+The final one-hour observation used a five-minute warm-up: RSS fell 106.0 ->
+94.6 MiB, ZENO CPU averaged 2.35%, threads stayed 18 -> 18 and both queues
+remained empty. Handles ended 129 above the measured start after falling 148
+from their transient peak, so the longer no-diagnostics handle soak remains an
+honest release gate. The constrained host averaged 63.91% system CPU and reached
+96% RAM. It produced 119 backend heartbeat delays (90 over 250 ms), whose freeze
+samples averaged 90.5% system CPU and 92.5% RAM. Native responsiveness is not
+inferred from the otherwise healthy process-resource result.
+
+The detailed test matrix, before/after measurements and honest remaining limits
+are in `PHASE22_VALIDATION_REPORT.md`. Native Windows drag/click acceptance and
+the absence of an OS “Not Responding” banner still require owner-visible desktop
+observation. The measured one-hour result and its pressure/handle limits are
+recorded there; the unrelated
+“Phase 22 — Next Intelligence Layer” feature section above keeps its own honest
+PARTIAL status and was not relabelled by this validation pass.
+
+---
+
 ## On the remaining PARTIAL entries
 
 The rest are **deliberate limits, not unfinished work**, and finishing them

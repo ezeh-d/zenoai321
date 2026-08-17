@@ -32,11 +32,24 @@ def _tone(hz: float, seconds: float = 4.5, rate: int = 16_000) -> bytes:
 def test_speaker_profile_keeps_no_raw_audio_and_scopes_private_access() -> None:
     from reyes_agent import speaker_identity
 
+    class TestEmbeddingBackend:
+        name = "deterministic test embedding (not a production backend)"
+
+        def status(self):
+            return {"state": "READY", "backend": self.name}
+
+        def embed(self, sample):
+            spectrum = np.abs(np.fft.rfft(sample.samples))
+            hz = float(np.argmax(spectrum) * sample.sample_rate / len(sample.samples))
+            vector = np.array([np.cos(hz / 80.0), np.sin(hz / 80.0)], dtype=np.float32)
+            return vector / np.linalg.norm(vector), 0.1
+
     original = speaker_identity._PROFILE_PATH
     with tempfile.TemporaryDirectory() as temp_dir:
         speaker_identity._PROFILE_PATH = Path(temp_dir) / "divine-profile.dat"
+        speaker_identity._set_backend_for_tests(TestEmbeddingBackend())
         try:
-            status = speaker_identity.enroll([_tone(180), _tone(182), _tone(179)])
+            status = speaker_identity.enroll([_tone(180), _tone(182), _tone(179), _tone(181), _tone(183)])
             assert status["enrolled"] is True
             assert status["stored_audio"] is False
             raw = speaker_identity._PROFILE_PATH.read_bytes()
@@ -49,6 +62,7 @@ def test_speaker_profile_keeps_no_raw_audio_and_scopes_private_access() -> None:
                 assert speaker_identity.requires_strong_confirmation("delete_file")
             assert speaker_identity.delete_profile()["deleted"] is True
         finally:
+            speaker_identity._set_backend_for_tests(None)
             speaker_identity._PROFILE_PATH = original
 
 

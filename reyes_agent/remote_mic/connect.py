@@ -193,6 +193,49 @@ def standing_by_address(*, with_qr: bool = True) -> dict[str, Any]:
                      "literal, so nothing depends on name resolution.")}
 
 
+def guest_by_address(*, with_qr: bool = True) -> dict[str, Any]:
+    """The LISTEN-ONLY code, per network.
+
+    For a phone that is not the owner's -- a visitor's, or one left on the
+    table. It pairs a microphone and nothing else: the grant is a property of
+    the code, so there is no request the page could make that would widen it.
+    """
+    from reyes_agent.phone_security import get_phone_security
+
+    key = get_phone_security().guest_mic_key()
+    offers = []
+    for route in routes.selector().routes():
+        if route.health != routes.READY:
+            continue
+        url = f"{route.origin}/mic?k={key}"
+        entry = {"mode": route.mode, "label": route.label, "ipv4": route.ipv4,
+                 "origin": route.origin, "url": url, "grant": "AUDIO_ONLY",
+                 "steps": _steps(route)}
+        if with_qr:
+            entry["qr_png"] = pairing._qr(url)
+        offers.append(entry)
+    if not offers:
+        return {"ok": False, "reason": "No network is serving the phone mic."}
+    return {"ok": True, "offers": offers, "grant": "AUDIO_ONLY",
+            "note": ("This code pairs a microphone only -- it cannot open "
+                     "apps, send messages or ask questions.")}
+
+
+def save_guest(directory: str | Path = "") -> dict[str, Any]:
+    """Write the listen-only QR per network."""
+    result = guest_by_address()
+    if not result.get("ok"):
+        return result
+    folder = Path(directory) if directory else (Path.home() / "Desktop")
+    folder.mkdir(parents=True, exist_ok=True)
+    for entry in result["offers"]:
+        name = "wifi" if entry["mode"] == routes.LAN_WIFI else "hotspot"
+        target = folder / f"zeno_mic_guest_{name}.png"
+        target.write_bytes(base64.b64decode(entry.pop("qr_png").split(",")[-1]))
+        entry["path"] = str(target)
+    return result
+
+
 def save_by_address(directory: str | Path = "") -> dict[str, Any]:
     """Write one QR per available network, keyed to its literal address."""
     result = standing_by_address()

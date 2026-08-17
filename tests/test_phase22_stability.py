@@ -86,6 +86,19 @@ def test_bounded_workers_do_not_grow_for_many_tasks() -> None:
     assert not any(t.name.startswith("phase22-bounded-") for t in threading.enumerate())
 
 
+def test_successful_worker_history_does_not_retain_task_synchronization_objects() -> None:
+    pool = ManagedWorkerPool(max_workers=2, max_queue=64, thread_name_prefix="phase22-history")
+    try:
+        handles = [pool.submit(lambda: "ok") for _ in range(50)]
+        assert all(handle.result(2) == "ok" for handle in handles)
+        del handles
+        assert pool.metrics()["recent_failures"] == []
+        assert not hasattr(pool, "_recent")
+        assert len(pool._recent_failures) == 0
+    finally:
+        pool.shutdown()
+
+
 def test_event_publisher_stays_fast_with_a_slow_subscriber() -> None:
     subscriber = event_bus.subscribe()
     try:
@@ -181,6 +194,16 @@ def test_owned_desktop_shutdown_uses_loopback_snapshot_handshake() -> None:
     assert "/api/internal/prepare-shutdown" in desktop
     assert "Loopback only." in web
     assert "get_kernel().shutdown(event_flush_timeout=2.0)" in web
+    kernel = (ROOT / "reyes_agent" / "kernel.py").read_text(encoding="utf-8")
+    assert "notification_listener.shutdown_background()" in kernel
+
+
+def test_closing_mini_releases_lazy_dashboard_before_webview_exit() -> None:
+    desktop = (ROOT / "reyes_agent" / "desktop_app.py").read_text(encoding="utf-8")
+    shutdown = desktop.split("    def shutdown(self) -> None:", 1)[1].split(
+        "\n\n\ndef main()", 1)[0]
+    assert "dashboard.destroy()" in shutdown
+    assert "self._dashboard_window = None" in shutdown
 
 
 def test_desktop_log_rotation_is_bounded() -> None:
@@ -192,6 +215,38 @@ def test_desktop_log_rotation_is_bounded() -> None:
         _rotate_log_if_needed(log)
         assert not log.exists()
         assert log.with_suffix(".log.1").exists()
+
+
+def test_windows_health_avoids_unsafe_open_file_handle_walk() -> None:
+    source = (ROOT / "reyes_agent" / "health" / "processes.py").read_text(encoding="utf-8")
+    assert "process.open_files()" not in source
+    assert "process.num_handles" in source
+
+
+def test_idle_validation_is_bounded_and_reports_resource_cleanup() -> None:
+    source = (ROOT / "scripts" / "validate_phase22_idle.py").read_text(encoding="utf-8")
+    for metric in ("rss_mb", "cpu_percent", "threads", "handles", "worker_queue_depth",
+                   "event_queue_depth", "freeze_count"):
+        assert metric in source
+    assert "process_iter([\"pid\", \"cmdline\"])" in source
+    assert 'parser.add_argument("--warmup"' in source
+    assert '"cold_process": cold' in source
+
+
+def test_frontend_audit_reads_scoped_animation_metrics_through_public_apis() -> None:
+    source = (ROOT / "reyes_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    audit = source.split("if (performanceAuditEnabled) {", 1)[1]
+    assert "orbitTimer !== null" not in audit
+    assert "window.agentRing?.auditMetrics" in audit
+    assert "agentSpace.state" in audit
+
+
+def test_build_job_deadlines_are_monotonic_and_test_clock_is_isolated() -> None:
+    jobs = (ROOT / "reyes_agent" / "executors" / "jobs.py").read_text(encoding="utf-8")
+    continuity_test = (ROOT / "tests" / "test_conversation_continuity.py").read_text(encoding="utf-8")
+    assert "time.monotonic() - job._started_monotonic" in jobs
+    assert "deadline = time.monotonic()" in jobs
+    assert "continuity.time.time =" not in continuity_test
 
 
 def _run_all() -> int:

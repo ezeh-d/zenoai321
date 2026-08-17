@@ -243,7 +243,10 @@ def _run_locked(goal: str, plan: list[dict], *, approved: bool, override_idle: b
                 max_steps: int, deadline_s: float,
                 cancel_check: Callable[[], None] | None) -> Outcome:
     outcome = Outcome(ok=False)
-    started = time.time()
+    # Deadlines must not jump when Windows synchronises or corrects its wall
+    # clock. Step timestamps remain wall time for diagnostics; elapsed-time
+    # enforcement uses the monotonic clock.
+    started = time.monotonic()
     no_change = 0
 
     for index, raw in enumerate(plan[:max_steps]):
@@ -253,7 +256,7 @@ def _run_locked(goal: str, plan: list[dict], *, approved: bool, override_idle: b
             except Exception:  # noqa: BLE001 -- cancellation is an ending, not an error
                 outcome.reason = "cancelled"
                 return outcome
-        if time.time() - started > deadline_s:
+        if time.monotonic() - started > deadline_s:
             outcome.reason = f"stopped at the {deadline_s:.0f}s deadline after {index} step(s)"
             return outcome
 

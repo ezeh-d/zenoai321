@@ -53,6 +53,7 @@ let pcmProcessor = null;
 let pcmMute = null;
 let pcmChunks = [];
 let pcmSampleRate = 0;
+let pcmCapturing = false;
 
 let noiseFloor = 0.01;
 let speaking = false;
@@ -67,7 +68,7 @@ let requestedDeviceId = "";
 let usedFallbackDevice = false;
 let stopping = false;
 
-const listeners = { start: [], end: [], level: [], stopped: [] };
+const listeners = { start: [], end: [], level: [], stopped: [], frame: [] };
 
 function emit(kind, detail = undefined) {
   for (const fn of listeners[kind]) {
@@ -152,6 +153,7 @@ export async function start(options = {}) {
   // Deliberately NOT connected to ctx.destination -- routing the mic to the
   // speakers would create the very feedback echo cancellation exists to fix.
   buffer = new Uint8Array(analyser.fftSize);
+  setupPcmBus();
 
   recalibrate();
   resume();
@@ -278,38 +280,58 @@ export function onCaptureStopped(fn) {
   return () => { listeners.stopped = listeners.stopped.filter((item) => item !== fn); };
 }
 
+/** Subscribe to the one processed capture stream. The frame is ephemeral. */
+export function onPcmFrame(fn) {
+  listeners.frame.push(fn);
+  return () => { listeners.frame = listeners.frame.filter((item) => item !== fn); };
+}
+
 /** The processed, single-owner stream used for recording/transcription. */
 export function mediaStream() { return stream; }
 
 /**
- * Begin one bounded PCM copy of an already VAD-approved utterance.
- *
- * This attaches no second microphone stream and no timer. The processor is
- * connected through a zero-gain node solely because Web Audio requires an
- * output connection for ScriptProcessor callbacks; microphone audio is never
- * routed to the speakers. It is disconnected immediately when the utterance
- * ends, then the command audio is discarded after local speaker comparison.
+ * The processor is created once for the lifetime of the one microphone
+ * stream. Wake word, utterance capture and diagnostics consume the same
+ * frames; no consumer opens another getUserMedia stream or animation loop.
  */
-export function beginPcmCapture() {
-  if (!ctx || !source || pcmProcessor) return false;
+function setupPcmBus() {
+  if (!ctx || !source || pcmProcessor) return Boolean(pcmProcessor);
   try {
-    pcmChunks = [];
-    pcmSampleRate = ctx.sampleRate || 16000;
     pcmProcessor = ctx.createScriptProcessor(4096, 1, 1);
     pcmMute = ctx.createGain();
     pcmMute.gain.value = 0;
     pcmProcessor.onaudioprocess = (event) => {
-      // Copy exactly one mono channel while this one VAD utterance is active.
-      pcmChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+      const frame = event.inputBuffer.getChannelData(0);
+      if (pcmCapturing) pcmChunks.push(new Float32Array(frame));
+      for (const fn of listeners.frame) {
+        try { fn(frame, ctx ? (ctx.sampleRate || 16000) : 16000); } catch (_e) {}
+      }
     };
     source.connect(pcmProcessor);
     pcmProcessor.connect(pcmMute);
     pcmMute.connect(ctx.destination);
     return true;
   } catch (_error) {
-    endPcmCapture();
+    teardownPcmBus();
     return false;
   }
+}
+
+function teardownPcmBus() {
+  if (source && pcmProcessor) { try { source.disconnect(pcmProcessor); } catch (_e) {} }
+  if (pcmProcessor) { try { pcmProcessor.disconnect(); } catch (_e) {} }
+  if (pcmMute) { try { pcmMute.disconnect(); } catch (_e) {} }
+  if (pcmProcessor) pcmProcessor.onaudioprocess = null;
+  pcmProcessor = null;
+  pcmMute = null;
+}
+
+export function beginPcmCapture() {
+  if (!setupPcmBus() || pcmCapturing) return false;
+  pcmChunks = [];
+  pcmSampleRate = ctx.sampleRate || 16000;
+  pcmCapturing = true;
+  return true;
 }
 
 function encodePcmWav(chunks, sampleRate) {
@@ -335,11 +357,7 @@ function encodePcmWav(chunks, sampleRate) {
 export function endPcmCapture() {
   const chunks = pcmChunks;
   const sampleRate = pcmSampleRate;
-  if (source && pcmProcessor) { try { source.disconnect(pcmProcessor); } catch (_e) {} }
-  if (pcmProcessor) { try { pcmProcessor.disconnect(); } catch (_e) {} }
-  if (pcmMute) { try { pcmMute.disconnect(); } catch (_e) {} }
-  pcmProcessor = null;
-  pcmMute = null;
+  pcmCapturing = false;
   pcmChunks = [];
   pcmSampleRate = 0;
   return encodePcmWav(chunks, sampleRate);
@@ -355,6 +373,7 @@ export function stop() {
   stopping = true;
   pause();
   endPcmCapture();
+  teardownPcmBus();
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
   if (ctx) { ctx.close().catch(() => {}); ctx = null; }
   source = null;
@@ -382,6 +401,11 @@ export function capabilities() {
     device_id: s.deviceId || null,
     requested_device_id: requestedDeviceId || null,
     used_fallback_device: usedFallbackDevice,
+    frame_bus: {
+      active: pcmProcessor !== null,
+      subscribers: listeners.frame.length,
+      owns_second_stream: false,
+    },
     vad: {
       engine: "energy-adaptive",
       implemented: true,

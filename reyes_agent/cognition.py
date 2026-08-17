@@ -151,6 +151,7 @@ _FAILURE_MARKERS = (
     "freezes", "stuck", "broken", "not working", "doesn't work", "fails",
     "keeps failing", "keeps breaking", "unstable", "intermittent",
     "memory leak", "deadlock", "race condition",
+    "not responding", "unresponsive", "won't start", "wont start",
 )
 
 _ADVICE_MARKERS = (
@@ -175,7 +176,8 @@ _RESEARCH_MARKERS = (
 _MEMORY_MARKERS = (
     "remember", "we discussed", "we talked", "earlier", "last time",
     "you said", "we decided", "what was", "remind me", "previously",
-    "before", "our conversation",
+    "before", "our conversation", "yesterday", "continue what we did",
+    "continue where we left", "pick up where we left", "resume our work",
 )
 
 _COUNCIL_MARKERS = (
@@ -186,7 +188,8 @@ _COUNCIL_MARKERS = (
 _SPECIALIST_HINTS = {
     "coding": ("code", "function", "bug", "stack trace", "traceback", "compile",
                "typescript", "python", "javascript", "api", "database", "sql",
-               "regex", "async", "thread", "exception"),
+               "regex", "async", "thread", "exception", "test", "tests",
+               "repository", "repo"),
     "research": ("research", "paper", "study", "evidence", "sources"),
     "reasoning": ("strategy", "decision", "trade-off", "tradeoff", "risk",
                   "architecture", "plan", "roadmap", "business", "invest"),
@@ -334,6 +337,10 @@ def _route_uncached(message: str, *, has_active_task: bool = False,
         reasons.append(f"asking for judgement: {advice_hits[0]}")
 
     deep_hits = _has(text, _DEEP_MARKERS)
+    coding_hits = _has(text, _SPECIALIST_HINTS["coding"])
+    coding_work_hits = _has(
+        text, ("fix", "repair", "debug", "test", "run", "compile", "inspect", "build"))
+    coding_work = bool(coding_hits and coding_work_hits)
     design_hits = _has(text, _DESIGN_MARKERS)
     learning_hits = _has(text, _LEARNING_MARKERS)
     design_deep_hits = _has(text, _DESIGN_DEEP_MARKERS)
@@ -413,6 +420,9 @@ def _route_uncached(message: str, *, has_active_task: bool = False,
     elif _has(text, _FAILURE_MARKERS):
         deep = True
         reasons.append("something is reported broken -- diagnosing needs the deep path")
+    elif coding_work:
+        deep = True
+        reasons.append("coding/system work needs the coding specialist")
     elif learning_hits and design_hits:
         deep = True
         reasons.append("design learning path needs a structured lesson")

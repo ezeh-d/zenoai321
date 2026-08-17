@@ -50,6 +50,8 @@ function injectPresenceStyles() {
     .agent-presence--mini .zf-card:nth-child(2) { left: 150px; top: 112px; }
     .agent-presence--mini .zf-card:nth-child(3) { left: 3px; top: 64px; }
     .agent-presence--mini .zf-card:nth-child(n+4) { left: 78px; top: 2px; transform: scale(.75); }
+    .agent-presence-mini-badge { display:none; position:fixed; left:50%; bottom:5px; z-index:7; transform:translateX(-50%); max-width:150px; padding:3px 8px; border:1px solid var(--agent-accent,#719bff); border-radius:10px; background:rgba(5,10,24,.88); color:#eaf3ff; box-shadow:0 0 12px color-mix(in srgb,var(--agent-accent,#719bff) 38%,transparent); font:700 8px/1.2 system-ui; letter-spacing:.06em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
+    .agent-presence-mini-badge.show { display:block; }
     .agent-presence--council { display: flex; flex-wrap: wrap; justify-content: center; gap: 18px 10px; }
     .agent-presence--situation { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; justify-content: center; }
     .agent-presence--situation .zf-card { width: 64px; gap: 2px; }
@@ -101,6 +103,8 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
   injectPresenceStyles();
   container.classList.add("agent-presence", `agent-presence--${mode}`);
   const entries = new Map();
+  const miniBadge = mode === "mini" ? document.createElement("div") : null;
+  if (miniBadge) { miniBadge.className = "agent-presence-mini-badge"; container.appendChild(miniBadge); }
   let councilOpen = false;
   let situationOpen = false;
 
@@ -122,6 +126,19 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
       entry.card.style.display = slot ? "flex" : "none";
       if (slot) { entry.card.style.left = `${slot[0]}px`; entry.card.style.top = `${slot[1]}px`; }
     });
+    const active = [...entries.values()][0];
+    if (miniBadge) {
+      if (active) {
+        const identity = identityFor(active.id);
+        miniBadge.textContent = `${identity.name} ${String(active.state || "active").toUpperCase()} · ZENO coordinating`;
+        miniBadge.style.setProperty("--agent-accent", identity.color);
+        miniBadge.classList.add("show");
+        document.documentElement.style.setProperty("--active-agent-accent", identity.color);
+      } else {
+        miniBadge.classList.remove("show");
+        document.documentElement.style.removeProperty("--active-agent-accent");
+      }
+    }
   }
 
   function place(entry) {
@@ -153,6 +170,7 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
     entry.state = normalState(state);
     setFaceState(entry.id, entry.state);
     setEmotion(entry.id, emotionFor(entry.state, emotion));
+    reflowMini();
     return true;
   }
 
@@ -184,6 +202,11 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
     if (!agentId) return false;
     const taskId = payload.task_id ? String(payload.task_id) : "";
     if (type === "agent.activated") return setVisualState(agentId, "waiting", payload.emotion);
+    if (type === "agent.handoff") {
+      const entry = ensure(payload.to || agentId, payload); if (!entry) return false;
+      if (taskId) entry.taskIds.add(taskId);
+      return setVisualState(entry.id, "waiting", payload.emotion || "curious");
+    }
     if (type === "agent.task_queued") {
       const entry = ensure(agentId, payload); if (!entry) return false;
       if (taskId) entry.taskIds.add(taskId);
@@ -198,6 +221,7 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
       for (const id of entries.keys()) setAttention(id, agentId);
       return setVisualState(agentId, "speaking", payload.emotion);
     }
+    if (type === "agent.voice_stopped") return setVisualState(agentId, "waiting", payload.emotion);
     if (type === "agent.task_finished") {
       return finish(agentId, payload.visual_state || (payload.ok === false ? "error" : "success"), taskId, payload.emotion) || true;
     }
@@ -239,6 +263,7 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
       entry.card.remove();
     }
     entries.clear();
+    if (miniBadge) miniBadge.remove();
     // Each document creates one controller. The page is unloading, so this
     // releases the face module's bounded DOM references as well.
     destroyAll();

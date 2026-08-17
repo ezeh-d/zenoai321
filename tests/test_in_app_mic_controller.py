@@ -39,7 +39,9 @@ def test_listening_is_not_announced_before_a_live_stream_exists() -> None:
 
 
 def test_voice_turn_waits_for_tts_and_exposes_true_states() -> None:
-    assert "await speakInBrowser(fullReply);" in SOURCE
+    assert "speechStream.feed(evt.text);" in SOURCE
+    assert "await speechStream.finish();" in SOURCE
+    assert "finishTurn: false" in SOURCE
     assert "compactMicStatus('HEARING SPEECH'" in SOURCE
     assert "compactMicStatus('TRANSCRIBING'" in SOURCE
     assert "compactMicStatus('THINKING'" in SOURCE

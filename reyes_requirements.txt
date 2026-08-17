@@ -12,6 +12,7 @@
 anthropic==0.117.1
 openai==2.46.0          # also used for xAI/Ollama (OpenAI-compatible endpoints)
 deepgram-sdk==7.5.0      # speech-to-text
+sherpa-onnx==1.13.5      # lazy native Windows speaker embeddings / optional local audio models
 
 # --- Web server / desktop app ---
 fastapi==0.139.2
@@ -20,11 +21,13 @@ python-multipart==0.0.32  # required for FastAPI file-upload routes (voice-turn)
 pydantic==2.13.4
 pywebview==6.2.1
 python-dotenv==1.2.2
+aiortc>=1.13,<2          # encrypted phone-as-mic WebRTC transport; lazy at use
 
 # --- Voice ---
 SpeechRecognition==3.17.0
 sounddevice==0.5.5
 numpy==2.5.1
+soundfile==0.14.0        # tested local audio/model decoding on this Windows host
 keyboard==0.13.5          # push-to-talk key detection
 
 # --- Vision / desktop control ---

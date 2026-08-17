@@ -109,7 +109,7 @@ TOOL_GROUPS: dict[str, str] = {
     "interrupt_work": "intelligence", "capability_status": "intelligence",
     "action_history": "intelligence", "undo_last_actions": "intelligence",
     "current_situation": "intelligence", "universal_search": "intelligence",
-    "resolve_time": "intelligence", "simulate_plan": "intelligence",
+    "simulate_plan": "intelligence",
     "health_center": "intelligence", "remember_relationship": "intelligence",
     "search_relationships": "intelligence", "forget_relationship": "intelligence",
     "save_mission_runtime_state": "intelligence", "load_mission_runtime_state": "intelligence",
@@ -163,6 +163,17 @@ TOOL_GROUPS: dict[str, str] = {
     "coding_inspect": "coding", "coding_execute": "coding",
     "mcp_status": "mcp", "mcp_discover": "mcp", "mcp_read": "mcp", "mcp_action": "mcp",
     "device_status": "devices", "device_observe": "devices", "device_execute": "devices",
+    # Sent to the model EVERY turn unless listed here. The project already
+    # measured this: ~5.4s per turn at 93 tools versus ~1.5s at 5. These four
+    # are setup and recovery -- reached by name when needed, never mid-
+    # conversation -- so they cost latency on every sentence for nothing.
+    # siwes_evidence, system_status, set_serious_mode and send_message stay
+    # CORE deliberately: a visitor asks for those, and a round spent
+    # discovering the tool is a round the visitor watches.
+    "prepare_presentation_evidence": "presentation",
+    "presentation_recover": "presentation",
+    "assistant_mode_status": "presentation",
+    "type_message": "comms",
     "code_proof": "presentation", "engineering_challenges": "presentation",
     "learning_portfolio": "presentation", "project_evolution": "presentation",
     "offline_presentation": "presentation", "should_divine_answer": "presentation",
@@ -171,7 +182,11 @@ TOOL_GROUPS: dict[str, str] = {
     "rehearse_visit": "presentation",
     "design_tool_check": "creative",
     "plan_message_request": "comms", "messaging_status": "comms",
-    "agent_roster": "agents", "who_is_agent": "agents",
+    # agent_roster and who_is_agent are deliberately CORE. When they were
+    # lazy, "who are your agents" was answered "I don't run any agents" --
+    # confident, fluent and false, because the model cannot consult a tool it
+    # has not been shown. Identity questions must never need a discovery
+    # round. The deeper two stay lazy.
     "agent_role_call": "agents", "agent_workers": "agents",
     "phone_mic_networks": "devices", "phone_mic_qr": "devices",
     "phone_mic_set_network": "devices", "phone_mic_current_network": "devices",

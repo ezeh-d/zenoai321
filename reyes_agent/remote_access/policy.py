@@ -178,6 +178,7 @@ LIMITS: dict[str, tuple[int, float]] = {
     "pair_failure":   (5, 900.0),      # wrong/expired tokens specifically
     "auth_failure":   (10, 600.0),     # any 401 from this source
     "ws_connect":     (20, 300.0),     # reconnect storms
+    "remote_mic_offer": (12, 300.0),   # bounded WebRTC negotiations/device
 }
 
 _lock = threading.Lock()

@@ -14,6 +14,7 @@ mcp>=2.0
 # --- Phone Companion security (passkeys and desktop QR pairing) ---
 webauthn>=3.0
 qrcode[pil]>=8.2
+aiortc>=1.13,<2
 
 # --- GUI HUD (python main.py) ---
 PySide6>=6.6
@@ -24,6 +25,7 @@ PyAudio>=0.2.14
 pyttsx3>=2.90
 faster-whisper>=1.0
 onnxruntime>=1.17
+sherpa-onnx==1.13.5
 soundfile>=0.12
 
 # --- Phase 5: local, lazy data engines ---

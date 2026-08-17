@@ -2795,7 +2795,15 @@ def phone_service_worker() -> FileResponse:
 
 @app.get("/mic")
 def phone_mic_page() -> FileResponse:
-    return FileResponse(_STATIC_DIR / "mic.html")
+    # NEVER cached. The page carries its own inline script, so a cached copy
+    # means the phone keeps running an OLD version -- which is exactly how a
+    # fix that was verified on the server never reached the device, and an
+    # error message that had already been corrected kept appearing. A few
+    # kilobytes on each load is a trivial price for the phone always running
+    # the code that is actually on disk.
+    return FileResponse(_STATIC_DIR / "mic.html", headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache", "Expires": "0"})
 
 @app.post("/api/phone/admin/pairing")
 def phone_create_pairing(request: Request) -> dict[str, Any]:
@@ -3091,6 +3099,21 @@ def phone_webauthn_enroll_complete(req: PhoneWebAuthnEnrollmentRequest,
             session["device_id"], req.credential, req.challenge, origin, rp_id)
     except Exception as exc:
         raise HTTPException(403, f"Platform verification enrollment failed: {exc}") from exc
+
+
+@app.post("/api/voice/enrol")
+def enrol_owner_voice(request: Request) -> dict[str, Any]:
+    """Learn the owner's voice from the LIVE microphone.
+
+    This must run in the server process. Audio arrives here, and the
+    AudioManager is a per-process singleton -- a capture started anywhere
+    else subscribes to an empty stream and reports hearing nothing, which is
+    exactly what happened on the first attempt.
+    """
+    _loopback(request)
+    from reyes_agent.identity.speaker.capture import enrol_from_live_microphone
+
+    return enrol_from_live_microphone(timeout_s=90)
 
 
 @app.get("/api/mode")

@@ -294,6 +294,36 @@ class PhoneSecurity:
         self._audit("mic_key_rotated")
         return key
 
+    def guest_mic_key(self) -> str:
+        """A SECOND standing key that pairs a listen-only microphone.
+
+        Two keys rather than one key with a flag, because the grant must be
+        a property of the CODE and not of the request that presents it. A
+        phone holding this code cannot ask for more: there is no parameter to
+        change, no field to omit, and nothing the page could send that would
+        widen it. Somebody who photographs this QR gets a microphone.
+
+        This is what a visitor's phone should scan. The owner's phone scans
+        the other one.
+        """
+        # Its OWN table. The original mic_key was created with CHECK(id=1),
+        # and SQLite cannot alter a CHECK constraint -- widening it would mean
+        # rebuilding a table that holds a live credential, which is not a
+        # thing to do for tidiness. A separate table also makes the two keys
+        # impossible to confuse in a query.
+        with self._connection() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS guest_mic_key("
+                         "id INTEGER PRIMARY KEY CHECK(id=1), key TEXT NOT NULL,"
+                         " created REAL NOT NULL, rotated REAL)")
+            row = conn.execute("SELECT key FROM guest_mic_key WHERE id=1").fetchone()
+            if row:
+                return str(row["key"])
+            key = secrets.token_urlsafe(32)
+            conn.execute("INSERT INTO guest_mic_key(id,key,created) VALUES(1,?,?)",
+                         (key, time.time()))
+        self._audit("guest_mic_key_created")
+        return key
+
     def refresh_local_scopes(self) -> dict[str, Any]:
         """Bring already-paired phones up to the current grant.
 
@@ -336,8 +366,18 @@ class PhoneSecurity:
         be on a network this laptop is on.
         """
         supplied = (key or "").strip()
-        expected = self.mic_key()
-        if not supplied or not secrets.compare_digest(supplied, expected):
+        if not supplied:
+            raise PermissionError(
+                "That microphone code is not valid for this computer. It may "
+                "have been replaced -- show the QR code again.")
+
+        # WHICH key was presented decides the grant. The request cannot
+        # influence it: a guest code has no path to anything but audio.
+        if secrets.compare_digest(supplied, self.mic_key()):
+            granted, kind = sorted(DEFAULT_SCOPES), "OWNER"
+        elif secrets.compare_digest(supplied, self.guest_mic_key()):
+            granted, kind = [REMOTE_AUDIO_SEND], "GUEST"
+        else:
             raise PermissionError(
                 "That microphone code is not valid for this computer. It may "
                 "have been replaced -- show the QR code again.")
@@ -369,7 +409,7 @@ class PhoneSecurity:
         # before scopes are ever consulted. No scope grants them, so a lost
         # phone still cannot start either one -- which was the actual point
         # of keeping the grant narrow.
-        scopes = sorted(DEFAULT_SCOPES)
+        scopes = granted
         now = time.time()
         with self._connection() as conn:
             conn.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
@@ -381,9 +421,11 @@ class PhoneSecurity:
         # the authoritative session issuer so the base session and its auth
         # level stay consistent after the v2 schema split.
         issued = self._issue_session(device_id, DEVICE_KEY_AUTH)
-        self._audit("device_paired_mic_key", device_id, name=name, peer=peer_ip[:40])
+        self._audit("device_paired_mic_key", device_id, name=name,
+                    peer=peer_ip[:40], grant=kind)
         return {"device_id": device_id, "name": name, "state": TRUSTED,
-                "scopes": scopes, "method": "STANDING_MIC_KEY",
+                "scopes": scopes, "method": f"STANDING_MIC_KEY_{kind}",
+                "grant": kind,
                 "session": issued["session"], "csrf": issued["csrf"]}
 
     @staticmethod

@@ -53,7 +53,12 @@ MARKS = (
     "first_audio",          # first audio actually played                   (browser)
     "response_finished",    # turn complete                                 (server)
 )
-_MARK_SET = frozenset(MARKS)
+# Optional paths must be accepted and measured without making an ordinary
+# turn look incomplete. Most fast replies never need a thinking ack.
+OPTIONAL_MARKS = (
+    "thinking_ack_audio",   # cached progress speech reached the speaker     (browser)
+)
+_MARK_SET = frozenset(MARKS + OPTIONAL_MARKS)
 
 # Each derived metric is (name, start_mark, end_mark, from_origin).
 #
@@ -72,6 +77,7 @@ _DERIVED = (
     ("model_latency",        "model_requested",   "first_model_token", False),
     ("time_to_first_token",  "endpoint_detected", "first_model_token", True),
     ("tts_latency",          "tts_requested",     "first_audio",       False),
+    ("time_to_ack_audio",    "endpoint_detected", "thinking_ack_audio", True),
     ("time_to_first_audio",  "endpoint_detected", "first_audio",       True),
     ("total_latency",        "endpoint_detected", "response_finished", True),
 )
@@ -85,6 +91,8 @@ _MAX_TURNS = 200
 _lock = threading.RLock()
 _turns: dict[str, dict[str, Any]] = {}
 _order: deque[str] = deque(maxlen=_MAX_TURNS)
+_wake_ack_samples: deque[dict[str, Any]] = deque(maxlen=200)
+_barge_in_samples: deque[dict[str, Any]] = deque(maxlen=200)
 _enabled = True
 
 
@@ -233,15 +241,35 @@ def summary(limit: int = 50) -> dict[str, Any]:
         stats[name] = {
             "samples": len(values),
             "median_s": _percentile(values, 0.5),
+            "p90_s": _percentile(values, 0.90),
             "p95_s": _percentile(values, 0.95),
             "min_s": round(min(values), 4) if values else None,
             "max_s": round(max(values), 4) if values else None,
         }
+    with _lock:
+        wake_values = [float(row["latency_s"]) for row in _wake_ack_samples]
+        barge_values = [float(row["latency_s"]) for row in _barge_in_samples]
     return {
         "turns_considered": len(recent),
         "turns_complete": complete,
         "metrics": stats,
         "enabled": _enabled,
+        "wake_ack": {
+            "samples": len(wake_values),
+            "median_s": _percentile(wake_values, 0.5),
+            "p90_s": _percentile(wake_values, 0.90),
+            "p95_s": _percentile(wake_values, 0.95),
+            "worst_s": round(max(wake_values), 4) if wake_values else None,
+            "target_s": [0.15, 0.40],
+        },
+        "barge_in": {
+            "samples": len(barge_values),
+            "median_s": _percentile(barge_values, 0.5),
+            "p90_s": _percentile(barge_values, 0.90),
+            "p95_s": _percentile(barge_values, 0.95),
+            "worst_s": round(max(barge_values), 4) if barge_values else None,
+            "target_s": [0.10, 0.30],
+        },
         "note": ("A metric with 0 samples was never measurable in these turns -- "
                  "for example time_to_first_audio when TTS did not run. Absent is "
                  "reported as absent, never as zero."),
@@ -283,8 +311,54 @@ def finish(turn_id: str) -> dict[str, Any] | None:
     return line
 
 
+def record_wake_ack(*, detected_at: float, audio_started_at: float,
+                    phrase: str = "", source: str = "browser") -> dict[str, Any]:
+    """Store a real local-wake-to-audible-playback measurement."""
+    detected = float(detected_at)
+    started = float(audio_started_at)
+    if detected <= 0 or started < detected or started - detected > 30:
+        raise ValueError("Invalid wake acknowledgement timestamps")
+    row = {
+        "detected_at": detected,
+        "audio_started_at": started,
+        "latency_s": round(started - detected, 4),
+        "phrase": str(phrase)[:40],
+        "source": str(source)[:40],
+    }
+    with _lock:
+        _wake_ack_samples.append(row)
+    try:
+        from reyes_agent import event_bus
+
+        event_bus.publish("latency.wake_ack", row, source="latency")
+    except Exception:
+        pass
+    return row
+
+
+def record_barge_in(*, detected_at: float, audio_stopped_at: float,
+                    source: str = "browser") -> dict[str, Any]:
+    detected = float(detected_at)
+    stopped = float(audio_stopped_at)
+    if detected <= 0 or stopped < detected or stopped - detected > 10:
+        raise ValueError("Invalid barge-in timestamps")
+    row = {"detected_at": detected, "audio_stopped_at": stopped,
+           "latency_s": round(stopped - detected, 4), "source": str(source)[:40]}
+    with _lock:
+        _barge_in_samples.append(row)
+    try:
+        from reyes_agent import event_bus
+
+        event_bus.publish("latency.barge_in", row, source="latency")
+    except Exception:
+        pass
+    return row
+
+
 def reset() -> None:
     """Test hook."""
     with _lock:
         _turns.clear()
         _order.clear()
+        _wake_ack_samples.clear()
+        _barge_in_samples.clear()

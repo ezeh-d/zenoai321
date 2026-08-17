@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import wave
+from array import array
 from collections.abc import Callable
 from typing import Any
 
@@ -67,6 +68,9 @@ def _wake_pattern() -> re.Pattern[str]:
 
 _WAKE = _wake_pattern()
 CommandHandler = Callable[[Any, str, dict[str, Any], str, str], dict[str, Any]]
+_REMOTE_VOICE_RMS = 560.0
+_DIGITAL_SILENCE_RMS = 12.0
+_DIGITAL_SILENCE_FALLBACK_S = 25.0
 
 
 def _wav(pcm: bytes, sample_rate: int = 16_000) -> bytes:
@@ -83,7 +87,14 @@ class RemoteTurnConsumer:
     """One event-driven VAD segmenter; expensive work goes to the worker pool."""
 
     def __init__(self) -> None:
-        self._vad = EnergyVAD(open_factor=2.1, minimum_rms=140.0)
+        # A phone held at conversational distance in a room with other people
+        # produces a LOT of sub-speech energy. At minimum_rms=140 the VAD
+        # opened on that constantly, and every one of those clips went to the
+        # transcriber and came back with zero characters -- measured earlier:
+        # 97 STT calls, most of them empty. Raising the floor does not make
+        # ZENO deafer; real speech into a held phone measured 1000-11000 RMS.
+        # It stops him paying to transcribe the room.
+        self._vad = EnergyVAD(open_factor=2.8, minimum_rms=560.0)
         self._lock = threading.RLock()
         self._pcm = bytearray()
         self._speaking = False
@@ -174,6 +185,27 @@ class RemoteTurnConsumer:
     def __call__(self, frame: AudioFrame) -> None:
         if not frame.source.startswith("phone:"):
             return
+
+        # DO NOT LISTEN WHILE ZENO IS TALKING.
+        #
+        # Measured consequence of not doing this: the owner said one thing and
+        # got answered TWICE. An external microphone has Chrome's echo
+        # cancellation switched off (it has to be -- that processing routes
+        # Android to the built-in mic and silenced the lav entirely), so the
+        # lav hears the laptop speakers, ZENO transcribes his own reply, and
+        # answers it. The second reply is ZENO talking to himself.
+        #
+        # Barge-in still works: that is driven by the VAD onset below, which
+        # runs before this gate on the frame that INTERRUPTS. This only stops
+        # his own voice becoming a turn.
+        try:
+            from reyes_agent import conversation_state
+
+            if conversation_state.current() in ("SPEAKING", "ADVISORY"):
+                self._barge_in_pending = True
+                return
+        except Exception:  # noqa: BLE001
+            pass
         voiced, _rms = self._vad.voiced(frame.pcm16)
         duration = len(frame.pcm16) / 2 / frame.sample_rate
         clip: bytes | None = None
@@ -182,7 +214,14 @@ class RemoteTurnConsumer:
                 return
             if not self._speaking:
                 self._voiced_frames = self._voiced_frames + 1 if voiced else 0
-                if self._voiced_frames >= 2:
+                # FIVE consecutive voiced frames, not two. A door, a
+                # chair, a cough or a hand brushing the microphone clears a
+                # loudness threshold easily -- what it cannot do is stay loud
+                # for a fifth of a second. Speech can. This is the difference
+                # between measuring VOLUME and measuring SPEECH, and it costs
+                # nothing: the frames are still buffered, so no syllable of a
+                # real sentence is lost by waiting to be sure.
+                if self._voiced_frames >= 5:
                     self._speaking = True
                     self._started = time.monotonic()
                     self._pcm.clear()
@@ -223,6 +262,22 @@ class RemoteTurnConsumer:
                 self._voiced_frames = 0
                 self._busy = True
         if clip:
+            # A real sentence has PEAKS. Room noise sits flat just above the
+            # threshold, so a clip whose loudest moment barely cleared the
+            # floor is discarded before it costs a transcription -- measured
+            # earlier, most STT calls were returning empty because the room
+            # was being transcribed.
+            peak = 0.0
+            samples = array("h")
+            samples.frombytes(clip[: len(clip) - len(clip) % 2])
+            if samples:
+                step = max(1, len(samples) // 400)
+                peak = max(abs(float(samples[i])) for i in range(0, len(samples), step))
+            if peak < 1500.0:
+                with self._lock:
+                    self._busy = False
+                self._emit("remote_mic.noise_ignored", {"peak": round(peak, 1)})
+                return
             self._submit(clip, frame.source)
 
     def _submit(self, pcm: bytes, source: str) -> None:
@@ -345,6 +400,7 @@ class RemoteMicRuntime:
         self._lock = threading.RLock()
         self._peers: dict[str, Any] = {}
         self._peer_ips: dict[str, str] = {}
+        self._quiet_since: dict[str, float] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._quality: dict[str, AudioQuality] = {}
         self._session_expiry: dict[str, float] = {}
@@ -357,6 +413,25 @@ class RemoteMicRuntime:
         self._subscribed = False
         self._received_frames = 0
         self._last_error = ""
+
+    def _apply_silence_fallback(self, source: str, metrics: dict[str, Any],
+                                *, now: float | None = None) -> float:
+        """Return the score the selector must see for this audio frame.
+
+        A connected WebRTC stream can keep excellent transport metrics after
+        Android or an external receiver starts delivering digital silence.
+        Apply the fallback before selector observation. Applying it afterwards
+        only changed dashboard telemetry and left the dead source selected.
+        """
+        observed_at = time.monotonic() if now is None else float(now)
+        rms = float(metrics.get("rms", 0.0) or 0.0)
+        if rms < _DIGITAL_SILENCE_RMS:
+            quiet_since = self._quiet_since.setdefault(source, observed_at)
+            if observed_at - quiet_since >= _DIGITAL_SILENCE_FALLBACK_S:
+                metrics["score"] = 0.0
+        else:
+            self._quiet_since.pop(source, None)
+        return float(metrics.get("score", 0.0) or 0.0)
 
     def set_command_handler(self, handler: CommandHandler) -> None:
         self._consumer.set_handler(handler)
@@ -459,10 +534,21 @@ class RemoteMicRuntime:
                         0.0, float(client.get("rtt_ms", 0) or 0) - 250.0) / 50.0)
                     metrics["packet_loss_ratio"] = round(loss_ratio, 5)
                     metrics["score"] = round(max(0.0, float(metrics["score"]) - penalty), 1)
-                    selected, changed = self._selector.observe(source, float(metrics["score"]))
+                    # Tell the selector whether speech-level energy is arriving,
+                    # not merely a connected stream or ordinary room noise.
+                    score = self._apply_silence_fallback(source, metrics)
+                    voice = float(metrics.get("rms", 0) or 0) >= _REMOTE_VOICE_RMS
+                    selected, changed = self._selector.observe(
+                        source, score, voice=voice)
                     if changed:
                         manager.set_active_source(selected)
                         self._emit("remote_mic.source_changed", self._selector.status())
+                    # Silence for this long means the stream is dead --
+                    # a closed page, a reconnect, a phone that slept. It must
+                    # not stay selected: measured, five sessions had piled up
+                    # and the SELECTED one read 0.1 RMS while the live
+                    # microphone read 673, so ZENO was faithfully listening
+                    # to nothing and appeared not to understand speech.
                     manager.update_source(source, connected=True, **metrics)
                     manager.publish(pcm, sample_rate=16_000, source=source)
                     self._received_frames += 1
@@ -471,6 +557,7 @@ class RemoteMicRuntime:
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
         finally:
+            self._quiet_since.pop(source, None)
             selected, changed = self._selector.observe(source, 0.0, connected=False)
             manager.update_source(source, connected=False)
             if changed:

@@ -35,8 +35,10 @@ overlapping audio streams.
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import queue
+import random
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +47,17 @@ from reyes_agent import config
 
 _CACHE_DIR = config.VAULT_PATH / "07-System" / "voice_cache"
 _MAX_CACHE_FILES = 400
+WAKE_ACKNOWLEDGEMENTS = (
+    "Yeah?", "I'm here.", "What's up?", "Talk to me.", "Go ahead.", "Mm-hm?", "Yep?",
+)
+# "I'm on it" is a promise; "checking" is a description. The owner asked for
+# the second, and he is right about why: a promise tells the listener nothing
+# about what is happening, so hearing it twice teaches them nothing and starts
+# to grate. "Checking" says ZENO has gone to look, which is both true and the
+# thing a person actually says.
+THINKING_ACKNOWLEDGEMENTS = ("Checking.", "Checking now.", "Let me check.",
+                             "One moment, checking.")
+_cache_write_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -138,30 +151,115 @@ def synthesize(text: str, agent: str = "zeno") -> bytes:
     if path.exists():
         return path.read_bytes()
 
-    from reyes_agent.voice.tts import _get_elevenlabs_client
+    # Two WebViews can request the same common line at once.  Serialize only
+    # cache misses so one provider call is made; cache hits remain lock-free.
+    with _cache_write_lock:
+        if path.exists():
+            return path.read_bytes()
 
-    client = _get_elevenlabs_client()
-    try:
-        audio = client.text_to_speech.convert(
-            voice_id=profile.voice_id,
-            model_id=config.ELEVENLABS_MODEL,
-            text=text,
-            output_format="mp3_44100_128",
-            voice_settings={
-                "stability": profile.stability,
-                "similarity_boost": profile.similarity,
-            },
-        )
-        data = b"".join(audio) if not isinstance(audio, (bytes, bytearray)) else bytes(audio)
-    except Exception as exc:  # noqa: BLE001
-        raise TTSError(f"ElevenLabs synthesis failed: {exc}") from exc
+        from reyes_agent.voice.tts import _get_elevenlabs_client
 
-    try:
-        path.write_bytes(data)
-        _prune_cache()
-    except Exception:  # noqa: BLE001
-        pass  # cache write failure must not break speech
+        client = _get_elevenlabs_client()
+        try:
+            audio = client.text_to_speech.convert(
+                voice_id=profile.voice_id,
+                model_id=config.ELEVENLABS_MODEL,
+                text=text,
+                output_format="mp3_44100_128",
+                voice_settings={
+                    "stability": profile.stability,
+                    "similarity_boost": profile.similarity,
+                },
+            )
+            data = b"".join(audio) if not isinstance(audio, (bytes, bytearray)) else bytes(audio)
+        except Exception as exc:  # noqa: BLE001
+            raise TTSError(f"ElevenLabs synthesis failed: {exc}") from exc
+
+        try:
+            path.write_bytes(data)
+            _prune_cache()
+        except Exception:  # noqa: BLE001
+            pass  # cache write failure must not break speech
     return data
+
+
+def cached_wake_acknowledgement() -> tuple[str, bytes] | None:
+    """Return only already-cached ZENO audio; never call a provider here."""
+    return _cached_phrase(WAKE_ACKNOWLEDGEMENTS)
+
+
+def _cached_phrase(phrases: tuple[str, ...]) -> tuple[str, bytes] | None:
+    """Return a random cached phrase from ``phrases`` without network I/O."""
+    profile = get_profile("zeno")
+    available: list[tuple[str, Path]] = []
+    for text in phrases:
+        path = _cache_path(text, profile)
+        if path.is_file() and path.stat().st_size > 0:
+            available.append((text, path))
+    if not available:
+        return None
+    text, path = random.SystemRandom().choice(available)
+    return text, path.read_bytes()
+
+
+def cached_thinking_acknowledgement() -> tuple[str, bytes] | None:
+    """Cache-only progress speech for a real turn that exceeds the budget."""
+    if not config.VOICE_THINKING_ACK_ENABLED:
+        return None
+    return _cached_phrase(THINKING_ACKNOWLEDGEMENTS)
+
+
+def cached_audio(text: str, agent: str = "zeno") -> bytes | None:
+    """Return an exact cache hit without synthesizing or using the network."""
+    path = _cache_path(text, get_profile(agent))
+    return path.read_bytes() if path.is_file() and path.stat().st_size > 0 else None
+
+
+def warm_wake_acknowledgements() -> dict:
+    """Generate each configured-voice acknowledgement once, off the UI path."""
+    ready = 0
+    errors: list[str] = []
+    for text in WAKE_ACKNOWLEDGEMENTS:
+        try:
+            synthesize(text, "zeno")
+            ready += 1
+        except Exception as exc:  # noqa: BLE001 -- one phrase cannot block the rest
+            errors.append(f"{text}: {type(exc).__name__}")
+            break
+    result = {"ready": ready, "total": len(WAKE_ACKNOWLEDGEMENTS), "errors": errors[:3]}
+    try:
+        from reyes_agent import event_bus
+
+        event_bus.publish("voice.wake_ack_cache", result, source="voice_manager")
+    except Exception:
+        pass
+    return result
+
+
+def warm_realtime_phrases() -> dict:
+    """Warm every phrase used on a latency-critical path, off that path."""
+    from reyes_agent.voice.latency_governor import cacheable_fast_replies
+
+    phrases = tuple(dict.fromkeys(
+        WAKE_ACKNOWLEDGEMENTS + THINKING_ACKNOWLEDGEMENTS + cacheable_fast_replies()
+    ))
+    ready = 0
+    errors: list[str] = []
+    for text in phrases:
+        try:
+            synthesize(text, "zeno")
+            ready += 1
+        except Exception as exc:  # noqa: BLE001 -- one failed provider ends this bounded warm
+            errors.append(f"{text}: {type(exc).__name__}")
+            break
+    result = {"ready": ready, "total": len(phrases), "errors": errors[:3]}
+    try:
+        from reyes_agent import event_bus
+
+        event_bus.publish("voice.realtime_cache", result, source="voice_manager")
+    except Exception:
+        pass
+    return result
 
 
 # --- speech queue -------------------------------------------------------
@@ -212,21 +310,60 @@ def _speak_now(text: str, agent: str, stop_event: threading.Event) -> None:
         out.close()
 
 
+def _play_cached_now(audio: bytes, stop_event: threading.Event) -> None:
+    """Decode a cache hit locally so acknowledgements add no network wait."""
+    import av
+    import sounddevice as sd
+
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=24_000)
+    output = sd.RawOutputStream(samplerate=24_000, channels=1, dtype="int16")
+    output.start()
+    try:
+        with av.open(io.BytesIO(audio), mode="r") as container:
+            for decoded in container.decode(audio=0):
+                for frame in resampler.resample(decoded):
+                    if stop_event.is_set():
+                        return
+                    output.write(bytes(frame.planes[0])[: frame.samples * 2])
+    finally:
+        output.stop()
+        output.close()
+
+
 def _run_queue() -> None:
     while True:
         item = _speech_q.get()
         if item is None:
             _speech_q.task_done()
             break
-        text, agent = item
+        kind, payload, agent = item
         try:
             # A queued, later response begins only after any barge-in stopped
             # the previous item and the queue was drained.
             _playback_stop.clear()
-            _speak_now(text, agent, _playback_stop)
+            try:
+                from reyes_agent import event_bus
+
+                event_bus.publish("agent.speaking",
+                                  {"agent": agent, "visual_state": "speaking",
+                                   "emotion": "neutral"}, source="voice_manager")
+            except Exception:  # noqa: BLE001
+                pass
+            if kind == "cached":
+                _play_cached_now(payload, _playback_stop)
+            else:
+                _speak_now(payload, agent, _playback_stop)
         except Exception:  # noqa: BLE001
             pass
         finally:
+            try:
+                from reyes_agent import event_bus
+
+                event_bus.publish("agent.voice_stopped",
+                                  {"agent": agent, "visual_state": "waiting"},
+                                  source="voice_manager")
+            except Exception:  # noqa: BLE001
+                pass
             _speech_q.task_done()
 
 
@@ -239,10 +376,25 @@ def speak_queued(text: str, agent: str = "zeno") -> None:
             _worker = threading.Thread(target=_run_queue, daemon=True, name="zeno-speech")
             _worker.start()
         try:
-            _speech_q.put_nowait((text, agent))
+            _speech_q.put_nowait(("text", text, agent))
         except queue.Full:
             # Live announcements are disposable under pressure; the durable notice
             # remains visible in the panel and the UI must stay responsive.
+            return
+
+
+def speak_cached_queued(audio: bytes, agent: str = "zeno") -> None:
+    """Queue already-generated speech; safe for the sub-1.5s response path."""
+    global _worker
+    if not audio:
+        return
+    with _speech_lock:
+        if _worker is None or not _worker.is_alive():
+            _worker = threading.Thread(target=_run_queue, daemon=True, name="zeno-speech")
+            _worker.start()
+        try:
+            _speech_q.put_nowait(("cached", bytes(audio), agent))
+        except queue.Full:
             return
 
 

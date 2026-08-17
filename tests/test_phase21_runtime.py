@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 import tempfile
@@ -130,6 +131,27 @@ def test_notification_listener_backs_off_and_never_overlaps() -> None:
         listener._last_error_log = original[2]
 
 
+def test_notification_listener_reuses_one_runtime_and_shuts_it_down() -> None:
+    from reyes_agent import notification_listener as listener
+
+    seen: list[int] = []
+
+    async def probe() -> str:
+        seen.append(threading.get_ident())
+        return "ok"
+
+    try:
+        assert listener._run_on_runtime(probe) == "ok"
+        first = listener._runtime_thread
+        assert first is not None and first.is_alive()
+        assert listener._run_on_runtime(probe) == "ok"
+        assert listener._runtime_thread is first
+        assert len(set(seen)) == 1
+    finally:
+        listener.shutdown_background()
+    assert not first.is_alive()
+
+
 def test_scheduler_prevents_overlapping_periodic_runs() -> None:
     pool = ManagedWorkerPool(max_workers=2, max_queue=8, thread_name_prefix="phase21-scheduler")
     scheduler = BackgroundScheduler()
@@ -223,10 +245,30 @@ def test_freeze_record_captures_and_rotates_to_configured_log() -> None:
             assert record is not None
             assert record["thread_stacks"] == {}
             assert record["duration_ms"] >= 200
+            assert record["pid"] == os.getpid()
             assert record["call_stack"] == []
+            assert "active_operation" in record
+            assert "current_thread" in record
+            assert "worker_queue_depth" in record
+            assert "system_cpu_percent" in record
+            assert "system_ram_percent" in record
             assert performance_monitor._LOG_PATH.exists()
         finally:
             performance_monitor._LOG_PATH = original
+
+
+def test_freeze_instrumentation_does_not_create_worker_pool() -> None:
+    source = (ROOT / "reyes_agent" / "performance_monitor.py").read_text(encoding="utf-8")
+    freeze_source = source.split("def record_freeze(", 1)[1]
+    assert "from reyes_agent.worker_pool import get_worker_pool" not in freeze_source
+    assert "get_worker_pool().metrics()" not in freeze_source
+    assert 'sys.modules.get("reyes_agent.worker_pool")' in freeze_source
+
+
+def test_freeze_count_is_total_not_truncated_recent_history() -> None:
+    source = (ROOT / "reyes_agent" / "performance_monitor.py").read_text(encoding="utf-8")
+    assert '"freeze_count": freeze_total' in source
+    assert '"freeze_count": len(recent_freezes)' not in source
 
 
 def test_desktop_heartbeat_captures_stacks_only_for_a_real_delay() -> None:

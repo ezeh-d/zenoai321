@@ -189,6 +189,28 @@ def _native_window_rect(window: Any) -> tuple[int, int, int, int] | None:
         return None
 
 
+def _native_window_is_active(window: Any) -> bool | None:
+    """Return whether a created native window is visible and not minimized.
+
+    pywebview's WinForms ``minimized`` event has proved unreliable on this
+    host.  This cheap native check is therefore the source of truth used by
+    the existing five-second overlay watchdog.  ``None`` means that the HWND
+    has not been created yet; it must not be treated as a hidden transition.
+    """
+    if sys.platform != "win32":
+        return None
+    hwnd = _window_handle(window)
+    if not hwnd:
+        return None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        return bool(user32.IsWindowVisible(hwnd)) and not bool(user32.IsIconic(hwnd))
+    except Exception:  # noqa: BLE001 -- lifecycle recovery is best effort
+        return None
+
+
 def _restore_native_overlay(
     window: Any, position: tuple[int, int], *, force_topmost: bool = False,
 ) -> tuple[bool, bool, tuple[int, int] | None]:
@@ -396,6 +418,7 @@ class _DesktopApi:
         self._window = None  # compatibility alias for the one Mini Orb only
         self._mini_window = None
         self._dashboard_window = None
+        self._dashboard_active: bool | None = None
         self._mini_loaded = False
         self._orb_pos = _read_orb_position()
         self._drag: dict[str, float] | None = None
@@ -445,11 +468,16 @@ class _DesktopApi:
         with self._bridge_lock:
             active = self._active_bridge_callback
             calls = self._bridge_calls
+        with self._window_lock:
+            dashboard_active = self._dashboard_active is True
         from reyes_agent.performance_monitor import record_host_heartbeat
 
         delay = record_host_heartbeat(sent_at_s, active_callback=active,
                                       bridge_activity={"calls": calls})
-        return {"delay_ms": round(delay * 1000, 1)}
+        # The Mini Orb already sends this heartbeat. Returning native state
+        # repairs a dropped Event Bus handoff without adding another timer.
+        return {"delay_ms": round(delay * 1000, 1),
+                "dashboard_active": dashboard_active}
 
     def toggle_fullscreen(self) -> bool:
         with self._window_lock:
@@ -510,6 +538,27 @@ class _DesktopApi:
             force_topmost = requested or now - self._last_topmost_at >= _TOPMOST_REASSERT_INTERVAL_S
             if self._recover_mini(force_topmost=force_topmost) and force_topmost:
                 self._last_topmost_at = now
+            self._sync_dashboard_presence()
+
+    def _set_dashboard_presence(self, active: bool) -> None:
+        """Publish a microphone handoff only when native state really changes."""
+        with self._window_lock:
+            if self._dashboard_active is active:
+                return
+            self._dashboard_active = active
+        self._publish_desktop_state(
+            "desktop.dashboard_opened" if active else "desktop.dashboard_hidden"
+        )
+
+    def _sync_dashboard_presence(self) -> None:
+        """Repair missed WinForms minimize/hide events without GUI calls."""
+        with self._window_lock:
+            dashboard = self._dashboard_window
+        if dashboard is None:
+            return
+        active = _native_window_is_active(dashboard)
+        if active is not None:
+            self._set_dashboard_presence(active)
 
     def request_overlay_repair(self) -> None:
         """Wake the bounded watchdog after a native minimize/hide signal."""
@@ -668,10 +717,10 @@ class _DesktopApi:
             return dashboard
 
     def _dashboard_hidden(self, *_args) -> None:
-        self._publish_desktop_state("desktop.dashboard_hidden")
+        self._set_dashboard_presence(False)
 
     def _dashboard_opened(self, *_args) -> None:
-        self._publish_desktop_state("desktop.dashboard_opened")
+        self._set_dashboard_presence(True)
 
     def _hide_dashboard_on_close(self) -> bool:
         """Close means hide dashboard; only an explicit Mini Orb close exits ZENO."""
@@ -713,9 +762,24 @@ class _DesktopApi:
             self._bridge_end("show_dashboard")
 
     def shutdown(self) -> None:
+        if self._shutting_down:
+            return
         self._shutting_down = True
         self._overlay_stop.set()
         self._overlay_repair.set()
+        # The dashboard is a lazy child WebView.  Once it has been created it
+        # keeps pywebview's native loop alive even after the Mini Orb closes.
+        # Closing the orb is ZENO's explicit exit gesture, so release that
+        # child as part of the same lifecycle instead of leaving a headless
+        # desktop/backend process behind.
+        with self._window_lock:
+            dashboard = self._dashboard_window
+            self._dashboard_window = None
+        if dashboard is not None:
+            try:
+                dashboard.destroy()
+            except Exception:  # noqa: BLE001 -- it may already be closing
+                pass
         thread = self._overlay_watchdog
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1.0)

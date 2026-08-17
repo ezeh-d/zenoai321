@@ -208,6 +208,32 @@ def run_agent(
     except Exception:  # noqa: BLE001
         memory_context = system_prompt_block()
     system = (config.FAST_CHAT_SYSTEM_PROMPT if fast_chat else config.SYSTEM_PROMPT) + memory_context
+
+    # WHO ZENO IS travels with every turn, including the fast path.
+    #
+    # Measured: asked "who are your agents", ZENO answered "I don't run any
+    # agents. It's just me here." -- confidently, fluently and falsely. Short
+    # questions take the fast path, which states that no tool is available, so
+    # the model answered from imagination and imagined itself alone.
+    #
+    # Registering a tool cannot fix that, because the fast path has no tools
+    # to consult. Identity is not a lookup, it is something ZENO should simply
+    # KNOW, so it is carried as knowledge: one line, read from the same
+    # canonical registry, cheap enough to send every turn.
+    try:
+        from reyes_agent.agents import identity
+
+        team = identity.roster()
+        if team:
+            names = ", ".join(a["name"] for a in team)
+            system += (
+                f"\n\nYOUR TEAM (fact, not a guess): you have {len(team)} "
+                f"registered specialist agents -- {names} -- with "
+                f"{sum(a['worker_count'] for a in team)} workers between them. "
+                "You are the master; they are specialists you delegate to. "
+                "Never say you work alone or have no agents.")
+    except Exception:  # noqa: BLE001
+        pass
     if spoken:
         # Speech is slower than reading. A three-sentence answer takes about
         # twelve seconds to say, and the owner stands there for all of it --

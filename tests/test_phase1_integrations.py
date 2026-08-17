@@ -100,9 +100,11 @@ def test_the_scene_cache_expires_and_can_be_invalidated() -> None:
     from reyes_agent.vision import scene_state
 
     scene_state.reset()
-    scene_state.current()
+    first_scene = scene_state.current()
     first = scene_state.stats()
-    scene_state.current()
+    # Keep this a cache test rather than a race with whatever window receives
+    # focus while the test suite is running.
+    scene_state.current(handle=first_scene.window_handle)
     assert scene_state.stats()["hits"] > first["hits"], "a second read must reuse the cache"
     scene_state.invalidate()
     assert scene_state.stats()["cached"] is False, "invalidate must drop the scene"
@@ -161,6 +163,27 @@ def test_the_fast_path_handles_known_commands_without_perception() -> None:
     # Anything needing eyes escalates rather than being faked.
     assert controller.classify("find the settings menu and turn on dark mode") == controller.AGENTIC
     assert deterministic.match("find the settings menu") is None
+    assert deterministic.match("run my tests") is None
+    assert deterministic.match("run this Python script") is None
+
+
+def test_agentic_deadline_uses_a_monotonic_clock() -> None:
+    from reyes_agent.computer import agentic
+
+    real_clock = agentic.time.monotonic
+    real_act = agentic.act
+    ticks = iter((100.0, 101.0))
+    agentic.time.monotonic = lambda: next(ticks)
+    agentic.act = lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("an already-expired plan must not execute an action"))
+    try:
+        result = agentic._run_locked(
+            "expired", [{"action": "observe"}], approved=False,
+            override_idle=False, max_steps=1, deadline_s=0.5, cancel_check=None)
+    finally:
+        agentic.time.monotonic = real_clock
+        agentic.act = real_act
+    assert result.reason.startswith("stopped at the")
 
 
 def test_fast_path_does_not_turn_a_gated_non_execution_into_success() -> None:

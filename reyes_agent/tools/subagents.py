@@ -378,6 +378,17 @@ def delegate(specialist: str, task: str) -> str:
         if agent_runtime.is_running():
             handle = agent_runtime.submit(specialist, task, lambda: _run_specialist(specialist, spec, task))
             if handle is not None:
+                try:
+                    from reyes_agent import event_bus
+
+                    event_bus.publish(
+                        "agent.handoff",
+                        {"from": "zeno", "to": specialist, "agent": specialist,
+                         "task_id": handle.id, "task": task[:200], "status": "STARTED"},
+                        source="subagents", correlation_id=handle.id,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 # Do not block an interrupted parent turn for the full
                 # specialist timeout. The managed context propagates the
                 # cancellation request into the specialist's provider/tool
@@ -396,10 +407,45 @@ def delegate(specialist: str, task: str) -> str:
                     if time.monotonic() >= deadline:
                         handle.cancel("delegation timeout")
                         return f"Error: task for {specialist} timed out after 180s."
-                return handle.wait(timeout=0)
+                result = handle.wait(timeout=0)
+                try:
+                    from reyes_agent import event_bus
+
+                    failed = str(result).startswith(("Error:", "Sub-agent"))
+                    event_bus.publish(
+                        "agent.message",
+                        {"from": specialist, "to": "zeno", "agent": specialist,
+                         "task_id": handle.id, "status": "FAILED" if failed else "DONE",
+                         "summary": "Specialist reported failure." if failed else "Specialist returned its result to ZENO."},
+                        source="subagents", correlation_id=handle.id,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                return result
     except Exception:  # noqa: BLE001 -- never let the runtime break delegation
         pass
-    return _run_specialist(specialist, spec, task)
+    try:
+        from reyes_agent import event_bus
+
+        event_bus.publish("agent.handoff",
+                          {"from": "zeno", "to": specialist, "agent": specialist,
+                           "task": task[:200], "status": "STARTED"},
+                          source="subagents")
+    except Exception:  # noqa: BLE001
+        pass
+    result = _run_specialist(specialist, spec, task)
+    try:
+        from reyes_agent import event_bus
+
+        failed = str(result).startswith(("Error:", "Sub-agent"))
+        event_bus.publish("agent.message",
+                          {"from": specialist, "to": "zeno", "agent": specialist,
+                           "status": "FAILED" if failed else "DONE",
+                           "summary": "Specialist reported failure." if failed else "Specialist returned its result to ZENO."},
+                          source="subagents")
+    except Exception:  # noqa: BLE001
+        pass
+    return result
 
 
 @register(

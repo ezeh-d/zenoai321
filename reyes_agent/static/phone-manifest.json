@@ -1,0 +1,10 @@
+{
+  "name": "ZENO Phone Companion",
+  "short_name": "ZENO",
+  "description": "A secure local companion for the running ZENO desktop core.",
+  "start_url": "/phone",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#060912",
+  "theme_color": "#080c18"
+}

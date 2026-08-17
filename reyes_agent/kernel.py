@@ -222,6 +222,11 @@ class ZenoKernel:
         except Exception:
             pass
         try:
+            from reyes_agent import notification_listener
+            notification_listener.shutdown_background()
+        except Exception:
+            pass
+        try:
             from reyes_agent.wake import get_wake_engine
             get_wake_engine().stop()
         except Exception:

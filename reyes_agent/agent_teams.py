@@ -621,6 +621,10 @@ def run_worker(parent: str, worker_name: str, task: str) -> str:
         current_task_cancel_check = lambda: None  # noqa: E731
 
     started = time.time()
+    _publish("agent.handoff",
+             {"from": parent, "to": worker_name, "agent": worker_name,
+              "parent": parent, "worker": worker_name, "task": task[:200],
+              "status": "STARTED"})
     _publish("agent.worker_started",
              {"agent": worker_name, "parent": parent, "worker": worker_name,
               "role": worker.role, "task": task[:200], "visual_state": "working",
@@ -701,6 +705,12 @@ def run_worker(parent: str, worker_name: str, task: str) -> str:
                   "duration_ms": int((time.time() - started) * 1000),
                   "visual_state": visual_state, "outcome": outcome,
                   "detail": detail})
+        _publish("agent.message",
+                 {"from": worker_name, "to": parent, "agent": worker_name,
+                  "parent": parent, "worker": worker_name, "status": outcome.upper(),
+                  "summary": ("Worker returned its result to its commander."
+                              if outcome == "completed" else
+                              "Worker reported that it did not complete the task.")})
 
 
 def enter_primary_scope() -> Any:

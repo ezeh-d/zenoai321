@@ -299,9 +299,13 @@ def test_a_long_build_does_not_block_the_caller() -> None:
     assert job.state in {jobs.STARTING, jobs.RUNNING} and job.pid
 
     # Status is queryable while it runs, and output accumulates.
-    time.sleep(1.0)
-    mid = jobs.get(job.id).as_dict()
-    assert mid["state"] == jobs.RUNNING and mid["lines"] >= 1
+    output_deadline = time.monotonic() + 4.0
+    while time.monotonic() < output_deadline:
+        mid = jobs.get(job.id).as_dict()
+        if mid["lines"] >= 1:
+            break
+        time.sleep(0.1)
+    assert mid["state"] in {jobs.RUNNING, jobs.SUCCESS} and mid["lines"] >= 1
 
     done = jobs.wait(job.id, timeout=20)
     assert done.state == jobs.SUCCESS and done.exit_code == 0

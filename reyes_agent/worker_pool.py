@@ -242,7 +242,10 @@ class ManagedWorkerPool:
         self._start_lock = threading.Lock()
         self._metrics_lock = threading.Lock()
         self._active: dict[str, TaskHandle[Any]] = {}
-        self._recent: deque[TaskHandle[Any]] = deque(maxlen=100)
+        # Keep only redacted lightweight failure metadata. Retaining 100
+        # successful TaskHandle objects also retained each handle's two Events
+        # and Lock -- roughly 300 Windows semaphore handles at steady state.
+        self._recent_failures: deque[dict[str, Any]] = deque(maxlen=10)
         self._submitted = 0
         self._completed = 0
         self._failed = 0
@@ -391,7 +394,6 @@ class ManagedWorkerPool:
                     (handle.started_at or handle.submitted_at))
         with self._metrics_lock:
             self._active.pop(handle.id, None)
-            self._recent.append(handle)
             self._total_duration += duration
             if state == COMPLETED:
                 self._completed += 1
@@ -401,25 +403,19 @@ class ManagedWorkerPool:
                 self._timed_out += 1
             else:
                 self._failed += 1
-
-    def metrics(self) -> dict[str, Any]:
-        with self._metrics_lock:
-            finished = self._completed + self._failed + self._cancelled + self._timed_out
-            # Keep diagnostics useful without leaking exception messages, which
-            # may contain provider responses, paths, or credentials.  The
-            # bounded deque already limits retained handles; expose only the
-            # ten newest unsuccessful task identities and exception classes.
-            recent_failures: list[dict[str, Any]] = []
-            for handle in reversed(self._recent):
-                if handle.state not in {FAILED, TIMED_OUT}:
-                    continue
+            if state in {FAILED, TIMED_OUT}:
                 item = handle.snapshot()
                 item["exception_type"] = (
                     type(handle.exception).__name__ if handle.exception is not None else ""
                 )
-                recent_failures.append(item)
-                if len(recent_failures) >= 10:
-                    break
+                self._recent_failures.append(item)
+
+    def metrics(self) -> dict[str, Any]:
+        with self._metrics_lock:
+            finished = self._completed + self._failed + self._cancelled + self._timed_out
+            # Exception messages/results are deliberately never retained:
+            # provider output, paths or credentials may appear in them.
+            recent_failures = list(reversed(self._recent_failures))
             return {
                 "workers": self.max_workers,
                 "workers_alive": sum(t.is_alive() for t in self._threads),

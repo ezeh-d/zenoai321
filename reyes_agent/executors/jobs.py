@@ -95,6 +95,7 @@ class Job:
     pid: int | None = None
     exit_code: int | None = None
     started_at: float = 0.0
+    _started_monotonic: float = 0.0
     finished_at: float = 0.0
     created_at: float = field(default_factory=time.time)
     error: str = ""
@@ -172,7 +173,8 @@ def _watch() -> None:
             if code is not None:
                 _finish(job, SUCCESS if code == 0 else FAILED, exit_code=code)
                 continue
-            if job.timeout and job.started_at and (time.time() - job.started_at) > job.timeout:
+            if (job.timeout and job._started_monotonic
+                    and (time.monotonic() - job._started_monotonic) > job.timeout):
                 # Kills only THIS job's process tree -- never a sweep of node
                 # processes, which would take out unrelated work.
                 try:
@@ -240,6 +242,7 @@ def start(command: str, cwd: Path, *, project: str = "", task_id: str = "",
         job._process = background
         job.pid = getattr(background.process, "pid", None)
         job.started_at = time.time()
+        job._started_monotonic = time.monotonic()
         job.state = RUNNING
     _emit(job, "running")
     _ensure_watchdog()
@@ -290,8 +293,8 @@ def wait(job_id: str, timeout: float = 60.0) -> Job | None:
     job = get(job_id)
     if job is None:
         return None
-    deadline = time.time() + max(0.0, timeout)
-    while job.running and time.time() < deadline:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while job.running and time.monotonic() < deadline:
         time.sleep(_POLL_S / 2)
     return job
 

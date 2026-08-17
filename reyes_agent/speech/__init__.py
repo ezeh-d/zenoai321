@@ -262,10 +262,10 @@ def capabilities() -> dict:
                               "note": "Requested on ZENO's browser MediaStream. The UI "
                                       "reports the browser's actual applied setting."},
         "speaker_identity": {
-            "implemented": True,
-            "engine": "local acoustic speaker similarity",
+            "implemented": bool(speaker.get("backend", {}).get("state") == "READY"),
+            "engine": "3D-Speaker CAM++ via sherpa-onnx",
             "profile": speaker,
-            "note": "Separate from STT confidence. Raw recordings are discarded; voice evidence is never authentication.",
+            "note": "Model-backed and separate from STT confidence. Raw recordings are discarded; voice evidence is never authentication.",
         },
         "upgrade_path": "register_vad() / register_recognizer() / register_wake_word()",
     }

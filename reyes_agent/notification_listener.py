@@ -20,9 +20,12 @@ same as any other REYES message request.
 from __future__ import annotations
 
 import asyncio
+import gc
 import sqlite3
 import threading
 import time
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from reyes_agent import config
 
@@ -36,6 +39,125 @@ _health_lock = threading.Lock()
 _consecutive_failures = 0
 _retry_after = 0.0
 _last_error_log = 0.0
+_pending_winrt = 0
+_runtime_lock = threading.Lock()
+_runtime_ready = threading.Event()
+_runtime_loop: asyncio.AbstractEventLoop | None = None
+_runtime_thread: threading.Thread | None = None
+
+
+async def _await_winrt(awaitable: Awaitable[Any]) -> Any:
+    """Bound a WinRT call without cancelling its native completion future."""
+    global _pending_winrt
+    task = asyncio.ensure_future(awaitable)
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=_WINRT_TIMEOUT_S)
+    except TimeoutError:
+        with _health_lock:
+            _pending_winrt += 1
+
+        def completed(future: asyncio.Future[Any]) -> None:
+            global _pending_winrt
+            try:
+                future.result()
+            except Exception:  # noqa: BLE001 -- completion is diagnostic cleanup
+                pass
+            finally:
+                with _health_lock:
+                    _pending_winrt = max(0, _pending_winrt - 1)
+
+        task.add_done_callback(completed)
+        raise
+
+
+def _runtime_main() -> None:
+    """Own one WinRT-compatible asyncio loop for the listener lifetime.
+
+    Repeated ``asyncio.run()`` calls on winsdk's WinRT objects leaked native
+    handles and exposed allocator corruption under Python's development mode.
+    One bounded loop thread preserves COM/WinRT affinity and is released by the
+    kernel's normal shutdown sequence.
+    """
+    global _runtime_loop, _runtime_thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    with _runtime_lock:
+        _runtime_loop = loop
+        _runtime_ready.set()
+    try:
+        loop.run_forever()
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+        with _runtime_lock:
+            if _runtime_loop is loop:
+                _runtime_loop = None
+                _runtime_thread = None
+            _runtime_ready.clear()
+
+
+def _ensure_runtime() -> asyncio.AbstractEventLoop:
+    global _runtime_thread
+    with _runtime_lock:
+        if (_runtime_loop is not None and _runtime_thread is not None
+                and _runtime_thread.is_alive()):
+            return _runtime_loop
+        _runtime_ready.clear()
+        _runtime_thread = threading.Thread(
+            target=_runtime_main, name="zeno-notification-winrt", daemon=True,
+        )
+        _runtime_thread.start()
+    if not _runtime_ready.wait(timeout=2.0):
+        raise TimeoutError("Notification WinRT loop did not start.")
+    with _runtime_lock:
+        if _runtime_loop is None:
+            raise RuntimeError("Notification WinRT loop stopped during startup.")
+        return _runtime_loop
+
+
+def _run_on_runtime(factory: Callable[[], Awaitable[Any]]) -> Any:
+    loop = _ensure_runtime()
+
+    async def invoke() -> Any:
+        try:
+            return await factory()
+        finally:
+            # Release winsdk wrappers on their owning event-loop thread. They
+            # can form cycles around native WinRT references, so ordinary
+            # refcounting otherwise left roughly one handle per poll.
+            gc.collect()
+
+    coroutine = invoke()
+    try:
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+    except Exception:
+        coroutine.close()
+        raise
+    try:
+        return future.result(timeout=_WINRT_TIMEOUT_S + 2.0)
+    except TimeoutError:
+        future.cancel()
+        raise
+
+
+def shutdown_background() -> None:
+    """Release the one notification event loop; safe to call repeatedly."""
+    deadline = time.monotonic() + _WINRT_TIMEOUT_S + 0.5
+    while time.monotonic() < deadline:
+        with _health_lock:
+            if _pending_winrt == 0:
+                break
+        time.sleep(0.05)
+    with _runtime_lock:
+        loop, thread = _runtime_loop, _runtime_thread
+    if loop is not None and loop.is_running():
+        loop.call_soon_threadsafe(loop.stop)
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=_WINRT_TIMEOUT_S + 2.0)
 
 
 def _connect() -> sqlite3.Connection:
@@ -81,10 +203,7 @@ async def _poll_once(speak_fn) -> None:
     # The WinRT operation has been observed hanging long enough to exhaust a
     # managed-worker deadline in a console-free WebView host.  wait_for keeps
     # this optional awareness feature from starving voice/model work.
-    notifs = await asyncio.wait_for(
-        listener.get_notifications_async(NotificationKinds.TOAST),
-        timeout=_WINRT_TIMEOUT_S,
-    )
+    notifs = await _await_winrt(listener.get_notifications_async(NotificationKinds.TOAST))
     for n in notifs:
         if _already_seen(n.id):
             continue
@@ -140,10 +259,7 @@ async def _baseline() -> None:
     listener = UserNotificationListener.current
     if listener.get_access_status() != 1:
         return
-    notifs = await asyncio.wait_for(
-        listener.get_notifications_async(NotificationKinds.TOAST),
-        timeout=_WINRT_TIMEOUT_S,
-    )
+    notifs = await _await_winrt(listener.get_notifications_async(NotificationKinds.TOAST))
     for n in notifs:
         _mark_seen(n.id)
 
@@ -182,7 +298,7 @@ def _log_error(exc: Exception) -> None:
 def _begin_attempt() -> bool:
     """Enter the one WinRT call allowed at a time, respecting backoff."""
     with _health_lock:
-        if time.monotonic() < _retry_after:
+        if time.monotonic() < _retry_after or _pending_winrt:
             return False
     return _api_gate.acquire(blocking=False)
 
@@ -222,6 +338,8 @@ def health() -> dict[str, object]:
             "retry_in_s": round(retry_in, 1),
             "winrt_timeout_s": _WINRT_TIMEOUT_S,
             "call_active": _api_gate.locked(),
+            "pending_winrt": _pending_winrt,
+            "runtime_alive": _runtime_thread is not None and _runtime_thread.is_alive(),
         }
 
 
@@ -229,7 +347,7 @@ def _baseline_once() -> None:
     if not _begin_attempt():
         return
     try:
-        asyncio.run(_baseline())
+        _run_on_runtime(_baseline)
         _record_success()
     except Exception as exc:  # noqa: BLE001 -- optional Windows API may be unavailable
         _record_failure(exc)
@@ -241,7 +359,7 @@ def _poll() -> None:
     if not _begin_attempt():
         return
     try:
-        asyncio.run(_poll_once(_speak))
+        _run_on_runtime(lambda: _poll_once(_speak))
         _record_success()
     except Exception as exc:  # noqa: BLE001 -- one bad poll must not stop future polls
         _record_failure(exc)

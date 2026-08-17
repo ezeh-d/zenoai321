@@ -34,3 +34,25 @@ def assistant_mode_status() -> str:
 
     return json.dumps({**modes.status(),
                        "runtime": modes.runtime_state().as_dict()}, default=str)
+
+
+@register(name="learn_my_voice",
+          description=("Learn the owner's voice so ZENO can tell him from "
+                       "other people in the room. Listens through whichever "
+                       "microphone is live and collects several spoken "
+                       "recordings. Use for 'learn my voice', 'enrol my "
+                       "voice', 'know my voice'."),
+          input_schema={"type": "object", "properties": {}})
+def learn_my_voice() -> str:
+    from reyes_agent.identity.speaker.capture import enrol_from_live_microphone
+
+    return json.dumps(enrol_from_live_microphone(), default=str)
+
+
+@register(name="voice_profile_status",
+          description="Whether ZENO has learned the owner's voice yet.",
+          input_schema={"type": "object", "properties": {}})
+def voice_profile_status() -> str:
+    from reyes_agent.identity.speaker.capture import status
+
+    return json.dumps(status(), default=str)

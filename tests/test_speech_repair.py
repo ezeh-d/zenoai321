@@ -49,7 +49,8 @@ def test_deepgram_request_has_a_real_network_timeout_and_no_retry() -> None:
 
     assert result == {"transcript": "heard clearly", "confidence": 0.91}
     assert captured["language"] == config.DEEPGRAM_LANGUAGE
-    assert captured["keyterm"] == list(config.DEEPGRAM_KEYTERMS)
+    assert set(config.DEEPGRAM_KEYTERMS).issubset(set(captured["keyterm"]))
+    assert "ZENO" in captured["keyterm"]
     assert captured["request_options"] == {
         "timeout_in_seconds": max(1, config.TRANSCRIBE_TIMEOUT_SECONDS - 2),
         "max_retries": 0,

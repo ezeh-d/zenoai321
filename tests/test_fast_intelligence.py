@@ -83,6 +83,22 @@ def test_pidgin_and_informal_english_are_understood() -> None:
     assert "status" in cognition.route("How far?").normalized
 
 
+def test_short_failure_memory_and_coding_commands_route_correctly() -> None:
+    from reyes_agent import cognition
+
+    failure = cognition.route("Why is ZENO not responding?")
+    assert failure.path == cognition.DEEP
+
+    continuation = cognition.route("Continue what we did yesterday.")
+    assert cognition.MEMORY in continuation.modes
+
+    for message in ("Fix this Python error.", "Run my tests."):
+        decision = cognition.route(message)
+        assert decision.path == cognition.DEEP, (message, decision.reasons)
+        assert cognition.SPECIALIST in decision.modes
+        assert decision.model_kind == "coding"
+
+
 def test_council_is_only_convened_when_asked() -> None:
     from reyes_agent import cognition
 
