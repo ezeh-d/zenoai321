@@ -55,9 +55,15 @@ def _run_bounded(args: list[str], *, cwd: Path, env: dict[str, str], timeout_s: 
             except OSError:
                 pass
 
+    # DAEMON. These are joined with a 5s timeout below, and a reader stuck on
+    # a pipe that never closes would otherwise outlive that join and keep the
+    # whole interpreter alive at exit -- which is how a "stopped" ZENO stays
+    # in the process list and its microphone keeps listening.
     readers = [
-        threading.Thread(target=drain, args=("stdout", process.stdout), name="zeno-oi-stdout"),
-        threading.Thread(target=drain, args=("stderr", process.stderr), name="zeno-oi-stderr"),
+        threading.Thread(target=drain, args=("stdout", process.stdout),
+                         name="zeno-oi-stdout", daemon=True),
+        threading.Thread(target=drain, args=("stderr", process.stderr),
+                         name="zeno-oi-stderr", daemon=True),
     ]
     for reader in readers:
         reader.start()

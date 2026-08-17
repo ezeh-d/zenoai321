@@ -3610,6 +3610,27 @@ def main() -> None:
 
     require_safe_startup()
 
+    # ONE RUNTIME. Observed on this machine: three ZENO processes at once.
+    # Only one held the ports; the others had still opened the microphone and
+    # the speech queue, so the owner heard TWO VOICES answering one sentence
+    # and heard "Checking" while sitting in silence. A port check could not
+    # catch it -- the duplicate never reached the bind.
+    #
+    # This reuses the EXISTING SingleInstanceGuard (a Windows kernel mutex,
+    # with an atomic O_EXCL file lock off Windows) rather than adding a second
+    # mechanism. It takes its OWN name, because desktop_app.py spawns this
+    # module as a child and holds the guard for the WINDOW: sharing one name
+    # would make the server refuse to start for its own parent.
+    from reyes_agent.single_instance import SingleInstanceGuard
+
+    runtime_guard = SingleInstanceGuard(f"{config.ASSISTANT_NAME}-runtime",
+                                        config.PROJECT_ROOT)
+    if not runtime_guard.acquire():
+        print(f"{config.ASSISTANT_NAME} is already running.")
+        print("  Stop that one first, or use it -- two runtimes would both")
+        print("  listen and both speak.")
+        raise SystemExit(1)
+
     print(f"{config.ASSISTANT_NAME} panel:")
     print(f"  this machine -> http://127.0.0.1:8765")
     sockets: list[socket.socket] = []
@@ -3640,6 +3661,9 @@ def main() -> None:
                 listener.close()
             except OSError:
                 pass
+        # Hand the runtime back, so a clean stop does not leave a lock that
+        # makes the NEXT start think ZENO is still running.
+        runtime_guard.release()
 
 
 if __name__ == "__main__":
