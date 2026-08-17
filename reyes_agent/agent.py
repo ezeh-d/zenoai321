@@ -80,7 +80,31 @@ def run_agent(
     # cloud providers too, not just Ollama. ZENO widens this mid-turn by
     # calling `enable_tools`, handled below.
     enabled_groups: set[str] = set()
+
+    # CAPABILITY ROUTING. Core alone is 105 schemas, and the measurement above
+    # is exactly why that hurts: "what time is it" was taking ~10s, most of it
+    # the model reading a catalogue it would never use. The router picks the
+    # handful this request could plausibly need, deterministically and in
+    # microseconds -- no extra model call, because trading one latency source
+    # for another is not a fix.
+    #
+    # It NARROWS, it never blocks: `enable_tools` still widens mid-turn, so a
+    # misroute costs one round rather than a capability.
+    _route = None
     tools = [] if config.MODEL_PROVIDER == "ollama" else tool_definitions(groups=enabled_groups)
+    if tools:
+        try:
+            from reyes_agent.routing import capability as _capability
+
+            _route = _capability.tools_for(message)
+            _allowed = set(_route.tools)
+            _narrowed = [t for t in tools if t["name"] in _allowed]
+            # Never hand back an empty toolset on a turn that had some: an
+            # empty list is a different request shape to some providers.
+            if _narrowed:
+                tools = _narrowed
+        except Exception:  # noqa: BLE001 -- routing must never break a turn
+            _route = None
 
     # --- Intelligence Router ------------------------------------------------
     # One local, sub-millisecond decision about how hard this turn should
@@ -141,9 +165,22 @@ def run_agent(
     if enabled_groups & {"analytics", "phase5"} and config.MODEL_PROVIDER != "ollama":
         tools = tool_definitions(groups=enabled_groups)
 
+    # Opportunity research is a dormant local engine.  Expose its compact
+    # tool group only for an actual income/market request; it performs no
+    # automatic web calls and never joins the startup path.
+    if any(marker in normalized_latest for marker in (
+        "make money", "online income", "income opportunity", "business opportunity",
+        "freelance", "micro-saas", "micro saas", "product idea", "find clients",
+        "market demand", "competitor research", "pricing research", "profitable niche",
+    )):
+        enabled_groups.add("opportunity")
+        if config.MODEL_PROVIDER != "ollama":
+            tools = tool_definitions(groups=enabled_groups)
+
     # Skills stay lazy. An explicit skill/routine request or a real trigger
     # match exposes only the small durable-skill control group. The match is
     # context for the existing planner, never an automatic execution bypass.
+    matched_skill_context = ""
     try:
         from reyes_agent.skills import manager as skill_manager
 
@@ -153,9 +190,15 @@ def run_agent(
         if matched_skill or any(word in latest.casefold() for word in skill_words):
             enabled_groups.add("skills")
             if matched_skill:
-                system += ("\n\nA real owner-approved persisted skill matches this request: "
-                           f"{matched_skill.name} ({matched_skill.skill_id}). Use skill_run "
-                           "if the user's request is to execute it; never imitate its result.")
+                # The system prompt is assembled after memory retrieval below.
+                # Appending here used to raise UnboundLocalError and the broad
+                # best-effort exception silently discarded approved skill
+                # context on precisely the turns that needed it.
+                matched_skill_context = (
+                    "\n\nA real owner-approved persisted skill matches this request: "
+                    f"{matched_skill.name} ({matched_skill.skill_id}). Use skill_run "
+                    "if the user's request is to execute it; never imitate its result."
+                )
             if config.MODEL_PROVIDER != "ollama":
                 tools = tool_definitions(groups=enabled_groups)
     except Exception:
@@ -207,7 +250,8 @@ def run_agent(
         memory_context = get_memory_manager().context_for(latest)
     except Exception:  # noqa: BLE001
         memory_context = system_prompt_block()
-    system = (config.FAST_CHAT_SYSTEM_PROMPT if fast_chat else config.SYSTEM_PROMPT) + memory_context
+    system = ((config.FAST_CHAT_SYSTEM_PROMPT if fast_chat else config.SYSTEM_PROMPT)
+              + memory_context + matched_skill_context)
 
     # WHO ZENO IS travels with every turn, including the fast path.
     #
