@@ -148,7 +148,13 @@ class StreamingTranscriber:
         self._last_error = ""
 
     # -- lifecycle --------------------------------------------------------
-    def start(self) -> bool:
+    def start(self, *, wait_timeout_s: float = 6.0) -> bool:
+        """Start the socket thread.
+
+        A zero wait is used by the audio-frame consumer: opening a network
+        socket must never block the only audio worker. Callers that need a
+        confirmed connection may retain the bounded default wait.
+        """
         ready, why = available()
         if not ready:
             self._last_error = why
@@ -161,7 +167,9 @@ class StreamingTranscriber:
             self._thread = threading.Thread(target=self._run, name="zeno-stt-stream",
                                             daemon=True)
             self._thread.start()
-        return self._open.wait(timeout=6.0)
+        if wait_timeout_s <= 0:
+            return True
+        return self._open.wait(timeout=min(6.0, float(wait_timeout_s)))
 
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -185,11 +193,13 @@ class StreamingTranscriber:
             # websockets renamed this parameter across versions; try both
             # rather than pinning, because the installed version varies.
             try:
-                socket = await websockets.connect(_url(), additional_headers=headers,
-                                                  max_size=None)
+                socket = await websockets.connect(
+                    _url(), additional_headers=headers, max_size=None,
+                    open_timeout=3.0, close_timeout=2.0)
             except TypeError:
-                socket = await websockets.connect(_url(), extra_headers=headers,
-                                                  max_size=None)
+                socket = await websockets.connect(
+                    _url(), extra_headers=headers, max_size=None,
+                    open_timeout=3.0, close_timeout=2.0)
         except Exception as exc:  # noqa: BLE001
             self._last_error = f"connect failed: {type(exc).__name__}: {exc}"
             return
@@ -198,7 +208,15 @@ class StreamingTranscriber:
         self._open.set()
         _LOG.info("deepgram streaming session opened")
         try:
-            async for raw in socket:
+            while not self._stop.is_set():
+                remaining = (IDLE_CLOSE_S if not self._last_audio_at else
+                             max(0.1, IDLE_CLOSE_S - self.idle_s))
+                try:
+                    raw = await asyncio.wait_for(socket.recv(), timeout=remaining)
+                except TimeoutError:
+                    if not self._last_audio_at or self.idle_s >= IDLE_CLOSE_S:
+                        break
+                    continue
                 if self._stop.is_set():
                     break
                 self._handle(raw)
@@ -296,6 +314,15 @@ class StreamingTranscriber:
     @property
     def idle_s(self) -> float:
         return time.time() - self._last_audio_at if self._last_audio_at else 0.0
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error
 
     def status(self) -> dict[str, Any]:
         ready, why = available()

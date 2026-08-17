@@ -210,7 +210,7 @@ DEEPGRAM_KEYTERMS = tuple(
 MIN_SPEECH_SECONDS = _bounded_env_float("MIN_SPEECH_SECONDS", 0.12, 0.05, 0.5)
 END_SILENCE_SECONDS = _bounded_env_float("END_SILENCE_SECONDS", 0.7, 0.4, 1.5)
 MAX_UTTERANCE_SECONDS = _bounded_env_float("MAX_UTTERANCE_SECONDS", 12.0, 4.0, 30.0)
-TRANSCRIBE_TIMEOUT_SECONDS = _bounded_env_int("TRANSCRIBE_TIMEOUT_SECONDS", 12, 5, 45)
+TRANSCRIBE_TIMEOUT_SECONDS = _bounded_env_int("TRANSCRIBE_TIMEOUT_SECONDS", 7, 5, 45)
 
 # Human-facing response budget.  This is a time-to-audible-response target,
 # not a promise that complex model/tool work finishes in 1.5 seconds.  When

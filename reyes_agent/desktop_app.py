@@ -45,17 +45,18 @@ _MINI_SIZE = 210
 _ORB_MARGIN = 24
 _OVERLAY_HEALTH_INTERVAL_S = 5.0
 _TOPMOST_REASSERT_INTERVAL_S = 30.0
+_STARTUP_SERVER_DEADLINE_S = 60.0
 _ORB_POSITION_FILE = (
     Path(os.environ.get("LOCALAPPDATA", str(config.PROJECT_ROOT)))
     / "ZENO" / "mini-orb-position.json"
 )
 _BOOT_HTML = """<!doctype html><html><head><meta charset='utf-8'><title>ZENO</title>
 <style>html,body{height:100%;margin:0;background:#050b1e;color:#b9d7ff;font:15px Segoe UI,sans-serif}
-main{height:100%;display:grid;place-items:center}.orb{width:88px;height:88px;border-radius:50%;
+main{height:100%;display:grid;place-content:center;justify-items:center;gap:14px}.orb{width:88px;height:88px;border-radius:50%;
 background:radial-gradient(circle at 35% 30%,#d9f6ff,#177bd1 42%,#07163e 72%);box-shadow:0 0 55px #1787e880;
-animation:pulse 2.8s ease-in-out infinite}
+animation:pulse 2.8s ease-in-out infinite}.status{max-width:170px;text-align:center;font-size:12px;color:#9eb4d7}
 @keyframes pulse{50%{transform:scale(1.08);box-shadow:0 0 78px #36a7ffb0}}</style></head>
-<body><main><div class='orb'></div></main></body></html>"""
+<body><main><div class='orb'></div><div class='status' id='status'>Starting ZENO…</div></main></body></html>"""
 
 
 def _read_orb_position() -> tuple[int, int] | None:
@@ -374,9 +375,11 @@ def _server_available(timeout: float = 1.0) -> bool:
         return False
 
 
-def _wait_for_server(timeout: float = 30.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+def _wait_for_server(timeout: float = 30.0, *, stop_check=None) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if stop_check is not None and stop_check():
+            return False
         if _server_available(timeout=1):
             return True
         time.sleep(0.3)
@@ -392,15 +395,21 @@ def _load_when_ready(api) -> None:
     """
     api.start_overlay_watchdog()
     _start_server()
-    if _wait_for_server():
+    started = time.monotonic()
+    stopping = lambda: api._shutting_down
+    if _wait_for_server(stop_check=stopping):
         api.load_mini_document()
         return
-    while _server_proc is None or _server_proc.poll() is None:
-        if _wait_for_server(timeout=5.0):
+    while (not api._shutting_down
+           and time.monotonic() - started < _STARTUP_SERVER_DEADLINE_S
+           and (_server_proc is None or _server_proc.poll() is None)):
+        remaining = _STARTUP_SERVER_DEADLINE_S - (time.monotonic() - started)
+        if _wait_for_server(timeout=min(5.0, max(0.0, remaining)), stop_check=stopping):
             api.load_mini_document()
             return
         if _server_proc is not None and _server_proc.poll() is not None:
-            return
+            break
+    api._show_startup_failure()
 
 
 class _DesktopApi:
@@ -582,6 +591,20 @@ class _DesktopApi:
             return False
         finally:
             self._bridge_end("load_mini_document")
+
+    def _show_startup_failure(self) -> None:
+        """Keep the native orb alive and state the bounded backend failure."""
+        with self._window_lock:
+            mini = self._mini_window
+        if mini is None or self._shutting_down:
+            return
+        try:
+            mini.evaluate_js(
+                "document.getElementById('status').textContent="
+                "'ZENO core did not start. Check zeno_server.log.'"
+            )
+        except Exception:  # noqa: BLE001 -- the shell remains movable regardless
+            pass
 
     def _move_orb_to(self, x: int, y: int, *, persist: bool) -> bool:
         with self._window_lock:

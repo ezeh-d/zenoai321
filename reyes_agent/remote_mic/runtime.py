@@ -115,6 +115,7 @@ class RemoteTurnConsumer:
         self._stream_parts: list[str] = []
         self._stream_confidence = 0.0
         self._stream_lock = threading.RLock()
+        self._stream_retry_at = 0.0
 
     def _streaming_enabled(self) -> bool:
         from reyes_agent import config
@@ -127,21 +128,46 @@ class RemoteTurnConsumer:
             return None
         with self._stream_lock:
             if self._stream is not None:
-                return self._stream
+                if self._stream.running:
+                    return self._stream
+                if self._stream.last_error and time.monotonic() < self._stream_retry_at:
+                    return None
+                try:
+                    self._stream.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._stream = None
             try:
                 from reyes_agent.voice.stt.streaming import StreamingTranscriber
 
                 transcriber = StreamingTranscriber(on_transcript=self._on_stream)
-                if not transcriber.start():
+                # Keep a reference before starting so the background connect
+                # cannot outlive an object the consumer has already discarded.
+                self._stream = transcriber
+                if not transcriber.start(wait_timeout_s=0.0):
+                    self._stream = None
                     self._emit("remote_mic.stt_stream_unavailable",
                                {"detail": transcriber.status().get("last_error", "")})
                     return None
-                self._stream = transcriber
+                self._stream_retry_at = time.monotonic() + 30.0
                 return transcriber
             except Exception as exc:  # noqa: BLE001
+                self._stream = None
+                self._stream_retry_at = time.monotonic() + 30.0
                 self._emit("remote_mic.stt_stream_unavailable",
                            {"detail": f"{type(exc).__name__}: {exc}"})
                 return None
+
+    def shutdown(self) -> None:
+        """Release the one optional streaming socket without touching audio ownership."""
+        with self._stream_lock:
+            stream = self._stream
+            self._stream = None
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001 -- shutdown remains best effort
+                pass
 
     def _on_stream(self, result: Any) -> None:
         """Collect finalised fragments as Deepgram promotes them."""
@@ -602,7 +628,12 @@ class RemoteMicRuntime:
             ids = list(self._peers)
         for device_id in ids:
             await self.close(device_id)
-        get_audio_manager().set_active_source(None)
+        self._consumer.shutdown()
+        manager = get_audio_manager()
+        if self._subscribed:
+            manager.unsubscribe("remote-phone-turn")
+            self._subscribed = False
+        manager.set_active_source(None)
 
     def status(self) -> dict[str, Any]:
         available, detail = self.available()

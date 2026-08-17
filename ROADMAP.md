@@ -6,8 +6,61 @@ Status vocabulary, used strictly:
 - **PARTIAL** — a real, working subset exists; the gap is named explicitly.
 - **NOT BUILT** — no code. Not stubbed, not faked, not simulated.
 
-Last updated: 2026-08-10. See `AGENT.md` for the dated engineering log
+Last updated: 2026-08-17. See `AGENT.md` for the dated engineering log
 behind each entry.
+
+## 2026-08-17 production hardening follow-up — VERIFIED
+
+This pass preserved Claude's current Human Companion, remote microphone,
+Mini Orb and staged-kernel work and corrected confirmed runtime defects rather
+than creating replacement subsystems.
+
+- Remote microphone source selection now demotes prolonged digital silence
+  *before* choosing the active microphone, uses the same speech-level energy
+  floor as its VAD, and forgets disconnected-source voice history. A dead but
+  well-connected WebRTC stream can no longer remain selected merely because
+  its transport statistics look healthy.
+- Deepgram streaming connection startup no longer blocks the sole audio-frame
+  worker. It connects on its own bounded thread, closes after 20 seconds idle,
+  observes a retry cooldown, and is explicitly closed and unsubscribed during
+  remote-runtime shutdown. Batch STT now has a seven-second request budget and
+  a 30-second circuit breaker, so an outage is isolated after one failed call
+  instead of imposing the same network wait on every spoken turn.
+- The local cognition router now recognises short but important natural
+  commands: not-responding/failure reports take the deep diagnostic path,
+  yesterday/continue phrases retrieve prior context, and Python/test/repository
+  actions wake the coding specialist. Pure app launches remain on the fast
+  zero-router-model path. `run my tests` is no longer misread as an application
+  named “my tests”.
+- Desktop automation deadlines and focus waits use monotonic time. The staged
+  desktop backend loader is bounded to 60 seconds, observes shutdown, and keeps
+  the native boot orb movable with an honest error message if the backend does
+  not become ready.
+- A real Playwright acceptance run found and fixed selector reads using the
+  wrong Playwright API. The repeated run opened a local page, filled a field,
+  clicked a control, read back `Verified Divine`, and closed the one persistent
+  context in 1.85 seconds. A separate owned Notepad run activated the exact PID,
+  typed and saved 32 characters, verified the bytes on disk, and cleaned up
+  only its temporary process/file.
+
+Verification at this checkpoint: the final maintained suite passed **960
+tests** in 238.35 seconds, with only the four existing FastAPI lifespan
+deprecation warnings. The focused voice, cognition, desktop, browser and
+lifecycle set passed **110 tests**. Python compilation, JavaScript syntax,
+dependency consistency and `git diff --check` also passed.
+
+The corrected desktop build was then restarted through the console-free
+launcher. Windows reported the one `ZENO Mini Orb` host responding (16 host
+threads, 106.2 MiB working set at the sample), the backend reached Stage 2
+with zero recorded freezes, and the Mini Orb reported `MICROPHONE_READY` with
+live audio from the default device. A synthetic but real provider call
+transcribed “Zeno, please open calculator” at 0.998 confidence in 4.265 seconds;
+the STT circuit remained closed. This validates capture and provider wiring,
+not arbitrary 1.5-second cloud reasoning.
+
+The intentional PARTIAL entries near the end of this roadmap remain honest
+safety or external-provider limits. They are not relabelled as DONE by removing
+confirmation, spoof-resistance, bounded delegation or evidence requirements.
 
 ## Phase 5 real-world power layer — READY WITH EXTERNAL LIMITATIONS (2026-08-10)
 

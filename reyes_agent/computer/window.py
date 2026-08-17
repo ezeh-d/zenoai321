@@ -131,8 +131,8 @@ def activate(handle: int, *, timeout_s: float = 2.0) -> tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
 
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         if is_foreground(handle):
             return True, "brought to the front"
         time.sleep(0.05)

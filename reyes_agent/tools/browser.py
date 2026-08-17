@@ -55,8 +55,8 @@ def browser_read(selector: str = "", max_chars: int = 4000) -> str:
         try:
             page = bc.get_page()
             if selector.strip():
-                element = page.query_selector(selector)
-                if element is None:
+                element = page.locator(selector).first
+                if element.count() == 0:
                     return f"No element matches '{selector}'."
                 text = element.inner_text(timeout=bc.action_timeout_ms(15_000))
             else:

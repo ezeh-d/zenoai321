@@ -119,6 +119,9 @@ def test_desktop_starts_server_from_background_loader_not_main() -> None:
     loader = ast.get_source_segment(source, functions["_load_when_ready"]) or ""
     assert "_start_server()" not in main
     assert "_start_server()" in loader
+    assert "time.monotonic()" in loader
+    assert "_STARTUP_SERVER_DEADLINE_S" in loader
+    assert "_show_startup_failure()" in loader
     assert "create_window(" in main
 
 

@@ -97,7 +97,7 @@ setInterval(async()=>{const a=api();if(!document.hidden&&a&&a.host_heartbeat){tr
 // suppression and produce a second permission/session inside one WebView.
 let wakeRecorder=null,wakeChunks=[],wakeTimer=null,wakeActive=false,wakeBusy=false,wakeDiscard=false,wakeRecoveryTimer=null,wakeRecoveryAttempts=0,miniListeningUntil=0,miniReplyAudio=null,pendingTurnText='',pendingTurnExpires=0,dashboardOwnsMicrophone=false;
 let miniThinkingAck=null,miniAckDelayMs=650,miniThinkingAckEnabled=true;
-let WAKE_MAX_CLIP_MS=12_000,TRANSCRIBE_TIMEOUT_MS=12_000;const WAKE_MIN_CLIP_BYTES=1_200;let speechSettingsPromise=null;
+let WAKE_MAX_CLIP_MS=12_000,TRANSCRIBE_TIMEOUT_MS=7_000;const WAKE_MIN_CLIP_BYTES=1_200;let speechSettingsPromise=null;
 const MIC_DEVICE_STORAGE='zeno.selectedMicrophoneId'; let miniAudioProved=false;
 let desktopMicTokenPromise=null;
 function desktopMicToken(){if(desktopMicTokenPromise)return desktopMicTokenPromise;const a=api();desktopMicTokenPromise=(a&&a.microphone_token)?Promise.resolve(a.microphone_token()).then(value=>String(value||''),()=> ''):Promise.resolve('');return desktopMicTokenPromise;}

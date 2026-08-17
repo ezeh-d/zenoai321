@@ -57,6 +57,38 @@ def test_deepgram_request_has_a_real_network_timeout_and_no_retry() -> None:
     }
 
 
+def test_failed_cloud_stt_opens_a_short_circuit_instead_of_stalling_every_turn() -> None:
+    from reyes_agent.voice.stt import manager
+
+    original_status = manager.cloud.status
+    original_cloud = manager.cloud.transcribe
+    original_local_ready = manager.local_whisper.ready
+    manager._reset_breaker_for_tests()
+    calls = 0
+
+    def fail(_audio: bytes) -> dict:
+        nonlocal calls
+        calls += 1
+        raise TimeoutError("provider unavailable")
+
+    manager.cloud.status = lambda: {"state": "READY"}
+    manager.cloud.transcribe = fail
+    manager.local_whisper.ready = lambda: False
+    try:
+        for _ in range(2):
+            try:
+                manager.transcribe_result(b"speech")
+            except manager.STTError:
+                pass
+        assert calls == 1, "the second turn must fail fast while the circuit is open"
+        assert manager._breaker_status()["state"] == "OPEN"
+    finally:
+        manager.cloud.status = original_status
+        manager.cloud.transcribe = original_cloud
+        manager.local_whisper.ready = original_local_ready
+        manager._reset_breaker_for_tests()
+
+
 def test_tiny_noise_and_timeout_always_leave_transcribing_state() -> None:
     dashboard = (ROOT / "reyes_agent" / "static" / "index.html").read_text(encoding="utf-8")
     function = dashboard.split("async function transcribeVADClip", 1)[1].split(

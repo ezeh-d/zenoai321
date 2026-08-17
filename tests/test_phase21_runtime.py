@@ -371,6 +371,39 @@ def test_browser_runtime_closes_thread_affine_context_before_worker_shutdown() -
         controller.is_open, controller.close_browser = original_is_open, original_close
 
 
+def test_browser_read_uses_the_timeout_capable_locator_api() -> None:
+    import reyes_agent.tools.browser as browser_tools
+
+    observed: dict[str, object] = {}
+
+    class Locator:
+        @property
+        def first(self):
+            return self
+
+        def count(self) -> int:
+            return 1
+
+        def inner_text(self, *, timeout: int) -> str:
+            observed["timeout"] = timeout
+            return "Verified Divine"
+
+    class Page:
+        def locator(self, selector: str) -> Locator:
+            observed["selector"] = selector
+            return Locator()
+
+    original_page, original_run = browser_tools.bc.get_page, browser_tools._run
+    browser_tools.bc.get_page = lambda: Page()
+    browser_tools._run = lambda _name, action, **_kwargs: action()
+    try:
+        assert browser_tools.browser_read("#status") == "Verified Divine"
+    finally:
+        browser_tools.bc.get_page, browser_tools._run = original_page, original_run
+    assert observed["selector"] == "#status"
+    assert isinstance(observed["timeout"], int)
+
+
 def _run_all() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     failed = 0

@@ -186,6 +186,16 @@ def test_agentic_deadline_uses_a_monotonic_clock() -> None:
     assert result.reason.startswith("stopped at the")
 
 
+def test_window_focus_timeout_uses_a_monotonic_clock() -> None:
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "reyes_agent" / "computer" / "window.py").read_text(
+        encoding="utf-8")
+    activate = source.split("def activate(", 1)[1]
+    assert "deadline = time.monotonic()" in activate
+    assert "while time.monotonic() < deadline" in activate
+
+
 def test_fast_path_does_not_turn_a_gated_non_execution_into_success() -> None:
     from reyes_agent.computer import controller, deterministic
 

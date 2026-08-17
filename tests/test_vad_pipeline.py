@@ -33,7 +33,7 @@ def test_listener_records_the_processed_stream_not_web_speech() -> None:
     assert "voiceVAD.mediaStream()" in active
     assert "new MediaRecorder(stream" in active
     assert "let VAD_MAX_CLIP_MS = 12_000" in source
-    assert "TRANSCRIBE_TIMEOUT_MS = 12_000" in source
+    assert "TRANSCRIBE_TIMEOUT_MS = 7_000" in source
     assert "fetch('/api/transcribe'" in active
     assert "signal: controller.signal" in active
     assert "ignored a short noise spike" in active

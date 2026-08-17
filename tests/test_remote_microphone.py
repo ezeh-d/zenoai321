@@ -5,7 +5,7 @@ from fractions import Fraction
 from pathlib import Path
 import time
 
-from reyes_agent.audio.manager import AudioManager
+from reyes_agent.audio.manager import AudioManager, get_audio_manager
 from reyes_agent.phone_security import DEFAULT_SCOPES, REMOTE_AUDIO_SEND
 from reyes_agent.remote_access.boundary import remote_path_allowed
 from reyes_agent.remote_mic.quality import AudioQuality
@@ -125,6 +125,27 @@ def test_digital_silence_is_demoted_before_source_selection() -> None:
     metrics = {"score": 92.0, "rms": 900.0}
     assert runtime._apply_silence_fallback(source, metrics, now=27.0) == 92.0
     assert source not in runtime._quiet_since
+
+
+def test_streaming_stt_start_never_blocks_the_audio_consumer() -> None:
+    from reyes_agent.voice.stt import streaming
+
+    transcriber = streaming.StreamingTranscriber(lambda _result: None)
+    transcriber._run = lambda: time.sleep(0.2)
+    started = time.perf_counter()
+    assert transcriber.start(wait_timeout_s=0.0) is True
+    elapsed = time.perf_counter() - started
+    transcriber.close()
+    assert elapsed < 0.05, f"socket startup blocked the audio worker for {elapsed:.3f}s"
+
+
+def test_remote_runtime_shutdown_releases_its_audio_subscription() -> None:
+    runtime = RemoteMicRuntime()
+    runtime.set_command_handler(lambda *_args: {})
+    manager = get_audio_manager()
+    assert "remote-phone-turn" in manager.status()["consumers"]
+    asyncio.run(runtime.shutdown())
+    assert "remote-phone-turn" not in manager.status()["consumers"]
 
 
 def test_quality_score_is_bounded_and_silence_does_not_disconnect() -> None:
