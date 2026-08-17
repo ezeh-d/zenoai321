@@ -1,0 +1,52 @@
+{
+  "cycles": 3,
+  "steps_run": 18,
+  "by_action": {
+    "open": {
+      "attempts": 3,
+      "ok": 0,
+      "verified": 0,
+      "median_ms": 81423.6
+    },
+    "read": {
+      "attempts": 3,
+      "ok": 1,
+      "verified": 1,
+      "median_ms": 20031.5
+    },
+    "scroll": {
+      "attempts": 3,
+      "ok": 1,
+      "verified": 1,
+      "median_ms": 9992.6
+    },
+    "extract": {
+      "attempts": 3,
+      "ok": 0,
+      "verified": 0,
+      "median_ms": 7.2
+    },
+    "screenshot": {
+      "attempts": 3,
+      "ok": 2,
+      "verified": 2,
+      "median_ms": 5616.5
+    },
+    "missing_selector": {
+      "attempts": 3,
+      "ok": 1,
+      "verified": 1,
+      "median_ms": 21518.6
+    }
+  },
+  "chromium": {
+    "before": 49,
+    "peak": 58,
+    "after": 48,
+    "leaked": -1,
+    "verdict": "clean"
+  },
+  "notes": [
+    "clicking a non-existent selector reported SUCCESS -- a click that cannot have happened must not report success"
+  ]
+}

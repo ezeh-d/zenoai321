@@ -1,0 +1,50 @@
+{
+  "cycles": 6,
+  "steps_run": 36,
+  "by_action": {
+    "open": {
+      "attempts": 6,
+      "ok": 6,
+      "verified": 4,
+      "median_ms": 716.5
+    },
+    "read": {
+      "attempts": 6,
+      "ok": 3,
+      "verified": 3,
+      "median_ms": 216.0
+    },
+    "scroll": {
+      "attempts": 6,
+      "ok": 6,
+      "verified": 6,
+      "median_ms": 902.6
+    },
+    "extract": {
+      "attempts": 6,
+      "ok": 3,
+      "verified": 3,
+      "median_ms": 276.2
+    },
+    "screenshot": {
+      "attempts": 6,
+      "ok": 6,
+      "verified": 6,
+      "median_ms": 1049.4
+    },
+    "missing_selector_must_fail": {
+      "attempts": 6,
+      "ok": 0,
+      "verified": 0,
+      "median_ms": 15176.1
+    }
+  },
+  "chromium": {
+    "before": 44,
+    "peak": 54,
+    "after": 46,
+    "leaked": 2,
+    "verdict": "LEAK"
+  },
+  "notes": []
+}

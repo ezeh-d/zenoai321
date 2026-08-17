@@ -1,0 +1,59 @@
+{
+  "duration_minutes": 30.7,
+  "requests": 89,
+  "failures": 19,
+  "failure_rate_pct": 21.35,
+  "errors": {
+    "agents:TimeoutError": 4,
+    "conversation:TimeoutError": 4,
+    "utility:TimeoutError": 3,
+    "memory_read:TimeoutError": 2,
+    "memory_write:TimeoutError": 1,
+    "diagnostics:TimeoutError": 1,
+    "diagnostics:HTTP502": 1,
+    "conversation:HTTP502": 2,
+    "memory_read:HTTP502": 1
+  },
+  "latency_s": {
+    "median": 2.34,
+    "p95": 95.13,
+    "max": 119.08
+  },
+  "rss_mb": {
+    "first": 331.3,
+    "last": 301.7,
+    "growth_pct": -8.9,
+    "peak": 463.3,
+    "verdict": "stable"
+  },
+  "threads": {
+    "first": 49.1,
+    "last": 51.9,
+    "growth_pct": 5.8,
+    "peak": 71,
+    "verdict": "stable"
+  },
+  "processes": {
+    "first": 6.4,
+    "last": 6.9,
+    "growth_pct": 8.3,
+    "peak": 8,
+    "verdict": "stable"
+  },
+  "handles": {
+    "first": 2419.7,
+    "last": 2703.6,
+    "growth_pct": 11.7,
+    "peak": 3281,
+    "verdict": "stable"
+  },
+  "audio_sources": {
+    "samples": 0,
+    "verdict": "too few samples"
+  },
+  "bus_subscribers": {
+    "samples": 0,
+    "verdict": "too few samples"
+  },
+  "samples": 60
+}

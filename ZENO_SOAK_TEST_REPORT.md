@@ -1,63 +1,91 @@
 # ZENO — Soak Test Report
 
-## Status: NOT RUN
+## Status: RUN — 30.7 minutes
 
-The brief was explicit: *"Do not merely say that a long-duration test is
-recommended. Actually create/run an automated stability harness where
-possible… Never claim a duration that did not occur."*
+Harness: `tools/soak_test.py`. Duration **30.7 minutes**, **89 requests**,
+**60 samples** at 20-second intervals, against the live server.
 
-**No 30-minute or 60-minute soak test was performed in this phase.** No harness
-was built. I am reporting that plainly rather than presenting shorter work as
-if it satisfied the requirement.
+This replaces the previous version of this file, which correctly recorded that
+no soak test had been performed.
 
-## Why
+## Resource trends — the reason a soak exists
 
-This phase had four missions. I completed Mission 1 (the capability router) and
-part of Mission 2 (benchmarking), because Mission 1 addressed the measured
-10-second problem that prompted the phase and every other mission's numbers
-would have been measured against the slow build otherwise.
+Growth judged by comparing the last quarter of the run against the first. A
+single increase is not a leak; sustained monotonic growth is.
 
-The remaining context budget was not sufficient to build a soak harness, run it
-for 30–60 minutes, and repair anything it surfaced. Starting one and abandoning
-it partway would have produced a duration I could not stand behind.
+| resource | first | last | growth | peak | verdict |
+|---|---:|---:|---:|---:|---|
+| RSS (MB, all python) | 331.3 | 301.7 | **−8.9 %** | 463.3 | **stable** |
+| Threads | 49.1 | 51.9 | +5.8 % | 71 | **stable** |
+| Processes | 6.4 | 6.9 | +8.3 % | 8 | **stable** |
+| Handles | 2 419.7 | 2 703.6 | +11.7 % | 3 281 | **stable** |
 
-## What *was* observed over the session
+**No memory leak. No thread leak. No process accumulation.** Memory ended
+*lower* than it started, which is what a healthy GC under varying load looks
+like. Handles grew 11.7 % — real but well inside noise for a half-hour window,
+and it did not climb monotonically.
 
-Not a substitute for a soak test, and offered only as what is actually known:
+This is the first evidence in the project that ZENO survives sustained use
+without unbounded growth.
 
-| observation | evidence |
-|---|---|
-| Multiple ZENO runtimes accumulated | three processes found; **fixed** — the server now takes the single-instance guard |
-| Audio sources accumulated across reconnects | five registered, the selected one reading 0.1 RMS; **fixed** — dead sources demoted after 25 s |
-| Non-daemon threads could outlive shutdown | two found in `interpreter_client.py`; **fixed** |
-| Thread leak under provider outage | a new transcriber + thread per audio frame; **fixed by Codex** (30 s backoff) |
-| Full suite run 3× with ZENO live | 1010 pass, no crashes, no hangs |
+## Failures — 21.35 %, and they are real
 
-Every one of those is a genuine stability defect found and repaired. None of
-them was found by a soak test — they were found by the owner using the system
-and by reading the code.
+| error | count |
+|---|---:|
+| TimeoutError (various categories) | 15 |
+| HTTP 502 | 4 |
 
-## What a soak test would still catch
+| latency | value |
+|---|---:|
+| median | **2.34 s** |
+| p95 | **95.13 s** |
+| max | **119.08 s** |
 
-Unbounded growth over time is exactly the class this session did **not**
-sample: RAM/thread/handle drift over an hour, event-subscriber multiplication
-across UI reloads, browser process accumulation, gradually increasing audio
-latency, and queue corruption under sustained rapid commands.
+The median is healthy. The p95 is not, and I am not going to explain it away.
 
-## Recommended harness
+**What I can attribute:** the run overlapped deliberately with the browser
+stress test and with a concurrent Codex session on the same machine — the
+browser harness alone recorded an 81-second `browser_open` during this window
+that took 5.3 s when run alone. Contention is a real part of the explanation.
 
-A script driving `/api/chat` and the voice path on a loop for 60 minutes,
-sampling every 30 s: RSS, thread count, process count, open handles, audio
-source count, event-bus subscriber count. Alert on sustained monotonic growth
-rather than any single increase.
+**What I cannot attribute:** whether ZENO would show a 95-second p95 under
+sustained load *without* that contention. I did not run a quiet-machine
+control, so the number stands as measured and unexplained.
 
-The instrumentation for most of this already exists — `/api/phone/mic/levels`,
-`event_bus.stats()`, `agents/registry` health — so the harness is mostly
-orchestration, not new measurement.
+Every failure was a timeout or a 502 — **no crash, no hang, no corrupted
+state, and the loop continued through all of them.** Malformed input
+(null bytes, 4 000-character strings, 200 emoji, empty strings) produced no
+failures at all.
 
-## Honest summary
+## What the harness could not measure
 
-**Mission 3 is incomplete.** The system is measurably more stable than at the
-start of this session, and four real stability defects were repaired, but the
-long-duration test the brief asked for did not happen and I will not describe
-it as though it did.
+`audio_sources` and `bus_subscribers` recorded **zero samples**. Both read
+process-local or endpoint state that was unavailable from the harness's
+process — the same trap that has bitten twice already in this project
+(the frame counter and the readiness check).
+
+So **event-subscriber multiplication and audio-source accumulation remain
+untested.** Those are two of the specific leaks the brief names, and this run
+does not cover them. Fixing the harness to query them over loopback is the
+obvious next step.
+
+## Workload exercised
+
+Conversation, utility, memory writes and recalls, agent queries, diagnostics,
+routing-sensitive phrasing, rapid 3-way concurrent bursts every third cycle,
+and malformed input every fourth cycle.
+
+Not exercised: desktop automation and browser launches (deliberately — those
+belong to the browser harness), TTS/STT lifecycle, wake/standby transitions.
+
+## Verdict
+
+**Resource stability: passed.** No leak of memory, threads, processes or
+handles over half an hour.
+
+**Latency under contention: failed.** A 95-second p95 is not acceptable, and
+the honest position is that contention explains some of it and I have not
+proven how much.
+
+**Coverage: incomplete.** Two named leak classes were not measured because the
+harness could not see them.
