@@ -68,8 +68,24 @@ try:
     from reyes_agent.remote_access.api import router as _remote_router
 
     app.include_router(_remote_router)
-except Exception:  # noqa: BLE001 -- remote access must never block ZENO booting
-    pass
+
+    # The authenticated owner surface: /api/owner/*. Everything except
+    # login, refresh, logout and the device-agent callbacks sits behind an
+    # owner session. Registered here so a route added later without its own
+    # dependency is still protected -- see cloud_api.register().
+    from reyes_agent.remote_access import cloud_api as _cloud_api
+
+    _cloud_api.register(app)
+except Exception as _remote_exc:  # noqa: BLE001 -- must never block ZENO booting
+    # Swallowing this silently means ZENO can boot with NO owner API and no
+    # remote surface while looking perfectly healthy. Booting anyway is still
+    # right -- the desktop must work even if remote access is broken -- but it
+    # has to say so.
+    import logging as _logging
+
+    _logging.getLogger(__name__).error(
+        "remote access and owner API failed to register: %s: %s",
+        type(_remote_exc).__name__, _remote_exc, exc_info=True)
 
 # Browser-provided JSON is never sufficient evidence that its speaker is the
 # owner.  The /api/transcribe worker creates a short-lived, server-signed
@@ -313,7 +329,7 @@ async def _on_startup() -> None:
 
     with _boot_lock:
         _boot_state.update({"phase": "http_ready", "started_at": time.time(), "errors": []})
-        _boot_completed.clear()
+
     kernel = get_kernel()
     # Stage 1 owns only the cheap local runtime primitives.  The desktop
     # shell can render before this server is even reachable; this handler
@@ -323,6 +339,18 @@ async def _on_startup() -> None:
     kernel.register_service("core-runtime", stage=STAGE_CORE, start=_boot_core)
     kernel.register_service("executive-runtime", stage=STAGE_CORE, start=_boot_executive_runtime)
     kernel.register_service("core-services", stage=STAGE_CORE, start=_boot_background_services)
+    # ZENO Anywhere is an outbound-only service and belongs to the same
+    # lifecycle authority as every other long-running worker.  Registration
+    # itself performs no I/O.  It is scheduled only when all credentials are
+    # present and Kernel shutdown always joins it through stop_current().
+    from reyes_agent.remote_access import desktop_agent as _desktop_agent
+    anywhere_connector_enabled = _desktop_agent.configured()
+    kernel.register_service(
+        "zeno-anywhere-connector",
+        stage=STAGE_CORE if anywhere_connector_enabled else STAGE_LAZY,
+        start=_desktop_agent.start_from_environment,
+        stop=_desktop_agent.stop_current,
+    )
     # The connector has no credentials in this process. It starts only when
     # the owner supplied a named-tunnel configuration, and remains bounded
     # under the kernel's lifecycle/shutdown authority.
@@ -360,8 +388,10 @@ async def _on_startup() -> None:
     kernel.start_service("core-runtime", delay=1.5)
     kernel.start_service("executive-runtime", delay=1.8)
     kernel.start_service("core-services", delay=2.5)
+    if anywhere_connector_enabled:
+        kernel.start_service("zeno-anywhere-connector", delay=3.0)
     if tunnel_enabled:
-        kernel.start_service("phone-cloudflare-tunnel", delay=3.0)
+        kernel.start_service("phone-cloudflare-tunnel", delay=3.2)
     import asyncio
 
     _event_loop_probe_stop = asyncio.Event()
@@ -818,6 +848,57 @@ def social_kill_route() -> dict[str, Any]:
 @app.get("/favicon.ico")
 def favicon() -> FileResponse:
     return FileResponse(_STATIC_DIR / "favicon.ico")
+
+
+# --- the owner web app (PWA) -------------------------------------------
+# Served WITHOUT authentication on purpose: this is the login page. It holds
+# no secret -- every byte of it is public once deployed, which is exactly why
+# no credential or API key may ever be compiled into it. Everything it can
+# actually DO requires an owner session from /api/owner/auth/login.
+@app.get("/app")
+@app.get("/app/")
+def owner_app() -> FileResponse:
+    return FileResponse(_STATIC_DIR / "app.html", headers={
+        # no-store: an updated app must never be served from a stale cache,
+        # and the service worker handles genuine offline use.
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+    })
+
+
+@app.get("/zeno-config.js")
+def owner_app_config() -> Response:
+    # Local FastAPI is same-origin.  Netlify replaces this public file during
+    # its build with the configured HTTPS gateway URL.  No secret is ever
+    # written into either variant.
+    return Response('window.ZENO_CONFIG = {"apiBaseUrl":""};\n',
+                    media_type="text/javascript",
+                    headers={"Cache-Control": "no-store",
+                             "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/app/manifest.webmanifest")
+def owner_app_manifest() -> FileResponse:
+    return FileResponse(_STATIC_DIR / "app" / "manifest.webmanifest",
+                        media_type="application/manifest+json")
+
+
+@app.get("/app/sw.js")
+def owner_app_sw() -> FileResponse:
+    # A service worker may only control the paths in its own scope, and the
+    # browser refuses a wider scope unless the script is served from it.
+    return FileResponse(_STATIC_DIR / "app" / "sw.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-store",
+                                 "Service-Worker-Allowed": "/app"})
+
+
+@app.get("/app/icon-{size}.png")
+def owner_app_icon(size: str) -> FileResponse:
+    if size not in {"192", "512"}:
+        raise HTTPException(status_code=404, detail="No such icon.")
+    return FileResponse(_STATIC_DIR / "app" / f"icon-{size}.png", media_type="image/png")
 
 
 @app.get("/api/status")

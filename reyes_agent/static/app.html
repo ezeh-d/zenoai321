@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07090f">
+<title>ZENO</title>
+<link rel="manifest" href="/app/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/app/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+:root{
+  --bg:#07090f; --panel:#0e1420; --panel2:#131c2b; --line:#1e2a3d;
+  --ink:#e8eef8; --dim:#8496b0; --faint:#5a6a83;
+  --accent:#4da3ff; --accent2:#7d5cff;
+  --ok:#35d39a; --warn:#f5b544; --bad:#ff5f6d;
+  --radius:16px; --tap:44px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--ink);
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  overscroll-behavior-y:none;
+  padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom);
+}
+button,input,textarea{font:inherit;color:inherit}
+button{background:none;border:0;cursor:pointer;min-height:var(--tap)}
+button:disabled{opacity:.42;cursor:not-allowed}
+.hide{display:none!important}
+
+/* ---------- shell ---------- */
+#app{display:flex;flex-direction:column;height:100dvh;max-width:820px;margin:0 auto}
+header{
+  display:flex;align-items:center;gap:10px;padding:12px 16px;
+  border-bottom:1px solid var(--line);background:var(--bg);
+  position:sticky;top:0;z-index:20
+}
+.brand{font-weight:700;letter-spacing:.14em;font-size:14px}
+.pill{
+  display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+  background:var(--panel2);border:1px solid var(--line);font-size:11.5px;color:var(--dim)
+}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.dot.off{background:var(--bad)}
+.dot.warn{background:var(--warn)}
+main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px}
+nav{
+  display:flex;border-top:1px solid var(--line);background:var(--panel);
+  position:sticky;bottom:0;z-index:20;overflow-x:auto;scrollbar-width:none
+}
+nav button{
+  flex:1 0 62px;padding:9px 2px 11px;font-size:10px;letter-spacing:.05em;
+  color:var(--faint);display:flex;flex-direction:column;align-items:center;gap:3px
+}
+nav button.sel{color:var(--accent)}
+nav svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7}
+
+/* ---------- orb ---------- */
+.orbwrap{display:flex;flex-direction:column;align-items:center;gap:14px;padding:22px 0 8px}
+.orb{position:relative;width:132px;height:132px}
+.orb i{
+  position:absolute;inset:0;border-radius:50%;
+  background:radial-gradient(circle at 34% 30%,#8fd0ff,var(--accent) 42%,var(--accent2) 78%);
+  animation:breathe 4.6s ease-in-out infinite
+}
+.orb b{
+  position:absolute;inset:-16px;border-radius:50%;
+  background:radial-gradient(circle,rgba(77,163,255,.30),transparent 68%);
+  animation:halo 4.6s ease-in-out infinite
+}
+.orb.busy i{animation-duration:1.15s}
+.orb.off i{background:radial-gradient(circle at 34% 30%,#59647a,#333c4c 70%)}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.055)}}
+@keyframes halo{0%,100%{opacity:.5}50%{opacity:.95}}
+@media (prefers-reduced-motion:reduce){.orb i,.orb b{animation:none}}
+
+/* ---------- cards ---------- */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+.card h3{margin:0 0 10px;font-size:11px;letter-spacing:.14em;color:var(--faint);font-weight:600;text-transform:uppercase}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .k{color:var(--dim);font-size:13px}
+.row .v{font-variant-numeric:tabular-nums;font-size:13px;text-align:right}
+.muted{color:var(--faint);font-size:12.5px}
+.na{color:var(--faint);font-style:italic;font-size:12.5px}
+
+/* ---------- chat ---------- */
+#log{display:flex;flex-direction:column;gap:10px;padding-bottom:8px}
+.msg{max-width:86%;padding:10px 13px;border-radius:15px;white-space:pre-wrap;word-break:break-word;font-size:14.5px}
+.me{align-self:flex-end;background:var(--accent);color:#04121f;border-bottom-right-radius:5px}
+.ze{align-self:flex-start;background:var(--panel2);border:1px solid var(--line);border-bottom-left-radius:5px}
+.sys{align-self:center;font-size:11.5px;color:var(--faint);text-align:center;max-width:94%}
+.composer{display:flex;gap:8px;padding:10px 0 2px;align-items:flex-end}
+.composer textarea{
+  flex:1;min-height:var(--tap);max-height:130px;resize:none;padding:11px 13px;
+  background:var(--panel2);border:1px solid var(--line);border-radius:13px;outline:none
+}
+.composer textarea:focus{border-color:var(--accent)}
+.icon{
+  width:var(--tap);height:var(--tap);border-radius:13px;background:var(--panel2);
+  border:1px solid var(--line);display:grid;place-items:center;flex:none
+}
+.icon.go{background:var(--accent);border-color:var(--accent)}
+.icon.go svg{stroke:#04121f}
+.icon svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:2}
+
+/* ---------- forms ---------- */
+input[type=email],input[type=password],input[type=text]{
+  width:100%;padding:12px 13px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:12px;outline:none;min-height:var(--tap)
+}
+input:focus{border-color:var(--accent)}
+.btn{
+  width:100%;padding:12px;border-radius:12px;background:var(--accent);color:#04121f;
+  font-weight:650;margin-top:10px
+}
+.btn.ghost{background:var(--panel2);border:1px solid var(--line);color:var(--ink);font-weight:500}
+.btn.danger{background:transparent;border:1px solid var(--bad);color:var(--bad)}
+.btn.sm{width:auto;padding:8px 13px;font-size:12.5px;min-height:36px;margin:0}
+label{display:block;font-size:11.5px;color:var(--faint);margin:11px 0 5px;letter-spacing:.05em}
+.err{color:var(--bad);font-size:12.5px;margin-top:9px;min-height:17px}
+
+/* login */
+#login{display:none;place-items:center;height:100dvh;padding:22px}
+#login.on{display:grid}
+#pending{display:none;place-items:center;height:100dvh;padding:22px}
+#pending.on{display:grid}
+.loginbox{width:100%;max-width:360px}
+.loginbox .orb{width:74px;height:74px;margin:0 auto 20px}
+
+/* badges */
+.tag{font-size:10px;padding:2.5px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);letter-spacing:.06em}
+.tag.ok{color:var(--ok);border-color:rgba(53,211,154,.4)}
+.tag.bad{color:var(--bad);border-color:rgba(255,95,109,.4)}
+.tag.warn{color:var(--warn);border-color:rgba(245,181,68,.4)}
+.disabled-note{font-size:11.5px;color:var(--warn);margin-top:7px;line-height:1.45}
+</style>
+</head>
+<body>
+
+<!-- ================= LOGIN ================= -->
+<section id="login">
+  <div class="loginbox">
+    <div class="orb"><b></b><i></i></div>
+    <h2 style="text-align:center;margin:0 0 4px;font-size:19px">ZENO</h2>
+    <p style="text-align:center;color:var(--faint);font-size:12.5px;margin:0 0 18px" id="loginsub">Owner sign-in</p>
+    <label for="em">Email</label>
+    <input id="em" type="email" autocomplete="username" inputmode="email">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password">
+    <button class="btn" id="dologin">Sign in</button>
+    <button class="btn ghost" id="passkeylogin">Sign in with passkey</button>
+    <div class="err" id="loginerr"></div>
+  </div>
+</section>
+
+<!-- A password proves the person knows the owner credential; it does not
+     silently trust a new browser. The first login waits here until the
+     desktop operator approves this stable browser ID. -->
+<section id="pending">
+  <div class="loginbox card">
+    <h2 style="margin:0 0 8px">Approve this browser</h2>
+    <p class="muted">Sign-in succeeded, but this browser is not trusted yet. On the Windows machine run:</p>
+    <pre id="pendingcmd" style="white-space:pre-wrap;word-break:break-all;background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px;font:11.5px/1.6 ui-monospace,monospace"></pre>
+    <p class="muted" id="pendingstate">Waiting for approval…</p>
+    <button class="btn ghost" id="checkapproval">Check again</button>
+    <button class="btn danger" id="pendinglogout">Sign out</button>
+  </div>
+</section>
+
+<!-- ================= APP ================= -->
+<div id="app" class="hide">
+  <header>
+    <span class="brand">ZENO</span>
+    <span class="pill"><span class="dot" id="d-zeno"></span><span id="t-zeno">connecting</span></span>
+    <span class="pill"><span class="dot" id="d-dev"></span><span id="t-dev">laptop</span></span>
+    <button class="btn ghost sm" style="margin-left:auto" id="signout">Sign out</button>
+  </header>
+
+  <main id="main"></main>
+
+  <nav>
+    <button data-tab="home" class="sel"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>Home</button>
+    <button data-tab="chat"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chat</button>
+    <button data-tab="agents"><svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="3"/><path d="M2 21v-2a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v2"/><circle cx="18" cy="8" r="2.4"/></svg>Agents</button>
+    <button data-tab="tasks"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>Tasks</button>
+    <button data-tab="memory"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14l-4-3-4 3-4-3-4 3z"/></svg>Memory</button>
+    <button data-tab="voice"><svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/></svg>Voice</button>
+    <button data-tab="devices"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>Devices</button>
+    <button data-tab="approvals"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><circle cx="12" cy="12" r="9"/></svg>Approvals</button>
+    <button data-tab="activity"><svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>Activity</button>
+    <button data-tab="notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>Notices</button>
+    <button data-tab="health"><svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>Health</button>
+    <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 19.4 9a2 2 0 1 1 0 4z"/></svg>Settings</button>
+  </nav>
+</div>
+
+<script src="/zeno-config.js"></script>
+<script>
+"use strict";
+/* ------------------------------------------------------------------
+   API BASE
+   Same-origin by default. window.ZENO_CONFIG.apiBase is injected at
+   BUILD time for the Netlify deployment (scripts/build-config.js) so no
+   localhost is ever hard-coded and no secret ships in this bundle.
+------------------------------------------------------------------ */
+const CFG  = window.ZENO_CONFIG || {};
+const BASE = (CFG.apiBaseUrl || CFG.apiBase || "").replace(/\/$/, "");
+const api  = p => BASE + p;
+
+/* The session and refresh tokens are httpOnly COOKIES set by the API. This
+   script cannot read them, and that is the point -- an injected script cannot
+   steal what it cannot see. Every request therefore uses
+   `credentials:"include"` and sends no Authorization header.
+
+   The CSRF token IS kept here, and has to be: it travels as a request header,
+   so JavaScript must be able to read it. Alone it is not a credential --
+   without the httpOnly cookie it authenticates nothing. */
+const S = {
+  csrf:   localStorage.getItem("zeno_csrf")   || "",
+  device: localStorage.getItem("zeno_device") || "",
+  browserDevice: localStorage.getItem("zeno_browser_device") ||
+    ("web_" + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random())),
+  signedIn: false,
+  tab: "home", chat: [], busy: false, poll: null, pendingDeviceSetup: null,
+};
+localStorage.setItem("zeno_browser_device", S.browserDevice);
+
+function persist(d){
+  S.csrf = d.csrf || "";
+  if (d.device_id) {
+    S.browserDevice = d.device_id;
+    localStorage.setItem("zeno_browser_device", S.browserDevice);
+  }
+  localStorage.setItem("zeno_csrf", S.csrf);
+  S.signedIn = true;
+}
+function clearAuth(){
+  S.csrf = ""; S.signedIn = false;
+  localStorage.removeItem("zeno_csrf");
+}
+
+/* One fetch wrapper. Retries ONCE after refreshing an expired session --
+   a 30-minute access token would otherwise log the owner out mid-sentence. */
+async function call(path, {method="GET", body=null, retry=true} = {}){
+  const headers = {};
+  if (body) headers["Content-Type"] = "application/json";
+  if (S.csrf && method !== "GET") headers["X-Zeno-CSRF"] = S.csrf;
+
+  let res;
+  try {
+    res = await fetch(api(path), {
+      method, headers,
+      credentials: "include",              // the httpOnly session cookie
+      body: body ? JSON.stringify(body) : null
+    });
+  } catch (e) {
+    throw new Error("network");            // offline / DNS / CORS
+  }
+  if (res.status === 401 && retry && S.signedIn){
+    const ok = await tryRefresh();
+    if (ok) return call(path, {method, body, retry:false});
+    showLogin("Session expired. Sign in again.");
+    throw new Error("unauthorised");
+  }
+  if (!res.ok){
+    let detail = "";
+    try { const j = await res.json(); detail = readable(j.detail ?? j); } catch { detail = res.statusText; }
+    const err = new Error(detail || ("HTTP " + res.status)); err.status = res.status; throw err;
+  }
+  return res.json();
+}
+
+/* FastAPI sends `detail` as a STRING for HTTPException and an ARRAY for a 422
+   validation error. Rendering the array directly prints "[object Object]". */
+function readable(d){
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map(x => x.msg || x.detail || JSON.stringify(x)).join("; ");
+  if (d && typeof d === "object") return d.reason || d.detail || d.msg || JSON.stringify(d);
+  return String(d ?? "");
+}
+
+async function tryRefresh(){
+  try {
+    // The refresh token travels as an httpOnly cookie, so there is nothing
+    // to put in the body.
+    const res = await fetch(api("/api/owner/auth/refresh"), {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      credentials:"include", body: "{}"
+    });
+    if (!res.ok) return false;
+    persist(await res.json());
+    return true;
+  } catch { return false; }
+}
+
+/* ---------------- login ---------------- */
+const $ = id => document.getElementById(id);
+
+function showLogin(msg){
+  clearAuth();
+  if (S.poll) { clearInterval(S.poll); S.poll = null; }
+  $("login").classList.add("on"); $("pending").classList.remove("on");
+  $("app").classList.add("hide");
+  $("loginerr").textContent = msg || "";
+}
+function showApp(){
+  $("login").classList.remove("on"); $("pending").classList.remove("on");
+  $("app").classList.remove("hide");
+  render(); refreshStatus();
+  S.poll = setInterval(refreshStatus, 15000);
+}
+function showPending(){
+  $("login").classList.remove("on"); $("app").classList.add("hide");
+  $("pending").classList.add("on");
+  $("pendingcmd").textContent =
+    `python tools/zeno_anywhere_admin.py approve-browser ${S.browserDevice}`;
+  if (S.poll) clearInterval(S.poll);
+  S.poll = setInterval(checkApproval, 5000);
+}
+async function checkApproval(){
+  try {
+    const info = await call("/api/owner/auth/session");
+    $("pendingstate").textContent = `Device state: ${info.device_state}`;
+    if (info.trusted) { clearInterval(S.poll); S.poll = null; showApp(); }
+  } catch (e) {
+    $("pendingstate").textContent = e.message === "network"
+      ? "Gateway unreachable; retrying…" : e.message;
+  }
+}
+$("checkapproval").onclick = checkApproval;
+$("pendinglogout").onclick = () => $("signout").click();
+
+function fromB64(value){
+  const s=String(value).replace(/-/g,"+").replace(/_/g,"/");
+  const raw=atob(s+"=".repeat((4-s.length%4)%4));
+  return Uint8Array.from(raw,c=>c.charCodeAt(0)).buffer;
+}
+function toB64(value){
+  const raw=String.fromCharCode(...new Uint8Array(value));
+  return btoa(raw).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function decodeCredentialOptions(options){
+  const out=typeof structuredClone==="function"?structuredClone(options):JSON.parse(JSON.stringify(options));
+  out.challenge=fromB64(out.challenge);
+  if(out.user&&typeof out.user.id==="string") out.user.id=fromB64(out.user.id);
+  for(const key of ["allowCredentials","excludeCredentials"]){
+    if(out[key]) out[key]=out[key].map(x=>({...x,id:fromB64(x.id)}));
+  }
+  return out;
+}
+function credentialPayload(c){
+  if(typeof c.toJSON==="function") return c.toJSON();
+  const response={clientDataJSON:toB64(c.response.clientDataJSON)};
+  if(c.response.attestationObject) response.attestationObject=toB64(c.response.attestationObject);
+  if(c.response.authenticatorData) response.authenticatorData=toB64(c.response.authenticatorData);
+  if(c.response.signature) response.signature=toB64(c.response.signature);
+  if(c.response.userHandle) response.userHandle=toB64(c.response.userHandle);
+  if(c.response.getTransports) response.transports=c.response.getTransports();
+  return {id:c.id,rawId:toB64(c.rawId),type:c.type,response,
+          clientExtensionResults:c.getClientExtensionResults()};
+}
+
+$("passkeylogin").onclick=async()=>{
+  const err=$("loginerr"); err.textContent="";
+  if(!window.PublicKeyCredential){err.textContent="Passkeys are not supported in this browser.";return;}
+  try{
+    const options=await call("/api/owner/auth/passkey/options",{method:"POST",body:{}});
+    const challenge=options.challenge;
+    const credential=await navigator.credentials.get({publicKey:decodeCredentialOptions(options)});
+    const result=await call("/api/owner/auth/passkey/complete",{method:"POST",body:{
+      challenge,credential:credentialPayload(credential),device:navigator.userAgent.slice(0,60),
+      device_id:S.browserDevice}});
+    persist(result); result.trusted?showApp():showPending();
+  }catch(e){err.textContent=e.message||"Passkey sign-in failed.";}
+};
+
+$("dologin").onclick = async () => {
+  const btn = $("dologin"), err = $("loginerr");
+  btn.disabled = true; err.textContent = "";
+  try {
+    const res = await fetch(api("/api/owner/auth/login"), {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      credentials:"include",
+      body: JSON.stringify({
+        email: $("em").value.trim(), password: $("pw").value,
+        device: navigator.userAgent.slice(0,60), device_id: S.browserDevice,
+        nonce: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()))
+      })
+    });
+    const data = await res.json();
+    if (!res.ok){
+      const d = data.detail || data;
+      err.textContent = d.retry_after
+        ? `Too many attempts. Try again in ${Math.ceil(d.retry_after)}s.`
+        : readable(d) || "Sign-in failed.";
+      return;
+    }
+    persist(data); $("pw").value = "";
+    data.trusted ? showApp() : showPending();
+  } catch { err.textContent = "Cannot reach ZENO. Check the connection."; }
+  finally { btn.disabled = false; }
+};
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") $("dologin").click(); });
+
+$("signout").onclick = async () => {
+  try { await call("/api/owner/auth/logout", {method:"POST"}); } catch {}
+  showLogin("Signed out.");
+};
+
+/* ---------------- status ---------------- */
+let LAST = null;
+async function refreshStatus(){
+  try {
+    LAST = await call("/api/owner/status");
+    setDot("d-zeno","t-zeno", true, "online");
+    const dev = (LAST.devices || []).find(d => d.state === "ONLINE") || (LAST.devices || [])[0];
+    S.device = dev ? dev.device_id : "";
+    if (dev) localStorage.setItem("zeno_device", S.device);
+    setDot("d-dev","t-dev", dev && dev.state === "ONLINE",
+           dev ? (dev.label || "laptop") + " " + dev.state.toLowerCase() : "no device");
+    document.querySelector(".orb")?.classList.toggle("off", !(dev && dev.state === "ONLINE"));
+    if (["home","devices","settings"].includes(S.tab)) render();
+  } catch (e) {
+    if (e.message !== "unauthorised"){
+      setDot("d-zeno","t-zeno", false, "unreachable");
+      setDot("d-dev","t-dev", false, "unknown");
+    }
+  }
+}
+function setDot(dotId, textId, on, label){
+  const d = $(dotId); if (!d) return;
+  d.className = "dot " + (on ? "on" : "off");
+  $(textId).textContent = label;
+}
+
+/* ---------------- navigation ---------------- */
+document.querySelectorAll("nav button").forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll("nav button").forEach(x => x.classList.remove("sel"));
+    b.classList.add("sel"); S.tab = b.dataset.tab; render();
+  };
+});
+
+function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+function ago(ts){
+  if (!ts) return "never";
+  const s = Math.max(0, Date.now()/1000 - ts);
+  if (s < 60) return Math.round(s) + "s ago";
+  if (s < 3600) return Math.round(s/60) + "m ago";
+  if (s < 86400) return Math.round(s/3600) + "h ago";
+  return Math.round(s/86400) + "d ago";
+}
+
+function render(){
+  const m = $("main");
+  ({home:vHome, chat:vChat, agents:vAgents, tasks:vTasks,
+    memory:vMemory, voice:vVoice, devices:vDevices, approvals:vApprovals,
+    activity:vActivity, notifications:vNotifications, health:vHealth,
+    settings:vSettings}[S.tab] || vHome)(m);
+}
+
+/* ---------------- home ---------------- */
+function vHome(m){
+  const devs = (LAST && LAST.devices) || [];
+  const q = (LAST && LAST.queue && LAST.queue.by_status) || {};
+  m.innerHTML = `
+    <div class="orbwrap">
+      <div class="orb"><b></b><i></i></div>
+      <div class="muted" id="orbword">${devs.some(d=>d.state==="ONLINE")
+        ? "Connected to your laptop" : "Laptop is not connected"}</div>
+    </div>
+    <div class="card">
+      <h3>System</h3>
+      <div class="row"><span class="k">ZENO cloud</span><span class="v"><span class="tag ok">reachable</span></span></div>
+      <div class="row"><span class="k">Devices registered</span><span class="v">${devs.length}</span></div>
+      <div class="row"><span class="k">Commands queued</span><span class="v">${q.QUEUED||0}</span></div>
+      <div class="row"><span class="k">Completed</span><span class="v">${q.DONE||0}</span></div>
+      ${q.FAILED||q.TIMEOUT ? `<div class="row"><span class="k">Failed / timed out</span><span class="v" style="color:var(--bad)">${(q.FAILED||0)+(q.TIMEOUT||0)}</span></div>`:""}
+    </div>
+    <div class="card">
+      <h3>Your devices</h3>
+      ${devs.length ? devs.map(d => `
+        <div class="row">
+          <span class="k">${esc(d.label||d.device_id)}</span>
+          <span class="v"><span class="tag ${d.state==="ONLINE"?"ok":"bad"}">${d.state}</span>
+          <div class="muted" style="margin-top:3px">${d.last_heartbeat?ago(d.last_heartbeat):"never seen"}</div></span>
+        </div>`).join("")
+        : `<div class="na">No device registered yet. Add one on the Devices tab.</div>`}
+    </div>
+    <div class="card"><h3>Pending approvals</h3><div id="homeapprovals"><div class="muted">Loading...</div></div></div>
+    <div class="card"><h3>Recent activity</h3><div id="homeactivity"><div class="muted">Loading...</div></div></div>`;
+  Promise.all([
+    call("/api/owner/approvals?state=pending&limit=5"),
+    call("/api/owner/activity?limit=5")
+  ]).then(([a, x]) => {
+    if ($("homeapprovals")) $("homeapprovals").innerHTML = (a.approvals||[]).length
+      ? (a.approvals||[]).map(i=>`<div class="row"><span class="k">${esc(i.action)}</span><span class="tag warn">pending</span></div>`).join("")
+      : `<div class="na">Nothing waiting.</div>`;
+    if ($("homeactivity")) $("homeactivity").innerHTML = (x.entries||[]).length
+      ? (x.entries||[]).map(i=>`<div class="row"><span class="k">${esc(i.event)}</span><span class="v muted">${ago(i.at)}</span></div>`).join("")
+      : `<div class="na">No activity yet.</div>`;
+  }).catch(()=>{});
+}
+
+/* ---------------- chat ---------------- */
+function vChat(m){
+  m.innerHTML = `<div id="log"></div>
+    <div class="composer">
+      <button class="icon" id="mic" title="Microphone"><svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg></button>
+      <textarea id="ta" rows="1" placeholder="Ask ZENO…"></textarea>
+      <button class="icon go" id="send"><svg viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg></button>
+    </div>
+    <div class="disabled-note" id="micnote"></div>`;
+  drawLog();
+
+  const ta = $("ta");
+  ta.addEventListener("input", () => { ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,130)+"px"; });
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey && window.innerWidth > 720){ e.preventDefault(); send(); }
+  });
+  $("send").onclick = send;
+
+  /* The microphone is HONESTLY DISABLED here. Voice capture needs the audio
+     pipeline on the desktop; this remote client has no route to it yet.
+     A button that looks live and does nothing is exactly what the brief
+     forbids, so it is visibly disabled and says why. */
+  const mic = $("mic");
+  mic.disabled = true;
+  $("micnote").textContent =
+    "Microphone is disabled on the remote client — voice capture runs on the desktop and has no authenticated remote route yet. Use the QR mic on your local network.";
+}
+
+function drawLog(){
+  const log = $("log"); if (!log) return;
+  log.innerHTML = S.chat.length ? S.chat.map(m =>
+    `<div class="msg ${m.role==="me"?"me":m.role==="sys"?"sys":"ze"}">${esc(m.text)}</div>`).join("")
+    : `<div class="msg sys">Ask ZENO anything. Requests that need your laptop are queued and run when it is connected.</div>`;
+  log.scrollTop = log.scrollHeight;
+  const main = $("main"); if (main) main.scrollTop = main.scrollHeight;
+}
+
+async function send(){
+  const ta = $("ta"); if (!ta) return;
+  const text = ta.value.trim(); if (!text || S.busy) return;
+  ta.value = ""; ta.style.height = "auto";
+  S.chat.push({role:"me", text}); drawLog();
+  S.busy = true; document.querySelector(".orb")?.classList.add("busy");
+  try {
+    if (!S.device){
+      S.chat.push({role:"sys", text:"No device is registered, so there is nothing to run this on. Register your laptop on the Devices tab."});
+    } else {
+      const cmd = await call("/api/owner/command", {method:"POST", body:{
+        action:"ask", device_id:S.device, text,
+        payload:{text}, idempotency_key: (crypto.randomUUID?crypto.randomUUID():String(Date.now()))
+      }});
+      if (cmd.refused){
+        S.chat.push({role:"sys", text:"Refused: " + cmd.reason});
+      } else {
+        S.chat.push({role:"sys", text: cmd.note || "Queued."}); drawLog();
+        const done = await waitFor(cmd.id);
+        S.chat.push(done);
+      }
+    }
+  } catch(e){
+    S.chat.push({role:"sys", text: e.message === "network"
+      ? "Cannot reach ZENO right now." : "Failed: " + e.message});
+  } finally {
+    S.busy = false; document.querySelector(".orb")?.classList.remove("busy"); drawLog();
+  }
+}
+
+/* Poll until the command reaches a terminal state. Reports the REAL outcome:
+   TIMEOUT is reported as a timeout, never quietly as a reply. */
+async function waitFor(id, timeoutMs=120000){
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs){
+    await new Promise(r => setTimeout(r, 1400));
+    let c; try { c = await call("/api/owner/command/" + id); } catch { continue; }
+    if (["DONE","FAILED","TIMEOUT","REJECTED","CANCELLED","EXPIRED"].includes(c.status)){
+      const r = c.result || {};
+      if (c.status === "DONE") return {role:"ze", text: r.answer || r.detail ||
+        (Object.keys(r).length ? JSON.stringify(r,null,2) : "Completed with no response body.")};
+      return {role:"sys", text: `${c.status}: ${r.error || r.detail || "no result reported"}`};
+    }
+  }
+  return {role:"sys", text:"Still running after 2 minutes — check the Tasks tab."};
+}
+
+/* ---------------- agents / tasks / memory ---------------- */
+function actionView(m, {title, action, payloadFor, empty, note}){
+  m.innerHTML = `<div class="card"><h3>${title}</h3>
+      <div id="body"><div class="muted">Loading…</div></div>
+      ${note?`<div class="disabled-note">${note}</div>`:""}
+    </div>`;
+  runAction(action, payloadFor ? payloadFor() : {}, empty);
+}
+
+async function runAction(action, payload, empty){
+  const body = $("body"); if (!body) return;
+  if (!S.device){ body.innerHTML = `<div class="na">No device registered — this reads live data from your laptop.</div>`; return; }
+  try {
+    const cmd = await call("/api/owner/command", {method:"POST",
+      body:{action, device_id:S.device, payload}});
+    if (cmd.refused){ body.innerHTML = `<div class="na">Refused: ${esc(cmd.reason)}</div>`; return; }
+    const res = await waitFor(cmd.id, 45000);
+    body.innerHTML = res.role === "ze"
+      ? `<pre style="white-space:pre-wrap;font:12.5px/1.55 ui-monospace,monospace;margin:0">${esc(res.text)}</pre>`
+      : `<div class="na">${esc(res.text)}</div>`;
+  } catch(e){ body.innerHTML = `<div class="na">${esc(e.message)}</div>`; }
+}
+
+const vAgents = m => actionView(m, {title:"Agent roster", action:"agent_status",
+  note:"Live from your laptop. ZENO's agents run on the desktop."});
+const vTasks  = m => actionView(m, {title:"Active tasks", action:"task_status",
+  note:"Live task state from the Windows task engine."});
+const vMemory = m => {
+  m.innerHTML = `<div class="card"><h3>Search memory</h3>
+    <input id="mq" type="text" placeholder="Search your notes…">
+    <button class="btn" id="mgo">Search</button>
+    <div id="body" style="margin-top:12px"><div class="muted">Enter a search term.</div></div></div>`;
+  $("mgo").onclick = () => {
+    const q = $("mq").value.trim();
+    if (!q){ $("body").innerHTML = `<div class="na">Type something to search for.</div>`; return; }
+    $("body").innerHTML = `<div class="muted">Searching…</div>`;
+    runAction("memory_recall", {query:q});
+  };
+  $("mq").addEventListener("keydown", e => { if (e.key === "Enter") $("mgo").click(); });
+};
+
+/* ---------------- voice / approvals / activity / health ---------------- */
+function vVoice(m){
+  m.innerHTML = `<div class="card"><h3>Voice</h3>
+    <div class="row"><span class="k">Remote microphone</span><span class="tag warn">not available</span></div>
+    <button class="btn" disabled>Start listening</button>
+    <div class="disabled-note">Internet voice streaming is not implemented in this build. ZENO will not request microphone permission or pretend to listen. Typed chat and the local/LAN phone microphone remain available.</div>
+  </div>`;
+}
+
+async function vApprovals(m){
+  m.innerHTML = `<div class="card"><h3>Approval inbox</h3><div id="approvalbody"><div class="muted">Loading...</div></div></div>`;
+  try {
+    const data = await call("/api/owner/approvals?state=pending&limit=100");
+    const items = data.approvals || [];
+    $("approvalbody").innerHTML = items.length ? items.map(a=>`<div class="card">
+      <div class="row"><span class="k">${esc(a.action)}</span><span class="tag warn">${esc(a.category)}</span></div>
+      <div class="muted">Target: ${esc(a.target_device)}; expires ${ago(a.expires)}</div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn sm" data-a="approve" data-id="${esc(a.id)}">Approve</button>
+        <button class="btn danger sm" data-a="deny" data-id="${esc(a.id)}">Deny</button>
+      </div></div>`).join("") : `<div class="na">No approval is waiting.</div>`;
+    $("approvalbody").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{
+      b.disabled=true;
+      try { await call(`/api/owner/approvals/${encodeURIComponent(b.dataset.id)}/decision`,
+        {method:"POST",body:{decision:b.dataset.a,evidence:"approved in trusted owner PWA"}}); vApprovals(m); }
+      catch(e){ alert(e.message); b.disabled=false; }
+    });
+  } catch(e){ $("approvalbody").innerHTML=`<div class="na">${esc(e.message)}</div>`; }
+}
+
+async function vActivity(m){
+  m.innerHTML=`<div class="card"><h3>Activity history</h3><div id="activitybody"><div class="muted">Loading...</div></div></div>`;
+  try {
+    const data=await call("/api/owner/activity?limit=100"), items=data.entries||[];
+    $("activitybody").innerHTML=items.length?items.map(i=>`<div class="row"><span class="k">${esc(i.event)}<div class="muted">${esc(i.summary||i.action||"")}</div></span><span class="v"><span class="tag">${esc(i.outcome||i.state||"")}</span><div class="muted">${ago(i.at)}</div></span></div>`).join(""):`<div class="na">No activity yet.</div>`;
+  } catch(e){ $("activitybody").innerHTML=`<div class="na">${esc(e.message)}</div>`; }
+}
+
+function vNotifications(m){
+  m.innerHTML=`<div class="card"><h3>Notifications</h3><div class="row"><span class="k">Push notifications</span><span class="tag warn">not configured</span></div><button class="btn" disabled>Enable notifications</button><div class="disabled-note">A push provider and subscription endpoint are not built yet. Approval and command events remain visible in Approvals and Activity.</div></div>`;
+}
+
+function deviceSetupMarkup(r){
+  if(!r)return "";
+  return `<div class="muted" style="margin-bottom:8px">Run this on the laptop. <b>The token is shown once.</b></div>
+    <pre style="white-space:pre-wrap;word-break:break-all;background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px;font:11.5px/1.6 ui-monospace,monospace;margin:0">setx ZENO_GATEWAY_URL "${esc(BASE||location.origin)}"
+setx ZENO_DEVICE_ID "${esc(r.device_id)}"
+setx ZENO_DEVICE_TOKEN "${esc(r.token)}"</pre>
+    <div class="muted" style="margin-top:8px">Approve the pending device above, then restart ZENO on the laptop.</div>`;
+}
+
+async function vHealth(m){
+  const started=performance.now();
+  m.innerHTML=`<div class="card"><h3>System health</h3><div id="healthbody"><div class="muted">Measuring...</div></div></div>`;
+  try {
+    const d=await call("/api/owner/status"), latency=Math.round(performance.now()-started);
+    const devices=d.devices||[], q=d.queue||{};
+    $("healthbody").innerHTML=`
+      <div class="row"><span class="k">Cloud API</span><span class="tag ok">ONLINE</span></div>
+      <div class="row"><span class="k">Round-trip latency</span><span class="v">${latency} ms</span></div>
+      <div class="row"><span class="k">Windows connector</span><span class="tag ${devices.some(x=>x.state==="ONLINE")?"ok":"bad"}">${devices.some(x=>x.state==="ONLINE")?"ONLINE":"OFFLINE"}</span></div>
+      <div class="row"><span class="k">Remote control</span><span class="tag ${q.remote_control_enabled?"ok":"bad"}">${q.remote_control_enabled?"ENABLED":"DISABLED"}</span></div>
+      <div class="row"><span class="k">Queue depth</span><span class="v">${q.queue_depth||0}</span></div>`;
+  } catch(e){ $("healthbody").innerHTML=`<div class="na">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- devices ---------------- */
+async function vDevices(m){
+  const devs = (LAST && LAST.devices) || [];
+  m.innerHTML = `
+    <div class="card"><h3>Registered devices</h3>
+      ${devs.length ? devs.map(d => `
+        <div class="row">
+          <span class="k">${esc(d.label||d.device_id)}<div class="muted">${esc(d.device_id)}</div></span>
+           <span class="v"><span class="tag ${d.state==="ONLINE"?"ok":"bad"}">${d.state}</span>
+             <div class="muted">trust: ${esc(d.approval_state||"UNKNOWN")}</div>
+             <div class="muted" style="margin-top:4px">${d.last_heartbeat?ago(d.last_heartbeat):"never seen"}</div>
+             ${d.approval_state==="PENDING"?`<button class="btn sm" style="margin-top:7px" data-ok="${esc(d.device_id)}">Approve</button>`:""}
+             <button class="btn danger sm" style="margin-top:7px" data-rev="${esc(d.device_id)}">Revoke</button>
+          </span>
+        </div>`).join("") : `<div class="na">None yet.</div>`}
+    </div>
+    <div class="card"><h3>Connect this laptop</h3>
+      <label for="dl">Device name</label>
+      <input id="dl" type="text" value="My Windows laptop">
+      <button class="btn" id="dreg">Register device</button>
+      <div id="dout" style="margin-top:12px">${deviceSetupMarkup(S.pendingDeviceSetup)}</div>
+    </div>`;
+
+  m.querySelectorAll("[data-rev]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await call("/api/owner/devices/revoke", {method:"POST", body:{device_id:b.dataset.rev}}); await refreshStatus(); render(); }
+    catch(e){ b.disabled = false; alert(e.message); }
+  });
+  m.querySelectorAll("[data-ok]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await call("/api/owner/devices/approve", {method:"POST", body:{device_id:b.dataset.ok,scopes:["standard_device"]}}); await refreshStatus(); render(); }
+    catch(e){ b.disabled = false; alert(e.message); }
+  });
+
+  $("dreg").onclick = async () => {
+    const btn = $("dreg"); btn.disabled = true;
+    try {
+      const r = await call("/api/owner/devices/register", {method:"POST", body:{label:$("dl").value.trim()||"Windows"}});
+      /* The token is shown ONCE. It is never retrievable again -- that is
+         deliberate, and the copy says so rather than pretending otherwise. */
+      S.pendingDeviceSetup = r;
+      await refreshStatus();
+    } catch(e){ $("dout").innerHTML = `<div class="na">${esc(e.message)}</div>`; }
+    finally { btn.disabled = false; }
+  };
+}
+
+/* ---------------- settings ---------------- */
+async function vSettings(m){
+  m.innerHTML = `<div class="card"><h3>Sessions</h3><div id="sess"><div class="muted">Loading…</div></div>
+      <button class="btn danger" id="revall">Revoke every session</button></div>
+    <div class="card"><h3>Security</h3>
+      <div class="row"><span class="k">Passkey sign-in</span><span class="v"><span class="tag ok">available on HTTPS</span></span></div>
+      <button class="btn ghost" id="addpasskey">Add this device's passkey</button>
+      <div id="passkeylist" style="margin-top:10px"></div>
+      <div class="disabled-note">Biometrics stay in the device secure enclave. ZENO stores only the WebAuthn public key.</div>
+    </div>
+    <div class="card"><h3>Remote control</h3>
+      <div class="row"><span class="k">Command execution</span><span class="tag ${(LAST&&LAST.queue&&LAST.queue.remote_control_enabled)?"ok":"bad"}">${(LAST&&LAST.queue&&LAST.queue.remote_control_enabled)?"ENABLED":"DISABLED"}</span></div>
+      <button class="btn ghost" id="remoteon">Enable remote control</button>
+      <button class="btn danger" id="killswitch">Emergency kill switch</button>
+      <div class="disabled-note">The kill switch cancels queued privileged work and signs every remote session out. Local ZENO stays usable.</div>
+    </div>
+    <div class="card"><h3>Trusted browsers</h3><div id="browserlist"><div class="muted">Loading…</div></div>
+    </div>
+    <div class="card"><h3>Recent security events</h3><div id="aud"><div class="muted">Loading…</div></div></div>`;
+
+  $("addpasskey").disabled=!window.PublicKeyCredential||!isSecureContext;
+  $("addpasskey").onclick=async()=>{
+    try{
+      const options=await call("/api/owner/passkeys/register/options",{method:"POST",body:{label:"Owner device"}});
+      const challenge=options.challenge;
+      const credential=await navigator.credentials.create({publicKey:decodeCredentialOptions(options)});
+      await call("/api/owner/passkeys/register/complete",{method:"POST",body:{
+        challenge,credential:credentialPayload(credential),label:"Owner device"}});
+      vSettings(m);
+    }catch(e){alert(e.message||"Passkey registration failed.");}
+  };
+  $("remoteon").onclick=async()=>{
+    try{await call("/api/owner/remote-control",{method:"POST",body:{enabled:true}});await refreshStatus();vSettings(m);}
+    catch(e){alert(e.message);}
+  };
+  $("killswitch").onclick=async()=>{
+    if(!confirm("Disable remote control, cancel queued privileged work, and sign out every remote session?"))return;
+    try{await call("/api/owner/kill-switch",{method:"POST",body:{}});showLogin("Remote kill switch engaged.");}
+    catch(e){alert(e.message);}
+  };
+
+  try{
+    const [{passkeys},{devices}]=await Promise.all([
+      call("/api/owner/passkeys"),call("/api/owner/browser-devices")]);
+    $("passkeylist").innerHTML=(passkeys||[]).length?(passkeys||[]).map(p=>`<div class="row"><span class="k">${esc(p.label||"Owner passkey")}</span><span class="v muted">${ago(p.last_used||p.created)}</span></div>`).join(""):`<div class="na">No passkey registered.</div>`;
+    $("browserlist").innerHTML=(devices||[]).length?(devices||[]).map(d=>`<div class="row"><span class="k">${esc(d.label||d.device_id)}<div class="muted">${esc(d.device_id)}</div></span><span class="tag ${d.state==="APPROVED"?"ok":d.state==="PENDING"?"warn":"bad"}">${esc(d.state)}</span></div>`).join(""):`<div class="na">No browser devices.</div>`;
+  }catch(e){$("browserlist").innerHTML=`<div class="na">${esc(e.message)}</div>`;}
+
+  try {
+    const {sessions} = await call("/api/owner/sessions");
+    $("sess").innerHTML = sessions.length ? sessions.map(s => `
+      <div class="row"><span class="k">${esc(s.device||"unknown")}
+          <div class="muted">${esc(s.address||"")} · ${ago(s.last_seen)}</div></span>
+        <span class="v"><span class="tag ${s.active?"ok":"bad"}">${s.active?"active":s.revoked?"revoked":"expired"}</span>
+          ${s.active?`<button class="btn danger sm" style="margin-top:7px" data-s="${esc(s.id)}">Revoke</button>`:""}</span>
+      </div>`).join("") : `<div class="na">No sessions.</div>`;
+    $("sess").querySelectorAll("[data-s]").forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { await call("/api/owner/sessions/revoke", {method:"POST", body:{id:b.dataset.s}}); vSettings(m); }
+      catch(e){ b.disabled = false; alert(e.message); }
+    });
+  } catch(e){ $("sess").innerHTML = `<div class="na">${esc(e.message)}</div>`; }
+
+  $("revall").onclick = async () => {
+    if (!confirm("Revoke every session, including this one?")) return;
+    try { await call("/api/owner/sessions/revoke", {method:"POST", body:{all:true}}); showLogin("All sessions revoked."); }
+    catch(e){ alert(e.message); }
+  };
+
+  try {
+    const {entries} = await call("/api/owner/audit?limit=15");
+    $("aud").innerHTML = entries.length ? entries.map(e => `
+      <div class="row"><span class="k">${esc(e.event.replace(/_/g," "))}</span>
+        <span class="v muted">${ago(e.at)}</span></div>`).join("")
+      : `<div class="na">Nothing recorded.</div>`;
+  } catch(e){ $("aud").innerHTML = `<div class="na">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- boot ---------------- */
+(async function boot(){
+  /* The session cookie is invisible to this script, so "am I signed in?" can
+     only be answered by asking the server. */
+  if (!S.csrf){ showLogin(); return; }
+  try {
+    const info = await call("/api/owner/auth/session");
+    S.signedIn = true;
+    info.trusted ? showApp() : showPending();
+  }
+  catch { showLogin(); }
+})();
+
+if ("serviceWorker" in navigator){
+  navigator.serviceWorker.register("/app/sw.js").catch(()=>{});
+}
+</script>
+</body>
+</html>
