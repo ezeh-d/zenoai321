@@ -313,3 +313,86 @@ def test_language_routes_are_not_reachable_remotely():
 def test_teaching_requires_both_halves():
     client = _client()
     assert client.post("/api/language/teach", json={"phrase": "x"}).status_code == 400
+
+
+# --- streaming STT wiring -------------------------------------------------
+def test_streaming_uses_the_transcript_it_already_has(monkeypatch):
+    """`understand_audio` transcribes; streaming has ALREADY transcribed.
+
+    Re-transcribing would discard the entire latency win -- the audio went up
+    while the owner was still speaking -- and pay twice for the same words.
+
+    Checked by BEHAVIOUR: the STT manager is replaced with a function that
+    fails the test if it is called. The first version of this test grepped the
+    source for "transcribe", which the docstring uses four times while
+    explaining that it does not transcribe.
+    """
+    from reyes_agent.voice.stt import manager
+
+    def must_not_be_called(_audio):
+        raise AssertionError("understand_transcript re-transcribed the audio")
+
+    monkeypatch.setattr(manager, "transcribe_result", must_not_be_called)
+    heard = speech.understand_transcript("abeg open chrome")
+    assert "Please open Chrome" in heard.english
+
+
+def test_a_streamed_pidgin_command_reaches_the_brain_in_english():
+    heard = speech.understand_transcript(
+        "abeg open chrom make I check am",
+        backend="deepgram-streaming", confidence=0.94, latency_s=0.31)
+    assert "Please open Chrome" in heard.english
+    assert heard.understanding.language == "pcm"
+    assert ("chrom", "Chrome") in heard.corrections
+
+
+def test_a_streamed_partial_can_never_authorise_an_action():
+    partial = speech.understand_transcript("abeg delete am", stage=speech.PARTIAL)
+    final = speech.understand_transcript("abeg delete am", stage=speech.FINAL)
+    assert partial.safe_for_sensitive_action is False
+    assert final.stage == speech.FINAL
+
+
+def test_an_interim_result_contributes_language_evidence_and_nothing_else():
+    speech.reset_for_tests()
+    for _ in range(3):
+        speech.observe_partial("", audio_language="fr")
+    assert speech._stabiliser.settled == "fr"
+    speech.reset_for_tests()
+
+
+def test_the_wake_word_survives_the_language_engine():
+    """Brief 34: ZENO's wake word must stay identifiable.
+
+    It is matched against the RAW transcript before any of this runs, and it
+    is also a protected entity so translation cannot move or rewrite it.
+    """
+    heard = speech.understand_transcript("ZENO abeg open chrom")
+    assert "ZENO" in heard.english
+
+
+def _runtime_source() -> str:
+    """The runtime MODULE, not the class.
+
+    The turn handler is a nested function, so `inspect.getsource` on
+    `RemoteMicRuntime` contains neither the wake match nor the language call.
+    """
+    import pathlib
+
+    from reyes_agent.remote_mic import runtime
+
+    return pathlib.Path(runtime.__file__).read_text(encoding="utf-8")
+
+
+def test_the_runtime_understands_after_wake_matching_not_before():
+    """Order matters. Matching the wake word against TRANSLATED text would
+    mean a mistranslation could hide the wake word entirely."""
+    source = _runtime_source()
+    assert source.index("_WAKE.match(transcript)") < source.index("understand_transcript"), \
+        "the wake word must be matched before the language engine runs"
+
+
+def test_the_runtime_keeps_the_owners_words_when_confidence_is_low():
+    """A low-confidence rewrite is worse than the original: the brain can ask
+    about an odd sentence, it cannot recover a wrongly rewritten meaning."""
+    assert "heard.confidence >= 0.5" in _runtime_source()

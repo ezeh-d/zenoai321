@@ -177,6 +177,19 @@ class RemoteTurnConsumer:
                 self._stream_confidence = max(self._stream_confidence,
                                               float(getattr(result, "confidence", 0.0)))
 
+        # An INTERIM result contributes acoustic language evidence and nothing
+        # else. It is never understood, never repaired, and can never become a
+        # command -- "delete the old backup" passes through "delete the old"
+        # on its way, and acting on that deletes the wrong thing.
+        language = str(getattr(result, "language", "") or "")
+        if language:
+            try:
+                from reyes_agent.language import speech as _speech
+
+                _speech.observe_partial("", audio_language=language)
+            except Exception:  # noqa: BLE001
+                pass
+
     def _drain_stream(self, wait_s: float = 0.45) -> tuple[str, float]:
         """The transcript for the turn that just ended.
 
@@ -374,10 +387,49 @@ class RemoteTurnConsumer:
                     self._emit("remote_mic.wake_detected", {"waiting_for_command": True})
                     return {"accepted": True, "waiting_for_command": True}
 
+                # UNIVERSAL LANGUAGE INTELLIGENCE, on the streamed turn.
+                #
+                # Deliberately AFTER wake matching: the wake word is matched
+                # against the raw transcript so that nothing -- translation,
+                # name repair, normalisation -- can move or rewrite it. ZENO
+                # must stay findable in the audio exactly as spoken.
+                #
+                # `understand_transcript` rather than `understand_audio`
+                # because streaming has already transcribed; re-transcribing
+                # would discard the whole latency win and pay twice for the
+                # same words.
+                spoken_language = ""
+                try:
+                    from reyes_agent.language import speech as _speech
+
+                    heard = _speech.understand_transcript(
+                        command,
+                        audio_language=str(transcript_result.get("language") or ""),
+                        confidence=float(transcript_result.get("confidence") or 0.0),
+                        backend=str(transcript_result.get("backend") or ""),
+                        latency_s=float(transcript_result.get("latency_s") or 0.0),
+                    )
+                    spoken_language = heard.understanding.language
+                    # Only replace the command when the engine is confident.
+                    # A low-confidence guess is worse than the owner's own
+                    # words: the brain can ask about an odd sentence, but it
+                    # cannot recover a meaning that was rewritten wrongly.
+                    if (heard.english and heard.english != command
+                            and heard.confidence >= 0.5):
+                        self._emit("remote_mic.translated", {
+                            "language": spoken_language,
+                            "confidence": round(heard.confidence, 3),
+                            "corrections": len(heard.corrections),
+                        })
+                        command = heard.english
+                except Exception:  # noqa: BLE001 -- language never breaks a turn
+                    pass
+
                 turn_id = f"remote-{int(time.time() * 1000)}"
                 self._emit("remote_mic.command", {
                     "source": source, "turn_id": turn_id, "speaker": identity.get("status"),
                     "stt_confidence": transcript_result.get("confidence"),
+                    "spoken_language": spoken_language,
                 })
                 # A cached phrase is decoded locally; no provider wait is added
                 # to the perceived-response budget.

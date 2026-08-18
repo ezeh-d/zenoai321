@@ -150,7 +150,15 @@ def repair_names(text: str, *, names: tuple[str, ...] = (),
         if not token or not token.strip() or not token.isalpha():
             continue
         low = token.lower()
-        if low in lowered:            # already correct
+        if low in lowered:
+            # The right name, possibly the wrong case. Speech recognition
+            # lower-cases freely, and "open chrome" should reach the intent
+            # parser as "Chrome" -- the canonical spelling is what the
+            # application registry matches on.
+            canonical = lowered[low]
+            if token != canonical:
+                corrections.append((token, canonical))
+                tokens[index] = canonical
             previous_word = low
             continue
         if low in _NEVER_CORRECT:
@@ -271,3 +279,58 @@ def understand_audio(audio: bytes, *, conversation_context: str = "",
 
 def reset_for_tests() -> None:
     _stabiliser.reset()
+
+
+def understand_transcript(text: str, *, stage: str = FINAL,
+                          audio_language: str = "", confidence: float = 0.0,
+                          backend: str = "", latency_s: float = 0.0,
+                          conversation_context: str = "",
+                          repair: bool = True) -> SpeechUnderstanding:
+    """The streaming entry point: a transcript that already exists.
+
+    `understand_audio` transcribes and then understands. Streaming STT has
+    ALREADY transcribed -- the audio went up while the owner was still
+    speaking, which is the entire point -- so re-transcribing would throw away
+    the latency win and pay for the same words twice.
+
+    Same repair, same stabiliser, same `understand_text`, so a streamed turn
+    and a batch turn reach the brain in identical shape.
+    """
+    transcript = str(text or "")
+    settled = (_stabiliser.observe(audio_language) if stage == FINAL
+               else _stabiliser.settled)
+
+    corrections: list[tuple[str, str]] = []
+    cleaned = collapse_stutter(transcript)
+    if repair and cleaned and not is_noise(cleaned):
+        cleaned, corrections = repair_names(cleaned)
+
+    understanding = understand_text(cleaned, conversation_context=conversation_context)
+
+    if (audio_language and understanding.language in ("unknown", "")
+            and understanding.confidence < 0.5):
+        understanding.language = audio_language
+        understanding.language_confidence = 0.6
+
+    return SpeechUnderstanding(
+        original_transcript=transcript,
+        understanding=understanding,
+        audio_language=settled or audio_language,
+        stt_backend=backend,
+        stt_latency_s=latency_s,
+        corrections=corrections,
+        stage=stage,
+    )
+
+
+def observe_partial(text: str, *, audio_language: str = "") -> str:
+    """Feed an interim result to the stabiliser without acting on it.
+
+    A partial exists to show the owner that ZENO is listening. It contributes
+    acoustic language evidence and NOTHING else -- no understanding, no
+    repair, no command. `understand_transcript(stage=PARTIAL)` is available
+    when a caller genuinely wants a provisional reading for display.
+    """
+    if audio_language:
+        _stabiliser.observe(audio_language)
+    return _stabiliser.settled

@@ -1,0 +1,93 @@
+# What must never enter the build context.
+#
+# The context is uploaded to the daemon in full, BEFORE any COPY runs. So a
+# file excluded from the image by a narrow COPY is still sent, still cached in
+# a build layer's context, and still visible to anything inspecting the build.
+#
+# Dockerfile.anywhere currently copies only `reyes_agent`, which is correct.
+# This file is the second lock: the day somebody writes `COPY . .`, secrets
+# must already be out of reach rather than one review away from shipping.
+
+# --- secrets --------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa*
+credentials.json
+client_secret*.json
+*token*.json
+.netrc
+
+# --- local state that is not the application ------------------------------
+*.sqlite
+*.sqlite3
+*.db
+logs/
+tmp/
+data/
+runtime/
+models/
+*.log
+debug.log
+zeno_server.log
+
+# --- version control and CI ----------------------------------------------
+.git
+.gitignore
+.github
+.gitattributes
+
+# --- python build artefacts ----------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# --- virtual environments (hundreds of MB, and platform-wrong) ------------
+.venv/
+venv/
+env/
+ENV/
+
+# --- node -----------------------------------------------------------------
+node_modules/
+npm-debug.log*
+
+# --- desktop-only code the gateway never runs -----------------------------
+# The Anywhere gateway is a Linux web service. None of this belongs in it,
+# and several of these pull Windows-only imports.
+gui/
+"gui old"/
+static/
+web/
+presentation/
+evals/
+skills/
+plugins/
+sounds/
+scripts/
+tools/
+tests/
+docs/
+*.bat
+*.ps1
+
+# --- documentation --------------------------------------------------------
+*.md
+!README.md
+
+# --- editor / OS ----------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

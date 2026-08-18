@@ -9,10 +9,10 @@
     "first_commit": "2026-08-05",
     "latest_commit": "2026-08-18",
     "active_days": 8,
-    "commits": 88,
+    "commits": 89,
     "first_commit_subject": "ZENO AI Operating System \u00e2\u20ac\u201d initial commit",
-    "python_files": 661,
-    "test_files": 85
+    "python_files": 665,
+    "test_files": 86
   },
   "gap_before_version_control": {
     "siwes_start": "2026-07-01",
@@ -66,8 +66,8 @@
       "what": "the project came under git",
       "evidence_kind": "EVIDENCED",
       "first_seen": "2026-08-05",
-      "commits": 88,
-      "evidence": "88 commits across 8 active days; the first is already titled 'ZENO AI Operating System \u00e2\u20ac\u201d initial commit'."
+      "commits": 89,
+      "evidence": "89 commits across 8 active days; the first is already titled 'ZENO AI Operating System \u00e2\u20ac\u201d initial commit'."
     },
     {
       "name": "Voice output",

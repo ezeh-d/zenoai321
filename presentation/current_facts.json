@@ -2,9 +2,9 @@
   "project_name": "ZENO",
   "owner_name": "Divine",
   "institution": "Redeemer's University",
-  "generated_at": 1787061514.3547926,
+  "generated_at": 1787066739.2151062,
   "history": {
-    "commits": 88,
+    "commits": 89,
     "first": "2026-08-05",
     "last": "2026-08-18",
     "active_days": 8
@@ -133,6 +133,7 @@
     }
   ],
   "recent_work": [
+    "feat(language): speech, documents, back-translation -- and install the models",
     "chore: commit the verified backlog -- career, paid work, VAD, orb, presentation",
     "feat(anywhere): complete secure realtime companion",
     "feat(language): understand any language, reason in English",
@@ -143,8 +144,7 @@
     "perf(router): 105 schemas -> 12, and \"what time is it\" 10.05s -> 1.1s",
     "audit: one runtime, daemon readers, and a flake -- 972 tests green",
     "Harden ZENO voice, browser, and desktop runtime",
-    "fix(voice): finish the breaks -- 951 tests green, and two were real",
-    "feat(ultron): serious mode -- one ZENO, operating differently"
+    "fix(voice): finish the breaks -- 951 tests green, and two were real"
   ],
   "company_tasks": [],
   "challenges": [
