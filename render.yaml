@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: zeno-anywhere-gateway
+    runtime: docker
+    dockerfilePath: ./Dockerfile.anywhere
+    healthCheckPath: /ready
+    autoDeploy: false
+    disk:
+      name: zeno-anywhere-data
+      mountPath: /var/lib/zeno
+      sizeGB: 1
+    envVars:
+      - key: REMOTE_ACCESS_ENABLED
+        value: "true"
+      - key: REMOTE_DEV_MODE
+        value: "false"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: ZENO_OWNER_AUTH_DB
+        value: /var/lib/zeno/owner.sqlite
+      - key: ZENO_DEVICE_LINK_DB
+        value: /var/lib/zeno/devices.sqlite
+      - key: ZENO_MEDIA_STORE_DB
+        value: /var/lib/zeno/media.sqlite
+      - key: ZENO_WEB_PUSH_DB
+        value: /var/lib/zeno/push.sqlite
+      - key: ZENO_PUBLIC_DOMAIN
+        sync: false
+      - key: ZENO_APP_ORIGIN
+        sync: false
+      - key: ZENO_API_ORIGIN
+        sync: false
+      - key: ZENO_MEDIA_ENCRYPTION_KEY
+        sync: false
+      - key: ZENO_WEB_PUSH_PUBLIC_KEY
+        sync: false
+      - key: ZENO_WEB_PUSH_PRIVATE_KEY
+        sync: false
+      - key: ZENO_WEB_PUSH_SUBJECT
+        sync: false
+      - key: ZENO_WEB_PUSH_ENCRYPTION_KEY
+        sync: false

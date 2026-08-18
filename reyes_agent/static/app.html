@@ -226,6 +226,8 @@ const S = {
     ("web_" + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random())),
   signedIn: false,
   tab: "home", chat: [], busy: false, poll: null, pendingDeviceSetup: null,
+  events: null, commandWaiters: new Map(), voiceState: "IDLE",
+  recorder: null, voiceTimer: null, voiceStream: null,
 };
 localStorage.setItem("zeno_browser_device", S.browserDevice);
 
@@ -274,6 +276,32 @@ async function call(path, {method="GET", body=null, retry=true} = {}){
   return res.json();
 }
 
+async function callForm(path, form, retry=true){
+  const headers = {};
+  if (S.csrf) headers["X-Zeno-CSRF"] = S.csrf;
+  let res;
+  try { res = await fetch(api(path), {method:"POST", headers,
+    credentials:"include", body:form}); }
+  catch { throw new Error("network"); }
+  if (res.status === 401 && retry && S.signedIn && await tryRefresh()){
+    return callForm(path, form, false);
+  }
+  if (!res.ok){
+    let detail=""; try{const j=await res.json();detail=readable(j.detail??j);}catch{detail=res.statusText;}
+    throw new Error(detail || ("HTTP " + res.status));
+  }
+  return res.json();
+}
+
+async function fetchMedia(path, retry=true){
+  let res;
+  try { res=await fetch(api(path), {credentials:"include", cache:"no-store"}); }
+  catch { throw new Error("network"); }
+  if (res.status === 401 && retry && S.signedIn && await tryRefresh()) return fetchMedia(path,false);
+  if (!res.ok) throw new Error("Audio response is unavailable (HTTP " + res.status + ").");
+  return res.blob();
+}
+
 /* FastAPI sends `detail` as a STRING for HTTPException and an ARRAY for a 422
    validation error. Rendering the array directly prints "[object Object]". */
 function readable(d){
@@ -303,6 +331,13 @@ const $ = id => document.getElementById(id);
 function showLogin(msg){
   clearAuth();
   if (S.poll) { clearInterval(S.poll); S.poll = null; }
+  closeRealtime();
+  if(S.voiceTimer){clearTimeout(S.voiceTimer);S.voiceTimer=null;}
+  if(S.recorder&&S.recorder.state!=="inactive"){
+    S.recorder.onstop=()=>{};try{S.recorder.stop();}catch{}
+  }
+  if(S.voiceStream)S.voiceStream.getTracks().forEach(track=>track.stop());
+  S.recorder=null;S.voiceStream=null;S.voiceState="IDLE";
   $("login").classList.add("on"); $("pending").classList.remove("on");
   $("app").classList.add("hide");
   $("loginerr").textContent = msg || "";
@@ -310,8 +345,40 @@ function showLogin(msg){
 function showApp(){
   $("login").classList.remove("on"); $("pending").classList.remove("on");
   $("app").classList.remove("hide");
-  render(); refreshStatus();
-  S.poll = setInterval(refreshStatus, 15000);
+  render(); refreshStatus(); openRealtime();
+  if (S.poll) clearInterval(S.poll);
+  S.poll = setInterval(refreshStatus, 30000);
+}
+
+function closeRealtime(){
+  if (S.events){ S.events.close(); S.events=null; }
+}
+
+function openRealtime(){
+  closeRealtime();
+  if (!("EventSource" in window)) return;
+  try {
+    const events=new EventSource(api("/api/owner/events"), {withCredentials:true});
+    events.onmessage=e=>{
+      let item={}; try{item=JSON.parse(e.data||"{}");}catch{return;}
+      const id=String(item.command_id||"");
+      const waiting=id&&S.commandWaiters.get(id);
+      if(waiting){ S.commandWaiters.delete(id); waiting(item); }
+      if(["devices","approvals","activity","tasks","health","home"].includes(S.tab)){
+        clearTimeout(openRealtime.refreshTimer);
+        openRealtime.refreshTimer=setTimeout(()=>refreshStatus(),250);
+      }
+    };
+    events.onerror=()=>{}; // EventSource performs its own bounded reconnect.
+    S.events=events;
+  } catch {}
+}
+
+function waitForEvent(commandId, timeoutMs){
+  return new Promise(resolve=>{
+    const timer=setTimeout(()=>{S.commandWaiters.delete(commandId);resolve(null);},timeoutMs);
+    S.commandWaiters.set(commandId,item=>{clearTimeout(timer);resolve(item);});
+  });
 }
 function showPending(){
   $("login").classList.remove("on"); $("app").classList.add("hide");
@@ -527,14 +594,14 @@ function vChat(m){
   });
   $("send").onclick = send;
 
-  /* The microphone is HONESTLY DISABLED here. Voice capture needs the audio
-     pipeline on the desktop; this remote client has no route to it yet.
-     A button that looks live and does nothing is exactly what the brief
-     forbids, so it is visibly disabled and says why. */
   const mic = $("mic");
-  mic.disabled = true;
-  $("micnote").textContent =
-    "Microphone is disabled on the remote client — voice capture runs on the desktop and has no authenticated remote route yet. Use the QR mic on your local network.";
+  const voiceReady=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder);
+  mic.disabled=!voiceReady||!S.device;
+  mic.onclick=()=>toggleVoiceCapture({chat:true});
+  $("micnote").textContent=!voiceReady
+    ? "This browser does not support secure microphone capture."
+    : (!S.device?"Register your Windows device before sending a voice turn."
+      : "Tap once to record, then tap again to send. Maximum 15 seconds.");
 }
 
 function drawLog(){
@@ -590,7 +657,11 @@ async function waitFor(id, timeoutMs=120000){
 async function waitCommandRecord(id, timeoutMs=120000){
   const started = Date.now();
   while (Date.now() - started < timeoutMs){
-    await new Promise(r => setTimeout(r, 1400));
+    // Realtime invalidations wake this immediately. A ten-second poll remains
+    // as recovery after mobile sleep, proxy resets or a deliberately dropped
+    // bounded event; durable command state is always authoritative.
+    if(S.events) await waitForEvent(id,10000);
+    else await new Promise(r => setTimeout(r, 2500));
     let c; try { c = await call("/api/owner/command/" + id); } catch { continue; }
     if (["DONE","FAILED","TIMEOUT","REJECTED","CANCELLED","EXPIRED"].includes(c.status)){
       return c;
@@ -642,11 +713,81 @@ const vMemory = m => {
 
 /* ---------------- voice / approvals / activity / health ---------------- */
 function vVoice(m){
+  const supported=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder);
   m.innerHTML = `<div class="card"><h3>Voice</h3>
-    <div class="row"><span class="k">Remote microphone</span><span class="tag warn">not available</span></div>
-    <button class="btn" disabled>Start listening</button>
-    <div class="disabled-note">Internet voice streaming is not implemented in this build. ZENO will not request microphone permission or pretend to listen. Typed chat and the local/LAN phone microphone remain available.</div>
+    <div class="row"><span class="k">Remote microphone</span><span id="voicetag" class="tag ${supported?"ok":"bad"}">${supported?esc(S.voiceState):"UNAVAILABLE"}</span></div>
+    <button class="btn" id="voice-start" ${supported&&S.device?"":"disabled"}>${S.recorder?"Stop and send":"Start listening"}</button>
+    <div class="disabled-note" id="voicenote">${!supported?"Secure microphone capture is unavailable in this browser.":(!S.device?"Register your Windows device first.":"Microphone permission is requested only after you press Start. Audio is encrypted at rest on the gateway, expires automatically, and is never treated as biometric owner proof.")}</div>
+    <div id="voice-result" style="margin-top:12px"></div>
   </div>`;
+  if(supported&&S.device) $("voice-start").onclick=()=>toggleVoiceCapture({chat:false});
+}
+
+function recorderMime(){
+  for(const mime of ["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/mp4","audio/wav"]){
+    if(MediaRecorder.isTypeSupported(mime)) return mime;
+  }
+  return "";
+}
+
+function setVoiceState(state, note=""){
+  S.voiceState=state;
+  const tag=$("voicetag"); if(tag) tag.textContent=state;
+  const status=$("voicenote"); if(status&&note) status.textContent=note;
+  const button=$("voice-start"); if(button) button.textContent=S.recorder?"Stop and send":"Start listening";
+}
+
+async function toggleVoiceCapture({chat=false}={}){
+  if(S.recorder){ S.recorder.stop(); return; }
+  if(!S.device) return;
+  let stream;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:true, noiseSuppression:true, autoGainControl:true,
+      channelCount:1
+    },video:false});
+    const mime=recorderMime();
+    const recorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined),chunks=[];
+    S.recorder=recorder;S.voiceStream=stream;
+    recorder.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+    recorder.onstop=async()=>{
+      clearTimeout(S.voiceTimer); S.voiceTimer=null; S.recorder=null;
+      stream.getTracks().forEach(track=>track.stop());S.voiceStream=null;
+      setVoiceState("UPLOADING","Sending the encrypted voice turn to your connected ZENO desktop…");
+      try{
+        const blob=new Blob(chunks,{type:recorder.mimeType||"audio/webm"});
+        if(!blob.size)throw new Error("No audio was recorded.");
+        const form=new FormData();form.append("device_id",S.device);form.append("clip",blob,"voice");
+        const cmd=await callForm("/api/owner/voice",form);
+        if(cmd.refused)throw new Error(cmd.reason||"Voice request was refused.");
+        setVoiceState("THINKING","ZENO is transcribing and answering on your desktop…");
+        const record=await waitCommandRecord(cmd.id,150000);
+        if(!record)throw new Error("The voice turn is still running. Check Tasks.");
+        if(record.status!=="DONE")throw new Error(`${record.status}: ${(record.result||{}).error||"no result"}`);
+        const result=record.result||{}, transcript=String(result.transcript||"");
+        if(chat&&transcript)S.chat.push({role:"me",text:transcript});
+        if(chat&&result.answer)S.chat.push({role:"ze",text:String(result.answer)});
+        drawLog();
+        let audio="";
+        if(result.audio_id){
+          const responseBlob=await fetchMedia("/api/owner/voice/"+encodeURIComponent(result.audio_id));
+          audio=URL.createObjectURL(responseBlob);
+          const player=new Audio(audio);
+          try{await player.play();setVoiceState("SPEAKING","Playing ZENO's verified response.");}
+          catch{setVoiceState("READY","Your browser blocked autoplay. Press Play response.");}
+          setTimeout(()=>URL.revokeObjectURL(audio),10*60*1000);
+        }else setVoiceState("READY","Voice turn completed; speech audio was unavailable.");
+        const out=$("voice-result");
+        if(out)out.innerHTML=`${transcript?`<div class="msg me">${esc(transcript)}</div>`:""}${result.answer?`<div class="msg ze">${esc(result.answer)}</div>`:""}${audio?`<audio controls src="${audio}" style="width:100%;margin-top:8px"></audio>`:""}`;
+      }catch(e){setVoiceState("FAILED",e.message==="network"?"Cannot reach ZENO right now.":e.message);}
+    };
+    recorder.onerror=()=>{recorder.onstop=()=>{};stream.getTracks().forEach(track=>track.stop());S.voiceStream=null;S.recorder=null;setVoiceState("FAILED","Microphone recording failed.");};
+    recorder.start(250);setVoiceState("RECORDING","Listening… tap Stop and send when finished.");
+    S.voiceTimer=setTimeout(()=>{if(S.recorder&&S.recorder.state==="recording")S.recorder.stop();},15000);
+  }catch(e){
+    if(stream)stream.getTracks().forEach(track=>track.stop());
+    S.voiceStream=null;S.recorder=null;setVoiceState("FAILED",e.name==="NotAllowedError"?"Microphone permission was not granted for this site.":e.message);
+  }
 }
 
 async function loadConversation(){
@@ -692,8 +833,39 @@ async function vActivity(m){
   } catch(e){ $("activitybody").innerHTML=`<div class="na">${esc(e.message)}</div>`; }
 }
 
-function vNotifications(m){
-  m.innerHTML=`<div class="card"><h3>Notifications</h3><div class="row"><span class="k">Push notifications</span><span class="tag warn">not configured</span></div><button class="btn" disabled>Enable notifications</button><div class="disabled-note">A push provider and subscription endpoint are not built yet. Approval and command events remain visible in Approvals and Activity.</div></div>`;
+async function vNotifications(m){
+  const supported=window.isSecureContext&&"Notification" in window&&
+    "serviceWorker" in navigator&&"PushManager" in window;
+  m.innerHTML=`<div class="card"><h3>Notifications</h3>
+    <div class="row"><span class="k">Push notifications</span><span id="pushstate" class="tag warn">checking</span></div>
+    <div style="display:flex;gap:8px"><button class="btn" id="push-enable" disabled>Enable notifications</button><button class="btn danger" id="push-disable" disabled>Disable</button></div>
+    <div class="disabled-note" id="pushnote">${supported?"Checking the gateway configuration…":"This browser or context does not support secure Web Push."}</div></div>`;
+  if(!supported)return;
+  try{
+    const status=await call("/api/owner/push/status"),reg=await navigator.serviceWorker.ready,
+      existing=await reg.pushManager.getSubscription();
+    const state=$("pushstate"),enable=$("push-enable"),disable=$("push-disable"),note=$("pushnote");
+    if(!status.configured){state.textContent="NOT CONFIGURED";state.className="tag warn";note.textContent=status.detail||"The gateway operator must configure VAPID keys.";return;}
+    state.textContent=existing?"ENABLED":"READY";state.className="tag ok";
+    enable.disabled=!!existing;disable.disabled=!existing;
+    note.textContent=existing?"This trusted browser receives privacy-safe task and approval updates.":"Permission is requested only after you press Enable.";
+    enable.onclick=async()=>{
+      enable.disabled=true;
+      try{
+        const permission=await Notification.requestPermission();
+        if(permission!=="granted")throw new Error("Notification permission was not granted.");
+        const subscription=await reg.pushManager.subscribe({userVisibleOnly:true,
+          applicationServerKey:fromB64(status.public_key)});
+        await call("/api/owner/push/subscriptions",{method:"POST",body:subscription.toJSON()});
+        vNotifications(m);
+      }catch(e){note.textContent=e.message;enable.disabled=false;}
+    };
+    disable.onclick=async()=>{
+      disable.disabled=true;
+      try{if(existing)await existing.unsubscribe();await call("/api/owner/push/subscriptions/current",{method:"DELETE"});vNotifications(m);}
+      catch(e){note.textContent=e.message;disable.disabled=false;}
+    };
+  }catch(e){$("pushstate").textContent="ERROR";$("pushstate").className="tag bad";$("pushnote").textContent=e.message;}
 }
 
 function deviceSetupMarkup(r){

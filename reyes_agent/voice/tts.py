@@ -15,6 +15,7 @@ the event the instant a new push-to-talk turn starts.
 
 from __future__ import annotations
 
+import os
 import threading
 
 from reyes_agent import config
@@ -91,7 +92,13 @@ def _get_elevenlabs_client():
             raise TTSError("No ELEVENLABS_API_KEY set. Add one to .env, then restart.")
         from elevenlabs.client import ElevenLabs
 
-        _el_client = ElevenLabs(api_key=config.ELEVENLABS_API_KEY)
+        try:
+            timeout_s = max(3.0, min(60.0, float(
+                os.environ.get("ELEVENLABS_TIMEOUT_SECONDS", "20"))))
+        except ValueError:
+            timeout_s = 20.0
+        _el_client = ElevenLabs(api_key=config.ELEVENLABS_API_KEY,
+                               timeout=timeout_s)
     return _el_client
 
 

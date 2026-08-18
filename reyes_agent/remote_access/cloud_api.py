@@ -35,12 +35,14 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import (APIRouter, Body, Depends, File, Form, Header,
+                     HTTPException, Request, UploadFile)
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from urllib.parse import urlsplit
 
 from reyes_agent.auth import get_owner_auth
-from reyes_agent.remote_access import device_link, domains, policy
+from reyes_agent.remote_access import (device_link, domains, media_store,
+                                       policy, realtime, web_push)
 
 router = APIRouter(prefix="/api/owner", tags=["owner"])
 
@@ -54,6 +56,7 @@ REGISTERED_ACTIONS: dict[str, str] = {
     "agent_status": "READ_ONLY",    # read the agent roster
     "task_status": "READ_ONLY",
     "conversation_snapshot": "READ_ONLY",
+    "voice_turn": "READ_ONLY",
     "open_app": "STANDARD_DEVICE",  # open a named application
     "close_app": "SENSITIVE_DEVICE",
     "run_automation": "SENSITIVE_DEVICE",
@@ -262,17 +265,87 @@ def device_ack(payload: dict = Body(...)) -> dict[str, Any]:
     return {"ok": link.acknowledge(str(payload.get("command_id", "")), device_id)}
 
 
+def _voice_command(command_id: str, device_id: str):
+    command = device_link.get_link().command(command_id)
+    if (command is None or command.device_id != device_id or
+            command.action != "voice_turn" or command.status not in {
+                device_link.IN_FLIGHT, device_link.ACKNOWLEDGED}):
+        raise HTTPException(status_code=403,
+                            detail="Voice media is not bound to an active device command.")
+    return command
+
+
+@router.post("/device/media/read")
+def device_media_read(payload: dict = Body(...)) -> Response:
+    device_id = _device(str(payload.get("device_id", "")), str(payload.get("token", "")))
+    command_id = str(payload.get("command_id", ""))
+    command = _voice_command(command_id, device_id)
+    media_id = str(payload.get("media_id", ""))
+    if str(command.payload.get("media_id", "")) != media_id:
+        raise HTTPException(status_code=403, detail="Voice media does not match the command.")
+    try:
+        blob = media_store.get_media_store().read_input(
+            media_id, target_device=device_id, command_id=command_id)
+    except media_store.MediaStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except media_store.MediaNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (media_store.MediaAccessDenied, ValueError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return Response(blob.data, media_type=blob.content_type,
+                    headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.post("/device/media/write")
+async def device_media_write(device_id: str = Form(...), token: str = Form(...),
+                             command_id: str = Form(...), media_id: str = Form(...),
+                             audio: UploadFile = File(...)) -> dict[str, Any]:
+    authenticated = _device(device_id, token)
+    command = _voice_command(command_id, authenticated)
+    if str(command.payload.get("media_id", "")) != media_id:
+        raise HTTPException(status_code=403, detail="Voice media does not match the command.")
+    data = await audio.read(media_store.MAX_OUTPUT_BYTES + 1)
+    if len(data) > media_store.MAX_OUTPUT_BYTES:
+        raise HTTPException(status_code=413, detail="Voice response is too large.")
+    try:
+        media_store.get_media_store().write_output(
+            media_id, target_device=authenticated, command_id=command_id,
+            data=data, content_type=str(audio.content_type or ""))
+    except media_store.MediaStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except media_store.MediaNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (media_store.MediaAccessDenied, ValueError,
+            media_store.MediaCapacityExceeded) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "media_id": media_id}
+
+
 @router.post("/device/complete")
 def device_complete(payload: dict = Body(...)) -> dict[str, Any]:
     """The agent reports the REAL outcome. ZENO reports whatever this says."""
     link = device_link.get_link()
     device_id = _device(str(payload.get("device_id", "")), str(payload.get("token", "")))
+    command_id = str(payload.get("command_id", ""))
+    command = link.command(command_id)
     result = payload.get("result")
-    return {"ok": link.complete(
-        str(payload.get("command_id", "")), device_id,
+    ok = link.complete(
+        command_id, device_id,
         ok=bool(payload.get("success", False)),
         result=result if isinstance(result, dict) else {"detail": str(result)[:500]},
-        error=str(payload.get("error", "")))}
+        error=str(payload.get("error", "")))
+    if ok:
+        if command and command.action == "voice_turn":
+            try:
+                media_store.get_media_store().release_input(
+                    str(command.payload.get("media_id", "")), target_device=device_id,
+                    command_id=command_id)
+            except Exception:
+                pass  # TTL cleanup remains the fail-safe; completion must survive cleanup.
+        web_push.get_service().enqueue(
+            "ZENO task finished" if bool(payload.get("success", False)) else "ZENO task failed",
+            "Open ZENO to see the verified result.", kind="task")
+    return {"ok": ok}
 
 
 # --- status -------------------------------------------------------------
@@ -291,6 +364,33 @@ def register(app) -> None:
         link = device_link.get_link()
         return {"devices": link.devices(), "queue": link.stats(),
                 "auth": get_owner_auth().status(), "at": time.time()}
+
+    @protected.get("/events")
+    def owner_events(token: str = Depends(require_trusted_owner)) -> StreamingResponse:
+        """Authenticated, bounded SSE invalidation feed for the owner PWA.
+
+        It carries no command payload or result. The PWA fetches authoritative
+        state from the normal protected endpoints and keeps polling as a
+        recovery fallback. Trust is rechecked while the connection is open so
+        session revocation and browser blocking take effect without a restart.
+        """
+        try:
+            subscription = realtime.subscribe()
+        except realtime.SubscriberLimitError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        def still_trusted() -> bool:
+            info = get_owner_auth().session_info(token)
+            return bool(info and info.get("trusted"))
+
+        return StreamingResponse(
+            realtime.iter_sse(subscription, still_trusted),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @protected.get("/sessions")
     def sessions() -> dict[str, Any]:
@@ -342,8 +442,37 @@ def register(app) -> None:
 
     @protected.post("/browser-devices/state")
     def browser_device_state(payload: dict = Body(...)) -> dict[str, Any]:
-        return {"ok": get_owner_auth().set_browser_device_state(
-            str(payload.get("device_id", "")), str(payload.get("state", "")))}
+        browser_id = str(payload.get("device_id", ""))
+        state = str(payload.get("state", ""))
+        ok = get_owner_auth().set_browser_device_state(browser_id, state)
+        if ok and state.upper() in {"BLOCKED", "REVOKED"}:
+            web_push.get_service().unregister_browser(browser_id)
+        return {"ok": ok}
+
+    @protected.get("/push/status")
+    def push_status() -> dict[str, Any]:
+        return web_push.get_service().status()
+
+    @protected.post("/push/subscriptions")
+    def register_push(payload: dict = Body(...),
+                      token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+        info = get_owner_auth().session_info(token)
+        if not info or not info.get("trusted"):
+            raise HTTPException(status_code=403, detail="Trusted browser required.")
+        try:
+            return web_push.get_service().register(str(info["device_id"]), payload)
+        except web_push.PushConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @protected.delete("/push/subscriptions/current")
+    def unregister_push(token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+        info = get_owner_auth().session_info(token)
+        if not info:
+            raise HTTPException(status_code=401, detail="Session expired.")
+        return {"ok": True, "removed": web_push.get_service().unregister_browser(
+            str(info["device_id"]))}
 
     @protected.post("/devices/register")
     def register_device(payload: dict = Body(...)) -> dict[str, Any]:
@@ -417,7 +546,79 @@ def register(app) -> None:
                         "reconnects." if state.get("state") == "OFFLINE"
                         else "Queued for the connected desktop.")
         body["needs_local_approval"] = command.status == device_link.PENDING_APPROVAL
+        if body["needs_local_approval"]:
+            web_push.get_service().enqueue(
+                "ZENO approval required", "Open ZENO to review a waiting action.",
+                kind="approval")
         return {"ok": True, **body}
+
+    @protected.post("/voice")
+    async def enqueue_voice(request: Request, device_id: str = Form(...),
+                            clip: UploadFile = File(...),
+                            token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+        """Queue opaque voice media without treating browser trust as voice identity."""
+        info = get_owner_auth().session_info(token)
+        if not info or not info.get("trusted"):
+            raise HTTPException(status_code=403, detail="Trusted browser required.")
+        rate = policy.check_rate("command", _client_identity(request))
+        if not rate.allowed:
+            raise HTTPException(status_code=429, detail=rate.as_dict())
+        data = await clip.read(media_store.MAX_INPUT_BYTES + 1)
+        if len(data) > media_store.MAX_INPUT_BYTES:
+            raise HTTPException(status_code=413, detail="Voice clip is too large.")
+        store = None
+        media_id = ""
+        try:
+            store = media_store.get_media_store()
+            media_id = store.create_input(
+                browser_device=str(info["device_id"]), target_device=device_id,
+                data=data, content_type=str(clip.content_type or ""))
+            command = device_link.get_link().enqueue(
+                device_id, "voice_turn", {"media_id": media_id}, category="READ_ONLY",
+                idempotency_key="", requesting_device=f"owner-web:{info['device_id']}",
+                requires_approval=False, expires_in_s=media_store.DEFAULT_TTL_S)
+            if not store.bind_command(media_id, command_id=command.id,
+                                      target_device=device_id):
+                device_link.get_link().cancel(command.id, requesting_device="owner-web")
+                raise RuntimeError("Could not bind voice media to its command.")
+        except media_store.MediaStoreUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (media_store.MediaCapacityExceeded, ValueError) as exc:
+            if store and media_id:
+                store.discard(media_id)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (KeyError, PermissionError) as exc:
+            if store and media_id:
+                store.discard(media_id)
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except Exception:
+            if store and media_id:
+                store.discard(media_id)
+            raise
+        body = command.as_dict()
+        body.update(ok=True, media_id=media_id,
+                    note="Encrypted voice turn queued for your ZENO desktop.")
+        return body
+
+    @protected.get("/voice/{media_id}")
+    def owner_voice(media_id: str,
+                    token: str = Depends(require_trusted_owner)) -> Response:
+        info = get_owner_auth().session_info(token)
+        if not info or not info.get("trusted"):
+            raise HTTPException(status_code=403, detail="Trusted browser required.")
+        try:
+            blob = media_store.get_media_store().read_output(
+                media_id, browser_device=str(info["device_id"]))
+        except media_store.MediaStoreUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except media_store.MediaNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (media_store.MediaAccessDenied, ValueError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return Response(blob.data, media_type=blob.content_type,
+                        headers={"Cache-Control": "no-store",
+                                 "Content-Disposition": "inline; filename=zeno-response.mp3",
+                                 "X-Content-Type-Options": "nosniff"})
 
     @protected.post("/command/{command_id}/cancel")
     def cancel_command(command_id: str) -> dict[str, Any]:
@@ -429,13 +630,20 @@ def register(app) -> None:
         return {"approvals": device_link.get_link().approvals(state=state, limit=limit)}
 
     @protected.post("/approvals/{approval_id}/decision")
-    def decide_approval(approval_id: str, payload: dict = Body(...)) -> dict[str, Any]:
+    def decide_approval(approval_id: str, payload: dict = Body(...),
+                        token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
         decision = str(payload.get("decision", "")).casefold()
         if decision not in {"approve", "deny"}:
             raise HTTPException(status_code=400, detail="Decision must be approve or deny.")
-        return {"ok": device_link.get_link().decide_approval(
+        session = get_owner_auth().session_info(token) or {}
+        browser_id = str(session.get("device_id", "unknown-browser"))
+        ok = device_link.get_link().decide_approval(
             approval_id, approve=decision == "approve", requesting_device="owner-web",
-            evidence=str(payload.get("evidence", "owner session")))}
+            evidence=f"trusted-owner-browser:{browser_id}")
+        if ok:
+            web_push.get_service().enqueue(
+                "ZENO approval updated", "Your decision was recorded.", kind="approval")
+        return {"ok": ok}
 
     @protected.post("/remote-control")
     def remote_control(payload: dict = Body(...)) -> dict[str, Any]:

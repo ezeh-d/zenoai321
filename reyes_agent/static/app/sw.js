@@ -10,7 +10,7 @@
  * answer out of the browser store. A wrong "laptop online" is worse than no
  * answer at all, so API requests always go to the network and fail honestly.
  */
-const CACHE = "zeno-shell-v2";
+const CACHE = "zeno-shell-v3";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icon-192.png",
                "/app/icon-512.png", "/zeno-config.js"];
 
@@ -26,6 +26,36 @@ self.addEventListener("activate", e => {
 
 self.addEventListener("message", e => {
   if (e.data === "SKIP_WAITING") self.skipWaiting();
+});
+
+/* Native Web Push is opt-in and privacy preserving. The gateway sends only
+ * a short generic state transition; authenticated detail is fetched after
+ * the owner opens the app. A push payload can never choose an external URL.
+ */
+self.addEventListener("push", e => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch { data = {}; }
+  const title = String(data.title || "ZENO").slice(0, 80);
+  const body = String(data.body || "ZENO has an update.").slice(0, 160);
+  e.waitUntil(self.registration.showNotification(title, {
+    body,
+    icon: "/app/icon-192.png",
+    badge: "/app/icon-192.png",
+    tag: "zeno-" + String(data.kind || "update").slice(0, 32),
+    renotify: false,
+    data: {url: "/app/"},
+  }));
+});
+
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({type: "window", includeUncontrolled: true})
+    .then(windows => {
+      for (const client of windows) {
+        if (new URL(client.url).origin === self.location.origin) return client.focus();
+      }
+      return self.clients.openWindow("/app/");
+    }));
 });
 
 self.addEventListener("fetch", e => {

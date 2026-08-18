@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from reyes_agent import config
 from reyes_agent.auth import get_owner_auth
-from reyes_agent.remote_access import cloud_api, device_link, domains
+from reyes_agent.remote_access import (cloud_api, deployment, device_link,
+                                       domains, web_push)
 
 GATEWAY_VERSION = "1.0.0"
 DEVICE_PROTOCOL_VERSION = "1.0.0"
@@ -42,9 +44,18 @@ def create_app(*, enabled: bool | None = None) -> FastAPI:
     """
     remote_enabled = (bool(config.REMOTE_ACCESS_ENABLED)
                       if enabled is None else bool(enabled))
+    @asynccontextmanager
+    async def lifespan(_application):
+        yield
+        try:
+            web_push.shutdown_if_started()
+        except Exception:
+            pass
+
     application = FastAPI(
         title="ZENO Anywhere Gateway",
         version=GATEWAY_VERSION,
+        lifespan=lifespan,
         docs_url="/docs" if domains.dev_mode() else None,
         redoc_url=None,
         openapi_url="/openapi.json" if domains.dev_mode() else None,
@@ -56,7 +67,7 @@ def create_app(*, enabled: bool | None = None) -> FastAPI:
             CORSMiddleware,
             allow_origins=origins,
             allow_credentials=True,
-            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
             allow_headers=["Content-Type", "Authorization", "X-Zeno-CSRF"],
             max_age=600,
         )
@@ -80,7 +91,7 @@ def create_app(*, enabled: bool | None = None) -> FastAPI:
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; "
+            "connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; "
             "form-action 'self'" if is_shell else
             "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; "
             "form-action 'none'")
@@ -106,11 +117,13 @@ def create_app(*, enabled: bool | None = None) -> FastAPI:
     @application.get("/ready")
     def ready() -> JSONResponse:
         provisioned = get_owner_auth().is_provisioned()
-        code = 200 if remote_enabled and provisioned else 503
+        preflight = deployment.preflight()
+        code = 200 if remote_enabled and provisioned and preflight["ok"] else 503
         return JSONResponse({
             "ready": code == 200,
             "remote_enabled": remote_enabled,
             "owner_provisioned": provisioned,
+            "deployment": preflight,
         }, status_code=code)
 
     # Optional same-origin owner shell. Netlify uses the same source files,
@@ -163,4 +176,5 @@ def deployment_diagnostics() -> dict[str, Any]:
         "device_db": os.environ.get("ZENO_DEVICE_LINK_DB", "default local path"),
         "owner_provisioned": get_owner_auth().is_provisioned(),
         "queue": device_link.get_link().stats(),
+        "deployment": deployment.preflight(),
     }

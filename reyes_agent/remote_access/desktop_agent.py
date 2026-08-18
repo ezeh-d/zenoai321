@@ -32,6 +32,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import threading
 import time
 import urllib.error
@@ -48,6 +49,9 @@ POLL_IDLE_S = 3.0
 BACKOFF_START_S = 2.0
 BACKOFF_MAX_S = 60.0
 HEARTBEAT_EVERY_S = 20.0
+VOICE_MEDIA_READ_PATH = "/api/owner/device/media/read"
+VOICE_MEDIA_WRITE_PATH = "/api/owner/device/media/write"
+MAX_REMOTE_SPEECH_CHARS = 1200
 
 
 @dataclass
@@ -96,7 +100,15 @@ ACTION_TOOLS: dict[str, str] = {
     "memory_recall": "search_notes",
     "agent_status": "agent_roster",
     "open_app": "open_app",
+    "close_app": "close_app",
 }
+
+_REMOTE_CLOSE_APPS = frozenset({
+    "chrome", "google chrome", "edge", "microsoft edge", "firefox", "notepad",
+    "calculator", "visual studio code", "vs code", "vscode", "word",
+    "microsoft word", "excel", "powerpoint", "spotify", "slack", "discord",
+    "telegram", "whatsapp",
+})
 
 _DEFAULT_REMOTE_APPS = {
     "calculator": "calculator", "calc": "calculator",
@@ -141,11 +153,19 @@ def _args_open_app(p: dict[str, Any]) -> dict[str, Any]:
     return {"name_or_path": selected}
 
 
+def _args_close_app(p: dict[str, Any]) -> dict[str, Any]:
+    requested = " ".join(str(p.get("name", "")).split()).casefold()[:64]
+    if requested not in _REMOTE_CLOSE_APPS:
+        raise ValueError("application is not in the fixed remote close allow-list")
+    return {"name": requested}
+
+
 ACTION_ARGS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "status": _args_status,
     "memory_recall": _args_memory,
     "agent_status": _args_agents,
     "open_app": _args_open_app,
+    "close_app": _args_close_app,
 }
 
 # ZENO's tools return prose, not status codes, so failure has to be read out
@@ -187,8 +207,73 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
     except Exception as exc:  # noqa: BLE001
         return False, {"error": f"{type(exc).__name__}: {exc}"[:400]}
 
-    failed = bool(_FAILURE_PATTERN.search(output))
-    return (not failed), {"tool": tool_name, "detail": output[:4000]}
+    from reyes_agent.tools import classify_tool_result
+
+    classification = classify_tool_result(output)
+    failed = bool(_FAILURE_PATTERN.search(output)) or classification["outcome"] == "failed"
+    waiting = classification["outcome"] == "waiting"
+    if waiting:
+        return False, {"tool": tool_name, "detail": output[:4000],
+                       "error": "Tool is still waiting for local confirmation; it did not run."}
+    return (not failed), {"tool": tool_name, "detail": output[:4000],
+                          "verification_state": classification["verification_state"]}
+
+
+def _run_remotely_approved_tool(action: str, payload: dict[str, Any], *,
+                                approval_id: str, command_id: str) -> tuple[bool, dict[str, Any]]:
+    """Consume a durable owner approval while preserving every non-confirmation gate."""
+    if not re.fullmatch(r"apr_[A-Za-z0-9_-]{8,80}", str(approval_id or "")):
+        return False, {"error": "valid remote approval evidence is required"}
+    from reyes_agent import audit, permissions
+    from reyes_agent.security.capabilities import authorize_arguments, authorize_tool
+    from reyes_agent.security.policy import DENY, decide
+    from reyes_agent.tools import TOOLS, classify_tool_result, execute_tool
+
+    tool_name = ACTION_TOOLS.get(action, "")
+    tool = TOOLS.get(tool_name)
+    if tool is None:
+        return False, {"error": f"tool '{tool_name}' is not registered"}
+    try:
+        args = ACTION_ARGS[action](payload)
+    except Exception as exc:  # noqa: BLE001
+        return False, {"error": f"{type(exc).__name__}: {exc}"[:400]}
+    allowed, reason, _actor = authorize_tool(tool_name)
+    arguments_ok, arguments_reason, _actor = authorize_arguments(args)
+    policy_result = decide(tool_name)
+    if not allowed or not arguments_ok or policy_result.effect == DENY:
+        return False, {"error": (reason if not allowed else arguments_reason if not arguments_ok
+                                  else policy_result.reason)[:400]}
+    if permissions.check(tool_name) == permissions.BLOCKED:
+        return False, {"error": "tool capability is blocked by local policy"}
+    audit.log("remote_approval_consumed", action=tool_name, approval_id=approval_id,
+              command_id=command_id, input=args)
+    try:
+        output = str(execute_tool(tool, args))
+    except Exception as exc:  # noqa: BLE001
+        return False, {"error": f"{type(exc).__name__}: {exc}"[:400]}
+    classification = classify_tool_result(output)
+    ok = classification["outcome"] == "completed"
+    return ok, {"tool": tool_name, "detail": output[:4000],
+                "verification_state": classification["verification_state"],
+                **({} if ok else {"error": "approved action lacked verified completion evidence"})}
+
+
+def _exec_automation(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    allowed_keys = {"name", "workflow_id", "summary", "_remote_approval_id",
+                    "_remote_command_id", "_requesting_device"}
+    if any(key not in allowed_keys for key in payload):
+        return False, {"error": "raw steps, paths, tools and commands are not accepted"}
+    reference = str(payload.get("workflow_id") or payload.get("name") or "").strip()
+    try:
+        from reyes_agent.workflow_engine import get_workflow_engine
+
+        result = get_workflow_engine().start_approved_remote_run(
+            reference, approval_id=str(payload.get("_remote_approval_id", "")),
+            command_id=str(payload.get("_remote_command_id", "")),
+            requesting_device=str(payload.get("_requesting_device", "owner-web")))
+    except Exception as exc:  # noqa: BLE001
+        return False, {"error": f"{type(exc).__name__}: {exc}"[:400]}
+    return bool(result.get("ok")), result
 
 
 def _exec_ask(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -250,6 +335,100 @@ def _exec_conversation(_payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         return False, {"error": f"{type(exc).__name__}: {exc}"[:400]}
 
 
+def _speech_excerpt(text: str, limit: int = MAX_REMOTE_SPEECH_CHARS) -> str:
+    """Bound provider cost while ending on a natural sentence where possible."""
+    clean = " ".join(str(text or "").split())
+    if len(clean) <= limit:
+        return clean
+    candidate = clean[:limit]
+    stops = [candidate.rfind(mark) for mark in (". ", "? ", "! ")]
+    stop = max(stops)
+    if stop >= max(80, limit // 2):
+        return candidate[:stop + 1]
+    return candidate.rstrip() + "…"
+
+
+def _exec_voice_turn(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    """Transcribe one gateway-bound clip and produce an optional MP3 reply.
+
+    A gateway session proves that the request came from an approved owner
+    browser; it does *not* prove who produced the sound.  Consequently this
+    path never manufactures an OWNER_CONFIRMED speaker result.  It also
+    refuses every control/sensitive/financial transcript before the agent is
+    called because the gateway could not classify opaque audio.
+    """
+    audio = payload.get("_audio_bytes")
+    if not isinstance(audio, (bytes, bytearray)) or not audio:
+        return False, {"error": "voice media was not supplied by the authenticated transport"}
+    try:
+        from reyes_agent.voice.stt import transcribe_result
+
+        speech = transcribe_result(bytes(audio))
+        transcript = " ".join(str(speech.get("transcript") or "").split()).strip()
+    except Exception as exc:  # noqa: BLE001 - result is reported, connector survives
+        return False, {"error": f"speech transcription failed: {type(exc).__name__}"}
+    if not transcript:
+        return False, {"error": "no speech was recognized in the bounded clip"}
+
+    from reyes_agent.remote_access import policy
+
+    decision = policy.evaluate(transcript, allow_control=False)
+    blocked = not decision.allowed
+    if blocked:
+        answer = decision.reason
+        tool_calls: list[dict[str, Any]] = []
+    else:
+        # Natural language classification is one wall, not the execution
+        # boundary.  Ambiguous wording could still make a model request a
+        # desktop tool, so the request also runs inside a capability scope
+        # containing only tools independently classified as read-only.
+        from reyes_agent.autonomy import AutonomyLevel, classify_tool
+        from reyes_agent.security.capabilities import agent_scope
+        from reyes_agent.tools import TOOLS
+
+        read_only_tools = {
+            name for name, tool in TOOLS.items()
+            if classify_tool(name, requires_confirmation=tool.requires_confirmation).level
+            == AutonomyLevel.SAFE_AUTOMATION
+        }
+        with agent_scope("remote_voice", allowed_tools=read_only_tools,
+                         approval_level=1):
+            ok, conversation = _exec_ask({"text": transcript})
+        if not ok:
+            return False, {
+                "transcript": transcript[:4000],
+                "speech_confidence": speech.get("confidence"),
+                "speaker_verification": "NOT_PERFORMED",
+                "authentication": "TRUSTED_OWNER_BROWSER_SESSION",
+                **conversation,
+            }
+        answer = str(conversation.get("answer") or "")
+        tool_calls = list(conversation.get("tool_calls") or [])[:20]
+
+    result: dict[str, Any] = {
+        "transcript": transcript[:4000],
+        "speech_confidence": speech.get("confidence"),
+        "answer": answer[:8000],
+        "tool_calls": tool_calls,
+        "blocked": blocked,
+        "policy_category": decision.category,
+        "speaker_verification": "NOT_PERFORMED",
+        "authentication": "TRUSTED_OWNER_BROWSER_SESSION",
+        "audio_available": False,
+    }
+    spoken = _speech_excerpt(answer)
+    if spoken:
+        try:
+            from reyes_agent import voice_manager
+
+            result["_audio_bytes"] = voice_manager.synthesize(spoken, "zeno")
+            result["audio_available"] = True
+            result["speech_truncated"] = len(" ".join(answer.split())) > len(spoken)
+        except Exception as exc:  # noqa: BLE001 - text answer still completed truthfully
+            result["tts_error"] = f"voice generation unavailable: {type(exc).__name__}"
+    return True, result
+
+
 def _executor_for(action: str) -> Callable[[dict[str, Any]], tuple[bool, dict[str, Any]]] | None:
     if action == "ask":
         return _exec_ask
@@ -259,6 +438,10 @@ def _executor_for(action: str) -> Callable[[dict[str, Any]], tuple[bool, dict[st
         return _exec_tasks
     if action == "conversation_snapshot":
         return _exec_conversation
+    if action == "voice_turn":
+        return _exec_voice_turn
+    if action == "run_automation":
+        return _exec_automation
     if action in ACTION_TOOLS:
         return lambda payload: _run_tool(action, payload)
     return None
@@ -274,7 +457,7 @@ class DesktopAgent:
         self._thread: threading.Thread | None = None
 
     # ---- transport ------------------------------------------------------
-    def _post(self, path: str, body: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
+    def _url(self, path: str) -> str:
         url = self.config.gateway.rstrip("/") + path
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("gateway must be an http(s) URL")
@@ -282,14 +465,83 @@ class DesktopAgent:
         if parsed.scheme != "https" and parsed.hostname not in {
                 "127.0.0.1", "localhost", "::1"}:
             raise ValueError("a non-local gateway must use HTTPS")
-        data = json.dumps(body).encode("utf-8")
-        request = urllib.request.Request(
-            url, data=data, headers={"Content-Type": "application/json"})
+        return url
+
+    def _request(self, path: str, *, data: bytes, headers: dict[str, str],
+                 timeout: float) -> tuple[bytes, str]:
+        request = urllib.request.Request(self._url(path), data=data, headers=headers)
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read() or b"{}")
+            return bytes(response.read() or b""), str(
+                response.headers.get_content_type() or "application/octet-stream")
+
+    def _post(self, path: str, body: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
+        data = json.dumps(body).encode("utf-8")
+        raw, _mime = self._request(
+            path, data=data, headers={"Content-Type": "application/json"},
+            timeout=timeout)
+        return json.loads(raw or b"{}")
+
+    def _post_for_bytes(self, path: str, body: dict[str, Any],
+                        timeout: float = 30.0) -> tuple[bytes, str]:
+        """POST authenticated JSON and receive bounded binary media."""
+        data = json.dumps(body).encode("utf-8")
+        raw, mime = self._request(
+            path, data=data, headers={"Content-Type": "application/json"},
+            timeout=timeout)
+        if len(raw) > 5 * 1024 * 1024:
+            raise ValueError("gateway returned an oversized voice clip")
+        return raw, mime
+
+    def _post_multipart(self, path: str, *, fields: dict[str, str],
+                        file_field: str, filename: str, content_type: str,
+                        data: bytes, timeout: float = 30.0) -> dict[str, Any]:
+        """Small multipart encoder; device credentials remain in the body."""
+        if len(data) > 8 * 1024 * 1024:
+            raise ValueError("voice response exceeds the transport limit")
+        boundary = "zeno-" + secrets.token_hex(16)
+        chunks: list[bytes] = []
+        for name, value in fields.items():
+            chunks.extend((
+                f"--{boundary}\r\n".encode("ascii"),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("ascii"),
+                str(value).encode("utf-8"), b"\r\n",
+            ))
+        chunks.extend((
+            f"--{boundary}\r\n".encode("ascii"),
+            (f'Content-Disposition: form-data; name="{file_field}"; '
+             f'filename="{filename}"\r\n').encode("ascii"),
+            f"Content-Type: {content_type}\r\n\r\n".encode("ascii"),
+            bytes(data), b"\r\n", f"--{boundary}--\r\n".encode("ascii"),
+        ))
+        raw, _mime = self._request(
+            path, data=b"".join(chunks),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            timeout=timeout)
+        return json.loads(raw or b"{}")
 
     def _auth(self) -> dict[str, str]:
         return {"device_id": self.config.device_id, "token": self.config.token}
+
+    def _execute_with_heartbeat(self, action: str, operation: Callable[[], Any]) -> Any:
+        """Run slow finite work on the bounded pool while this connector stays alive."""
+        from reyes_agent.worker_pool import PRIORITY_BRAIN, PRIORITY_VOICE, get_worker_pool
+
+        timeout = 160.0 if action in {"ask", "voice_turn"} else 90.0
+        handle = get_worker_pool().submit(
+            operation, name=f"remote:{action}",
+            priority=PRIORITY_VOICE if action == "voice_turn" else PRIORITY_BRAIN,
+            timeout=timeout, retries=0)
+        while not handle.wait(10.0):
+            if self._stop.is_set():
+                handle.cancel()
+                raise RuntimeError("desktop connector is shutting down")
+            try:
+                self._post("/api/owner/device/heartbeat",
+                           {**self._auth(), "state": "BUSY",
+                            "detail": action[:80]}, timeout=8.0)
+            except Exception as exc:  # noqa: BLE001 -- work result remains authoritative
+                log.warning("busy heartbeat failed for %s: %s", action, type(exc).__name__)
+        return handle.result()
 
     # ---- loop -----------------------------------------------------------
     def start(self) -> None:
@@ -357,6 +609,10 @@ class DesktopAgent:
         command_id = str(command.get("id", ""))
         action = str(command.get("action", ""))
         payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
+        approval_id = str(command.get("approval_id", ""))
+        payload = {**payload, "_remote_approval_id": approval_id,
+                   "_remote_command_id": command_id,
+                   "_requesting_device": "owner-web"}
 
         # Duplicate suppression at the executing end as well as the queue.
         # A claim retried after a network blip must not run twice.
@@ -378,9 +634,47 @@ class DesktopAgent:
             return
 
         try:
-            ok, result = executor(payload)
+            if action == "voice_turn":
+                media_id = str(payload.get("media_id", "")).strip()
+                if not media_id:
+                    raise ValueError("voice command has no media id")
+                audio, input_mime = self._post_for_bytes(
+                    VOICE_MEDIA_READ_PATH,
+                    {**self._auth(), "command_id": command_id,
+                     "media_id": media_id}, timeout=30.0)
+                payload = {**payload, "_audio_bytes": audio,
+                           "_input_content_type": input_mime}
+            def execute():
+                if action in {"open_app", "close_app"} and approval_id:
+                    return _run_remotely_approved_tool(
+                        action, payload, approval_id=approval_id, command_id=command_id)
+                return executor(payload)
+
+            if action in {"ask", "voice_turn"}:
+                ok, result = self._execute_with_heartbeat(action, execute)
+            else:
+                ok, result = execute()
         except Exception as exc:  # noqa: BLE001
             ok, result = False, {"error": f"{type(exc).__name__}: {exc}"[:400]}
+
+        response_audio = result.pop("_audio_bytes", None)
+        if ok and response_audio is not None:
+            try:
+                media_id = str(payload.get("media_id", "")).strip()
+                uploaded = self._post_multipart(
+                    VOICE_MEDIA_WRITE_PATH,
+                    fields={**self._auth(), "command_id": command_id,
+                            "media_id": media_id},
+                    file_field="audio", filename="zeno-response.mp3",
+                    content_type="audio/mpeg", data=bytes(response_audio), timeout=30.0)
+                if not uploaded.get("ok", False):
+                    raise RuntimeError("gateway did not accept the voice response")
+                result["audio_id"] = media_id
+                result["audio_available"] = True
+            except Exception as exc:  # noqa: BLE001 - do not claim audio delivery
+                ok = False
+                result["audio_available"] = False
+                result["error"] = f"voice response upload failed: {type(exc).__name__}"
 
         if ok:
             self.state.commands_done += 1

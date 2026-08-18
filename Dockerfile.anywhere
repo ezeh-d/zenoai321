@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    WEB_CONCURRENCY=1 \
+    PORT=8080
+
+WORKDIR /srv/zeno
+COPY requirements-anywhere.txt ./
+RUN pip install --no-cache-dir -r requirements-anywhere.txt \
+    && useradd --create-home --uid 10001 zeno \
+    && mkdir -p /var/lib/zeno \
+    && chown -R zeno:zeno /var/lib/zeno /srv/zeno
+
+COPY --chown=zeno:zeno reyes_agent ./reyes_agent
+USER zeno
+VOLUME ["/var/lib/zeno"]
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8080')+'/ready',timeout=4).read()"
+CMD ["sh", "-c", "exec uvicorn reyes_agent.anywhere_gateway:app --host 0.0.0.0 --port ${PORT} --workers 1 --proxy-headers --forwarded-allow-ips='*'"]

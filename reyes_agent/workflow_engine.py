@@ -680,6 +680,88 @@ class WorkflowEngine:
         self._publish("workflow.started", {"id": workflow["id"], "name": workflow["name"], "start_index": start_index})
         return f"Started '{workflow['name']}'. The Mini Orb will show its live progress."
 
+    def start_approved_remote_run(
+        self,
+        reference: str,
+        *,
+        approval_id: str,
+        command_id: str = "",
+        requesting_device: str = "owner-web",
+    ) -> dict[str, Any]:
+        """Start one persisted owner-approved workflow after remote approval.
+
+        This is intentionally not a generic automation endpoint.  It accepts
+        only an existing workflow name/id and opaque bounded approval
+        metadata.  Raw steps, paths, tool names and command text never enter
+        the replay engine through this seam.  The remote approval can satisfy
+        a ``CONFIRM`` capability, but a ``BLOCKED`` capability remains blocked
+        because :meth:`start_run` always re-evaluates capability policy.
+
+        The result proves only that the managed workflow task started.  It
+        does not wait up to the workflow's 900-second runtime or claim that
+        its steps completed.
+        """
+        def refused(error: str) -> dict[str, Any]:
+            return {"ok": False, "state": "REJECTED", "error": error[:400]}
+
+        if not isinstance(reference, str):
+            return refused("A saved workflow name or id is required; raw definitions are not accepted.")
+        raw_reference = reference
+        wanted = " ".join(raw_reference.split())
+        if (not wanted or len(wanted) > _MAX_NAME or any(
+                marker in raw_reference for marker in ("{", "}", "[", "]", "\\", "/", "\x00", "\n", "\r"))):
+            return refused("Only a saved workflow name or id is accepted; raw definitions and paths are rejected.")
+
+        approval = str(approval_id or "").strip()
+        command = str(command_id or "").strip()
+        if not re.fullmatch(r"apr_[A-Za-z0-9_-]{8,80}", approval):
+            return refused("Valid remote approval metadata is required before a workflow can start.")
+        if command and not re.fullmatch(r"cmd_[A-Za-z0-9_-]{8,80}", command):
+            return refused("Invalid remote command metadata.")
+
+        workflow = self._find(wanted)
+        if workflow is None or not workflow.get("approved_at"):
+            return refused(f"No persisted owner-approved workflow named '{wanted}'.")
+
+        # Recheck policy here before consuming the approval.  start_run checks
+        # it again at the actual scheduling boundary, preventing a race with a
+        # permission change between lookup and submission.
+        blocked, _confirmation = self._permission_state(workflow)
+        if blocked:
+            return refused("Workflow requires blocked capability: " + ", ".join(blocked))
+
+        message = self.start_run(workflow["id"], confirmed=True)
+        snapshot = self.status()
+        task = snapshot.get("task") if isinstance(snapshot.get("task"), dict) else None
+        started = message.startswith("Started '") and snapshot.get("workflow_id") == workflow["id"]
+        if not started:
+            return {
+                "ok": False,
+                "state": "REJECTED",
+                "workflow_id": workflow["id"],
+                "workflow_name": workflow["name"],
+                "error": message[:400],
+                "workflow_state": snapshot.get("mode", ""),
+            }
+
+        audit_payload = {
+            "id": workflow["id"], "name": workflow["name"],
+            "approval_id": approval, "command_id": command[:84],
+            "requesting_device": str(requesting_device or "owner-web")[:80],
+        }
+        self._publish("workflow.remote_approval_consumed", audit_payload)
+        return {
+            "ok": True,
+            "state": "STARTED",
+            "workflow_id": workflow["id"],
+            "workflow_name": workflow["name"],
+            "workflow_state": snapshot.get("mode", WORKFLOW_RUNNING),
+            "task_id": str((task or {}).get("id", ""))[:120],
+            "detail": message,
+            "verified": True,
+            "verification_evidence": "Persisted approved workflow accepted by the managed Kernel worker.",
+        }
+
     def confirm_run(self, name: str) -> str:
         with self._lock:
             waiting = self._mode == WORKFLOW_WAITING_FOR_CONFIRMATION

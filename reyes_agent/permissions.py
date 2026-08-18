@@ -150,6 +150,7 @@ TOOL_CAPABILITY: dict[str, str] = {
     "engineering_backends": "filesystem_read",
     "mobile_device_status": "vision",
     "open_app": "app_control",
+    "close_app": "app_control",
     "open_path": "app_control",
     "media_control": "app_control",
     "set_volume": "desktop_automation",

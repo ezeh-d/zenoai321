@@ -20,6 +20,39 @@ from reyes_agent.tools import register
 
 _MAX_LIST = 200
 _MAX_READ_CHARS = 6000
+_WM_CLOSE = 0x0010
+
+# Remote/local app closing is deliberately narrower than app launching.  A
+# launch typo normally fails; a close typo aimed at the shell or ZENO itself
+# can destroy the user's session.  Match exact process basenames only and do
+# not accept paths, PIDs, executable names, or caller-supplied commands.
+_CLOSE_APP_PROCESSES: dict[str, frozenset[str]] = {
+    "chrome": frozenset({"chrome.exe"}),
+    "google chrome": frozenset({"chrome.exe"}),
+    "edge": frozenset({"msedge.exe"}),
+    "microsoft edge": frozenset({"msedge.exe"}),
+    "firefox": frozenset({"firefox.exe"}),
+    "notepad": frozenset({"notepad.exe"}),
+    "calculator": frozenset({"calculator.exe", "calculatorapp.exe"}),
+    "visual studio code": frozenset({"code.exe"}),
+    "vs code": frozenset({"code.exe"}),
+    "vscode": frozenset({"code.exe"}),
+    "word": frozenset({"winword.exe"}),
+    "microsoft word": frozenset({"winword.exe"}),
+    "excel": frozenset({"excel.exe"}),
+    "powerpoint": frozenset({"powerpnt.exe"}),
+    "spotify": frozenset({"spotify.exe"}),
+    "slack": frozenset({"slack.exe"}),
+    "discord": frozenset({"discord.exe"}),
+    "telegram": frozenset({"telegram.exe"}),
+    "whatsapp": frozenset({"whatsapp.exe"}),
+}
+_PROTECTED_CLOSE_NAMES = frozenset({
+    "zeno", "zeno.exe", "reyes", "reyes.exe", "python", "python.exe",
+    "pythonw", "pythonw.exe", "webview", "webview2", "msedgewebview2",
+    "msedgewebview2.exe", "explorer", "explorer.exe", "file explorer", "windows explorer",
+    "shell", "desktop", "system", "winlogon", "services", "lsass", "dwm",
+})
 
 
 def _visible_windows() -> list[tuple[int, int, str]]:
@@ -79,6 +112,98 @@ def _verify_app_open(expected: str, before_pids: set[int], *, timeout_s: float =
                 return f"visible window '{title[:100]}' (PID {pid}) exists"
         time.sleep(0.1)
     return ""
+
+
+def _matching_close_windows(process_names: frozenset[str]) -> list[tuple[int, int, str]]:
+    """Visible top-level windows owned by an exact allow-listed process.
+
+    Window titles are not used for identity: a Chrome tab titled "Notepad"
+    must never be mistaken for Notepad.  Process lookup failure simply omits
+    that window, failing closed rather than guessing.
+    """
+    matches: list[tuple[int, int, str]] = []
+    wanted = {name.casefold() for name in process_names}
+    for hwnd, pid, title in _visible_windows():
+        try:
+            process_name = str(psutil.Process(pid).name() or "").casefold()
+        except (psutil.Error, OSError, ValueError):
+            continue
+        if process_name in wanted:
+            matches.append((hwnd, pid, title))
+    return matches
+
+
+def _post_close_message(hwnd: int) -> bool:
+    """Ask one Windows GUI window to close gracefully; never kill its PID."""
+    if os.name != "nt" or not hwnd:
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.user32.PostMessageW(int(hwnd), _WM_CLOSE, 0, 0))
+    except Exception:  # noqa: BLE001 -- native failure is reported by close_app
+        return False
+
+
+@register(
+    name="close_app",
+    description=(
+        "Gracefully close visible windows for one explicitly allow-listed application. "
+        "Never terminates a process and never closes ZENO, Python, WebView2, Explorer, "
+        "or the Windows shell. Requires confirmation because unsaved work may prompt."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "enum": sorted(_CLOSE_APP_PROCESSES),
+                "description": "Allow-listed application name; paths, PIDs and commands are rejected.",
+            },
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    },
+    requires_confirmation=True,
+)
+def close_app(name: str, *, timeout_s: float = 5.0) -> str:
+    """Post ``WM_CLOSE`` and verify the visible windows actually disappear.
+
+    ``WM_CLOSE`` lets the application show its normal save/discard prompt.  A
+    remaining window is therefore an honest incomplete result, not a reason
+    to escalate to ``taskkill`` or ``Process.terminate``.
+    """
+    requested = " ".join(str(name or "").split()).casefold()
+    if requested in _PROTECTED_CLOSE_NAMES:
+        return f"Blocked: '{requested}' is a protected ZENO or Windows host and was not closed."
+    process_names = _CLOSE_APP_PROCESSES.get(requested)
+    if process_names is None:
+        return "Blocked: that application is not in ZENO's close allow-list. Nothing ran."
+
+    windows = _matching_close_windows(process_names)
+    if not windows:
+        return f"Failed: no visible {requested} window was found; no process was terminated."
+
+    requested_handles = {hwnd for hwnd, _pid, _title in windows}
+    posted = {hwnd for hwnd in requested_handles if _post_close_message(hwnd)}
+    if posted != requested_handles:
+        return (f"Failed: Windows accepted {len(posted)} of {len(requested_handles)} graceful "
+                f"close request(s) for {requested}; no process was terminated.")
+
+    deadline = time.monotonic() + max(0.2, min(float(timeout_s), 10.0))
+    remaining: set[int] = requested_handles
+    while time.monotonic() < deadline:
+        remaining = {
+            hwnd for hwnd, _pid, _title in _matching_close_windows(process_names)
+            if hwnd in requested_handles
+        }
+        if not remaining:
+            return (f"Closed '{requested}'; postcondition verified: "
+                    f"{len(requested_handles)} visible window(s) closed gracefully.")
+        time.sleep(0.1)
+
+    return (f"Failed: {len(remaining)} {requested} window(s) remain open, possibly for an "
+            "unsaved-work prompt; no process was terminated.")
 
 
 @register(

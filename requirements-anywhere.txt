@@ -1,0 +1,10 @@
+# Minimal Linux/cloud dependencies for the isolated ZENO Anywhere gateway.
+# The desktop requirements (PySide6, PyAudio, Playwright, etc.) do not belong
+# in this image.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-dotenv>=1.0
+python-multipart>=0.0.9
+webauthn>=3.0
+cryptography>=47.0
+pywebpush>=2.0

@@ -13,6 +13,8 @@ mcp>=2.0
 fastapi>=0.115
 uvicorn[standard]>=0.30
 python-multipart>=0.0.9
+cryptography>=47.0
+pywebpush>=2.0
 
 # --- Phone Companion security (passkeys and desktop QR pairing) ---
 webauthn>=3.0

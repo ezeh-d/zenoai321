@@ -75,6 +75,7 @@ ACTION_CATEGORIES = {
     "agent_status": "READ_ONLY",
     "task_status": "READ_ONLY",
     "conversation_snapshot": "READ_ONLY",
+    "voice_turn": "READ_ONLY",
     "open_app": "STANDARD_DEVICE",
     "close_app": "SENSITIVE_DEVICE",
     "run_automation": "SENSITIVE_DEVICE",
@@ -277,16 +278,33 @@ class DeviceLink:
                   permission_level: str = "", approval_result: str = "",
                   execution_result: str = "", failure_reason: str = "",
                   summary: str = "") -> None:
+        at = time.time()
         with self._connection() as conn:
             conn.execute(
                 "INSERT INTO activity(at,event,requesting_device,target_device,command_id,"
                 "agent,permission_level,approval_result,execution_result,failure_reason,summary) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (time.time(), self._clean(event, 80), self._clean(requesting_device, 80),
+                (at, self._clean(event, 80), self._clean(requesting_device, 80),
                  self._clean(target_device, 80), self._clean(command_id, 80),
                  self._clean(agent, 80), self._clean(permission_level, 40),
                  self._clean(approval_result, 40), self._clean(execution_result, 80),
                  self._clean(failure_reason, 240), self._clean(summary, 240)))
+        # Realtime delivery is a best-effort invalidation signal. Durable
+        # activity above remains authoritative, and a disconnected browser
+        # recovers through its existing polling path.
+        try:
+            from reyes_agent.remote_access import realtime
+
+            realtime.publish({
+                "type": event,
+                "at": at,
+                "target_device": target_device,
+                "command_id": command_id,
+                "execution_result": execution_result,
+                "approval_result": approval_result,
+            })
+        except Exception:  # realtime must never break a command transaction
+            pass
 
     def activity(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self._connection() as conn:

@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 from reyes_agent.auth.owner import OwnerAuthService
 from reyes_agent.remote_access import cloud_api, device_link, policy
 from reyes_agent.remote_access.desktop_agent import (
-    ACTION_TOOLS, AgentConfig, DesktopAgent, _args_open_app, _exec_ask, _run_tool,
+    ACTION_TOOLS, AgentConfig, DesktopAgent, _args_close_app, _args_open_app,
+    _exec_ask, _run_tool,
 )
 from reyes_agent.remote_access.device_link import (
     APPROVED_DEVICE, CANCELLED, EXPIRED, PENDING_APPROVAL, WAITING_FOR_DEVICE,
@@ -227,7 +228,13 @@ def test_desktop_executor_uses_permission_gated_tool_and_app_allowlist(monkeypat
     assert calls == [("open_app", {"name_or_path": "calculator"})]
     with pytest.raises(ValueError):
         _args_open_app({"name": "..\\cmd.exe & whoami"})
-    assert "close_app" not in ACTION_TOOLS and "run_automation" not in ACTION_TOOLS
+    assert ACTION_TOOLS["close_app"] == "close_app"
+    assert _args_close_app({"name": "word"}) == {"name": "word"}
+    with pytest.raises(ValueError):
+        _args_close_app({"name": "explorer.exe"})
+    # Workflow replay uses its dedicated saved-workflow executor rather than
+    # appearing as a remotely selectable arbitrary tool.
+    assert "run_automation" not in ACTION_TOOLS
 
 
 def test_desktop_chat_uses_the_shared_web_conversation(monkeypatch):
