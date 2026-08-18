@@ -29,7 +29,10 @@ def test_listener_records_the_processed_stream_not_web_speech() -> None:
     source = (ROOT / "reyes_agent" / "static" / "index.html").read_text(encoding="utf-8")
     active = source.split("function chooseRecorderOptions()", 1)[1]
     active = active.split("function stopAmbientListening()", 1)[0]
-    assert 'import * as voiceVAD from "/static/vad.js?v=1"' in source
+    # The query value is a cache revision, not part of the microphone
+    # contract. Keep this regression stable when the processed VAD module is
+    # intentionally revised.
+    assert 'import * as voiceVAD from "/static/vad.js?v=' in source
     assert "voiceVAD.mediaStream()" in active
     assert "new MediaRecorder(stream" in active
     assert "let VAD_MAX_CLIP_MS = 12_000" in source
@@ -42,7 +45,7 @@ def test_listener_records_the_processed_stream_not_web_speech() -> None:
 
 def test_mini_orb_uses_the_same_processed_wake_stream() -> None:
     source = (ROOT / "reyes_agent" / "static" / "mini.html").read_text(encoding="utf-8")
-    assert 'import * as voiceVAD from \'/static/vad.js?v=1\'' in source
+    assert "import * as voiceVAD from '/static/vad.js?v=" in source
     assert "voiceVAD.mediaStream()" in source
     assert "fetch('/api/transcribe'" in source
     assert "WakeRecognition" not in source

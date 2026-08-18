@@ -2,15 +2,15 @@
   "project_name": "ZENO",
   "owner_name": "Divine",
   "institution": "Redeemer's University",
-  "generated_at": 1786964151.3165686,
+  "generated_at": 1787059449.3070443,
   "history": {
-    "commits": 77,
+    "commits": 87,
     "first": "2026-08-05",
-    "last": "2026-08-12",
-    "active_days": 6
+    "last": "2026-08-18",
+    "active_days": 8
   },
   "scale": {
-    "modules": 441,
+    "modules": 483,
     "tests_passing": 0
   },
   "features": [
@@ -133,18 +133,18 @@
     }
   ],
   "recent_work": [
+    "feat(anywhere): complete secure realtime companion",
+    "feat(language): understand any language, reason in English",
+    "feat(anywhere): deploy secure gateway and installable PWA",
+    "feat(online): owner auth, device link and a real web app for ZENO",
+    "feat(social): connect the social subsystem -- it was 120KB of orphaned code",
+    "test: 30.7-minute soak and browser stress -- both actually run",
+    "perf(router): 105 schemas -> 12, and \"what time is it\" 10.05s -> 1.1s",
+    "audit: one runtime, daemon readers, and a flake -- 972 tests green",
+    "Harden ZENO voice, browser, and desktop runtime",
+    "fix(voice): finish the breaks -- 951 tests green, and two were real",
     "feat(ultron): serious mode -- one ZENO, operating differently",
-    "fix(phone): the microphone may now be answered, and acted on",
-    "fix(readiness): ask the server, and stop calling silence a fault",
-    "feat(presentation): SIWES evidence hub with receipts attached",
-    "feat(voice): say what you're doing, while you're doing it",
-    "fix(voice): the wake word opens a conversation, it is not punctuation",
-    "feat(voice): stay in the conversation -- follow-ups without the name, and barge-in",
-    "feat(visit): host a SIWES supervision visit as a conversation",
-    "fix(wake): accept the wake word as it is HEARD, not as it is spelled",
-    "feat(phone-mic): report signal LEVEL, not just stream health",
-    "fix(phone-mic): accept IPv6 peers; prove the receiver carries real audio",
-    "feat(design): enforce the named execution limits instead of documenting them"
+    "fix(phone): the microphone may now be answered, and acted on"
   ],
   "company_tasks": [],
   "challenges": [

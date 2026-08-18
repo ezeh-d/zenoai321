@@ -264,15 +264,26 @@ def cancel(job_id: str) -> dict[str, Any] | None:
     job = get(job_id)
     if job is None:
         return None
-    if not job.running:
-        return job.as_dict()
-    process = job._process
+    # Claim the terminal state *before* stopping the process. On Windows,
+    # taskkill/process.wait can take long enough for the watchdog to observe
+    # the non-zero exit and publish FAILED first. Keep that state transition
+    # atomic, while leaving the expensive process stop outside the lock.
+    with _lock:
+        if not job.running:
+            return job.as_dict()
+        job.state = CANCELLED
+        job.finished_at = time.time()
+        job.error = "cancelled on request"
+        process = job._process
     if process is not None:
         try:
             process.stop()
-        except Exception:  # noqa: BLE001
-            pass
-    _finish(job, CANCELLED, error="cancelled on request")
+        except Exception as exc:  # noqa: BLE001
+            # Cancellation remains the requested outcome, but retain an
+            # honest cleanup warning instead of hiding a failed teardown.
+            with _lock:
+                job.error = f"cancelled on request; process cleanup warning: {exc}"
+    _emit(job, "finished")
     return job.as_dict()
 
 

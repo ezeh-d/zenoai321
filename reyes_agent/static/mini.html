@@ -7,8 +7,8 @@
   #music-card{display:none;position:fixed;left:8px;right:8px;bottom:6px;z-index:4;align-items:center;gap:5px;padding:4px 6px;border-radius:8px;background:rgba(5,12,26,.86);border:1px solid rgba(98,200,255,.45);font-size:9px;pointer-events:none}#music-card.show{display:flex}#music-art{width:20px;height:20px;border-radius:4px;object-fit:cover;display:none}
 </style></head><body><canvas id="orb-canvas"></canvas><div id="music-card"><img id="music-art" alt=""><span id="music-text"></span></div>
 <script type="module">
-import { initOrb } from '/static/orb.js';
-import * as voiceVAD from '/static/vad.js?v=1';
+import { initOrb } from '/static/orb.js?v=8';
+import * as voiceVAD from '/static/vad.js?v=2';
 import { createAgentPresence } from '/static/agent_presence.js';
 const orb=initOrb(document.getElementById('orb-canvas'));
 // This is still ONE native Mini Orb window. Specialist faces are small DOM
@@ -114,13 +114,14 @@ function pcm16k(frame,sourceRate){
 }
 async function connectAudioFrameBus(){
   if(audioFrameSocket&&audioFrameSocket.readyState<2)return;
+  try{const status=await fetch('/api/wake/status',{cache:'no-store'}).then(r=>r.ok?r.json():null);if(!status||status.backend?.state!=='READY'){voiceVAD.setFrameBusActive?.(false);return;}}catch(_e){voiceVAD.setFrameBusActive?.(false);return;}
   const token=await desktopMicToken(),scheme=location.protocol==='https:'?'wss':'ws';
   const socket=new WebSocket(`${scheme}://${location.host}/api/audio/frames`);audioFrameSocket=socket;audioFrameReady=false;
-  socket.onopen=()=>socket.send(JSON.stringify({token,source:'mini-orb'}));
+  socket.onopen=()=>{voiceVAD.setFrameBusActive?.(true);socket.send(JSON.stringify({token,source:'mini-orb'}));};
   socket.onmessage=event=>{try{const data=JSON.parse(event.data);audioFrameReady=Boolean(data.ready);if(audioFrameReady)audioFrameReconnects=0;}catch(_e){}};
-  socket.onclose=()=>{if(audioFrameSocket===socket){audioFrameSocket=null;audioFrameReady=false;}if(wakeActive&&!audioFrameReconnectTimer){audioFrameReconnects++;const delay=Math.min(30000,700*(2**Math.min(6,audioFrameReconnects-1)));audioFrameReconnectTimer=setTimeout(()=>{audioFrameReconnectTimer=null;void connectAudioFrameBus();},delay);}};
+  socket.onclose=()=>{voiceVAD.setFrameBusActive?.(false);if(audioFrameSocket===socket){audioFrameSocket=null;audioFrameReady=false;}if(wakeActive&&!audioFrameReconnectTimer){audioFrameReconnects++;const delay=Math.min(30000,700*(2**Math.min(6,audioFrameReconnects-1)));audioFrameReconnectTimer=setTimeout(()=>{audioFrameReconnectTimer=null;void connectAudioFrameBus();},delay);}};
 }
-function closeAudioFrameBus(){const socket=audioFrameSocket;audioFrameSocket=null;audioFrameReady=false;if(audioFrameReconnectTimer){clearTimeout(audioFrameReconnectTimer);audioFrameReconnectTimer=null;}if(socket)try{socket.close(1000,'microphone stopped');}catch(_e){}}
+function closeAudioFrameBus(){voiceVAD.setFrameBusActive?.(false);const socket=audioFrameSocket;audioFrameSocket=null;audioFrameReady=false;if(audioFrameReconnectTimer){clearTimeout(audioFrameReconnectTimer);audioFrameReconnectTimer=null;}if(socket)try{socket.close(1000,'microphone stopped');}catch(_e){}}
 voiceVAD.onPcmFrame((frame,rate)=>{if(audioFrameReady&&audioFrameSocket?.readyState===WebSocket.OPEN&&!miniReplyAudio){try{audioFrameSocket.send(pcm16k(frame,rate));}catch(_e){}}});
 async function playCachedWakeAck(update){
   if(!wakeActive||Date.now()-localWakeAckAt<1800)return;localWakeAckAt=Date.now();miniListeningUntil=Date.now()+30000;

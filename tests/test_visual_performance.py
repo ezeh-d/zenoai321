@@ -19,8 +19,8 @@ def test_orb_uses_one_bounded_canvas_particle_pool() -> None:
     # JavaScript animation loop.
     assert "requestAnimationFrame(drawParticles)" in source
     # The permanent Mini Orb keeps particles visible but caps idle canvas
-    # work at 8fps and active states at 20fps.
-    assert "const gap = particleCount > 20 ? 50 : 125" in source
+    # work at 4fps and meaningful active states at 20fps.
+    assert 'const gap = lowMotion ? 250 : 50' in source
     assert "orb-motion" in source
     assert 'getContext("webgl")' not in source
     assert 'getContext("webgl2")' not in source

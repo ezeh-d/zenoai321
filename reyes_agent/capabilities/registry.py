@@ -294,6 +294,8 @@ def _seed() -> None:
         detector=lambda: True)
     cap("missions", "run long work that survives a restart", WORKFLOW,
         detector=lambda: True)
+    cap("opportunity_intelligence", "score evidence-led legitimate opportunities without income guarantees",
+        WORKFLOW, detector=lambda: True)
     cap("agents", "delegate to specialist agents", AGENT, detector=lambda: True)
     cap("sandbox", "run generated code somewhere contained", WORKFLOW,
         detector=lambda: True, risk=SENSITIVE)

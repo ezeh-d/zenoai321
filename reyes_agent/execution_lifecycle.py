@@ -6,7 +6,6 @@ loop's real stages, autonomy decisions, results and verification evidence.
 
 from __future__ import annotations
 
-import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -37,6 +36,8 @@ class Evidence:
     ok: bool
     result: str
     autonomy: dict[str, Any]
+    outcome: str = "returned"
+    verification_state: str = "unverified"
 
 
 @dataclass
@@ -68,22 +69,20 @@ class ExecutionTrace:
     def observed(self, name: str, result: str, autonomy: dict[str, Any]) -> None:
         self.enter(Stage.OBSERVE_RESULT, tool=name)
         text = str(result or "")
-        folded = text.casefold().lstrip()
-        failure_prefixes = ("error", "blocked", "cancelled", "canceled", "failed")
-        failure_fragments = ("timed out", "timeout", " has not run", " nothing ran", " has not been run")
-        ok = not (folded.startswith(failure_prefixes) or any(marker in folded for marker in failure_fragments))
-        if folded.startswith("{"):
-            try:
-                structured = json.loads(text)
-                if isinstance(structured, dict):
-                    if structured.get("ok") is False or structured.get("success") is False:
-                        ok = False
-                    state = str(structured.get("state") or structured.get("status") or "").casefold()
-                    if state in {"failed", "error", "blocked", "cancelled", "canceled", "timeout"}:
-                        ok = False
-            except (json.JSONDecodeError, TypeError):
-                pass
-        self.evidence.append(Evidence(name, ok, text[:500], autonomy))
+        # Reuse the authoritative tool-result classifier.  A function
+        # returning normally is not proof its requested effect happened.
+        # The former trace treated every non-error string as verified, which
+        # contradicted the execution gate and made diagnostics overclaim.
+        from reyes_agent.tools import classify_tool_result
+
+        classification = classify_tool_result(result)
+        outcome = str(classification.get("outcome") or "returned")
+        verification_state = str(classification.get("verification_state") or "unverified")
+        ok = outcome not in {"failed"}
+        self.evidence.append(Evidence(
+            name, ok, text[:500], autonomy,
+            outcome=outcome, verification_state=verification_state,
+        ))
         if not ok:
             self.may_recover()
 
@@ -92,8 +91,12 @@ class ExecutionTrace:
         if not self.evidence:
             return {"verified": True, "basis": "talk-only response", "autonomy": talk_only().as_dict()}
         failures = [item for item in self.evidence if not item.ok]
-        return {"verified": not failures, "tool_results": len(self.evidence),
-                "failures": [item.tool for item in failures]}
+        unverified = [item for item in self.evidence
+                      if item.verification_state != "verified"]
+        return {"verified": not failures and not unverified,
+                "tool_results": len(self.evidence),
+                "failures": [item.tool for item in failures],
+                "unverified": [item.tool for item in unverified]}
 
     def may_recover(self) -> bool:
         if self.recovery_attempts >= self.max_recovery_attempts:
@@ -128,5 +131,7 @@ class ExecutionTrace:
                 "duration_ms": round((time.time() - self.started_at) * 1000, 1),
                 "recovery_attempts": self.recovery_attempts,
                 "evidence": [{"tool": item.tool, "ok": item.ok,
+                              "outcome": item.outcome,
+                              "verification_state": item.verification_state,
                               "autonomy": item.autonomy} for item in self.evidence],
                 "error": self.error}

@@ -50,6 +50,7 @@ LEARNING = "LEARNING"
 MASTERY = "MASTERY"
 FOODIE = "FOODIE"
 WEBSITE_BUILDER = "WEBSITE_BUILDER"
+OPPORTUNITY = "OPPORTUNITY"
 
 # Tool-round budgets. FAST keeps the loop short so a greeting cannot spend
 # eight rounds; DEEP gets the existing full budget.
@@ -213,6 +214,12 @@ _CREATOR_MARKERS = ("creator mode", "create something", "i have an idea", "build
 _MASTERY_MARKERS = ("master", "mastery", "professional level", "final assessment", "client-style project")
 _FOODIE_MARKERS = ("foodie mode", "what should we cook", "recipe", "cook together", "jollof", "egusi", "meal plan", "ingredients", "too salty", "too watery", "mushy rice", "baking", "egg", "eggs", "boil")
 _WEBSITE_MARKERS = ("website mode", "web builder", "build me a website", "create a website", "company website", "restaurant website", "portfolio website", "landing page", "homepage", "hero section", "mobile layout", "dark mode", "preview the website", "website")
+_OPPORTUNITY_MARKERS = (
+    "make money", "online income", "income opportunity", "business opportunity",
+    "freelance", "freelancing", "micro-saas", "micro saas", "product idea",
+    "find clients", "potential clients", "market demand", "competitor research",
+    "pricing research", "profitable niche", "paid problem", "mvp idea",
+)
 _DESIGN_DEEP_MARKERS = (
     "complete brand identity", "full brand identity", "full identity", "brand strategy",
     "full ui system", "design system", "five competitors", "design a full", "logo design process",
@@ -348,6 +355,7 @@ def _route_uncached(message: str, *, has_active_task: bool = False,
     mastery_hits = _has(text, _MASTERY_MARKERS)
     foodie_hits = _has(text, _FOODIE_MARKERS)
     website_hits = _has(text, _WEBSITE_MARKERS)
+    opportunity_hits = _has(text, _OPPORTUNITY_MARKERS)
     if creator_hits:
         modes.append(CREATOR)
         reasons.append(f"creator request: {creator_hits[0]}")
@@ -362,6 +370,9 @@ def _route_uncached(message: str, *, has_active_task: bool = False,
     if website_hits:
         modes.append(WEBSITE_BUILDER)
         reasons.append(f"website builder request: {website_hits[0]}")
+    if opportunity_hits:
+        modes.append(OPPORTUNITY)
+        reasons.append(f"opportunity research request: {opportunity_hits[0]}")
     followup_hits = _has(text, _FOLLOWUP_MARKERS)
     is_followup = bool(followup_hits) or bool(_PRONOUN_ONLY.match(raw))
     if is_followup and has_active_task:
@@ -382,6 +393,7 @@ def _route_uncached(message: str, *, has_active_task: bool = False,
         "design_markers": len(design_hits), "learning_markers": len(learning_hits),
         "creator_markers": len(creator_hits), "mastery_markers": len(mastery_hits), "foodie_markers": len(foodie_hits),
         "website_markers": len(website_hits),
+        "opportunity_markers": len(opportunity_hits),
     })
 
     complexity = 0.0
@@ -435,6 +447,9 @@ def _route_uncached(message: str, *, has_active_task: bool = False,
     elif website_hits and (bool(action_hits) or len(website_hits) > 1):
         deep = True
         reasons.append("website build or modification needs a structured project path")
+    elif opportunity_hits:
+        deep = True
+        reasons.append("market and income claims require sourced, structured analysis")
 
     # --- specialists ------------------------------------------------------
     # Never for a greeting or a simple action. "Ultra-smart" must not mean
@@ -460,6 +475,9 @@ def _route_uncached(message: str, *, has_active_task: bool = False,
         elif CREATOR in modes and SPECIALIST not in modes:
             modes.append(SPECIALIST)
             reasons.append("creator project can use the existing creative specialist")
+        elif OPPORTUNITY in modes and SPECIALIST not in modes:
+            modes.append(SPECIALIST)
+            reasons.append("opportunity research can use the existing research and business specialists")
     elif ACTION in modes:
         model_kind = "general"
 
@@ -534,6 +552,8 @@ def prompt_directive(decision: Route) -> str:
         line += " Keep food guidance practical and safety-aware."
     if WEBSITE_BUILDER in decision.modes:
         line += " Reuse the managed website build path and verification evidence."
+    if OPPORTUNITY in decision.modes:
+        line += " Separate facts, estimates, assumptions and experiments; never promise income or invent demand."
     return line + "]"
 
 

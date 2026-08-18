@@ -202,8 +202,8 @@ export function initOrb(canvas) {
   }
 
   // One small canvas and a fixed object pool: no particle DOM nodes, no
-  // allocations or physics in the draw path, no blur filter.  Idle redraws
-  // at 8fps; meaningful active states use 20fps only in this 220px area.
+  // allocations or physics in the draw path, no blur filter. Idle/waiting
+  // redraw at 4fps; meaningful active states use 20fps in this 220px area.
   const particles = Array.from({ length: 40 }, (_v, i) => ({
     phase: (i * 2.399) % (Math.PI * 2), radius: 32 + (i % 7) * 9,
     speed: 0.00022 + (i % 5) * 0.000035, size: 0.8 + (i % 3) * 0.45,
@@ -225,7 +225,7 @@ export function initOrb(canvas) {
     particleTimer = null;
     if (!particleActive || document.visibilityState !== "visible") return;
     // The always-visible Mini Orb does not need 30/40fps canvas work.  An
-    // 8fps idle drift remains visibly alive; active work gets 20fps while
+    // 4fps idle drift remains visibly alive; active work gets 20fps while
     // still staying well below the 60fps compositor budget.
     lastParticleDraw = now;
     particleContext.clearRect(0, 0, 220, 220);
@@ -243,14 +243,15 @@ export function initOrb(canvas) {
     particleContext.globalAlpha = 1;
     scheduleParticleFrame();
   }
-  // setTimeout picks the CADENCE (8/20fps -- particles don't need 60), then
+  // setTimeout picks the CADENCE (4/20fps -- particles don't need 60), then
   // one rAF aligns the actual draw to vsync. The rAF is what makes this
   // self-suspending: a minimised WebView2 window is never composited, so the
   // frame callback never fires and no canvas work happens. Scheduling the
   // draw directly on rAF would instead wake 60x/sec just to skip most frames.
   function scheduleParticleFrame() {
     if (!particleActive) { particleTimer = null; return; }
-    const gap = particleCount > 20 ? 50 : 125;
+    const lowMotion = currentState === "idle" || currentState === "waiting" || currentState === "sleeping";
+    const gap = lowMotion ? 250 : 50;
     particleTimer = setTimeout(() => {
       particleTimer = requestAnimationFrame(drawParticles);
     }, gap);

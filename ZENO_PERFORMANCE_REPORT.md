@@ -79,3 +79,32 @@ versus ZENO's own preparation.
 Instrument **first-token latency**. It is the single measurement that would
 separate provider time from ZENO's own work, and without it every further
 optimisation is guesswork.
+
+## Full-system reconciliation measurements (2026-08-17)
+
+The figures above are Claude's provider/router benchmark. The following are
+the complementary native-host measurements from the final Codex pass:
+
+| measurement | result |
+|---|---:|
+| final combined repository suite | 1,010 passed in 236.84 s |
+| clean desktop-owned Mini Orb first window | 4,126 ms |
+| core backend startup stages | 2,643 ms |
+| reused/concurrent-backend first window | 7,513-10,369 ms |
+| forced-hidden Mini Orb recovery | 4,280 ms, same responsive window |
+| idle realtime PCM without a wake model | 0 frames in 8 s; worker standby |
+| final normal-load ZENO CPU sample | 11.25% over 20 s |
+| WebView2 GPU / renderer in that sample | 5.0% / 3.75% |
+| system RAM pressure during that sample | 89.2% |
+
+When no custom local wake model exists, VAD and the microphone remain active
+but the unused continuous PCM ScriptProcessor/WebSocket/backend worker now
+stays off. It starts lazily for a real utterance or a configured local wake
+consumer. Idle/waiting/sleeping still show 12 pooled Canvas particles and the
+continuous glow at 4 FPS; meaningful active states use 20 FPS.
+
+The residual normal-load CPU remains above the requested 5-8% isolated target,
+with WebView2 GPU/compositing dominant. Codex and Claude could not be closed
+without disrupting this development run, so this is Test B, not an isolated
+Test A. No claim is made that the residual is purely machine pressure or that
+visual optimization is complete.

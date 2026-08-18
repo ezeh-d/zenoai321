@@ -26,16 +26,33 @@ export function createAudioFrameClient({ vad, token }) {
   async function connect() {
     wanted = true;
     if (socket && socket.readyState < 2) return;
+    // The continuous PCM bus exists for local realtime consumers. When no
+    // custom wake model is configured, VAD and per-utterance speaker capture
+    // still work but an idle ScriptProcessor/WebSocket/backend worker would
+    // only burn CPU. Configuration changes take effect on the next frontend
+    // load, which is also when the wake model itself is loaded.
+    try {
+      const status = await fetch('/api/wake/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+      if (!status || status.backend?.state !== 'READY') {
+        vad.setFrameBusActive?.(false);
+        return;
+      }
+    } catch (_error) {
+      vad.setFrameBusActive?.(false);
+      return;
+    }
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     const current = new WebSocket(`${scheme}://${location.host}/api/audio/frames`);
     socket = current; ready = false;
-    current.onopen = async () => current.send(JSON.stringify({
-      token: String(await token() || ''), source: 'dashboard'
-    }));
+    current.onopen = async () => {
+      vad.setFrameBusActive?.(true);
+      current.send(JSON.stringify({ token: String(await token() || ''), source: 'dashboard' }));
+    };
     current.onmessage = event => {
       try { ready = Boolean(JSON.parse(event.data).ready); if (ready) reconnects = 0; } catch (_error) {}
     };
     current.onclose = () => {
+      vad.setFrameBusActive?.(false);
       if (socket === current) { socket = null; ready = false; }
       // A renderer/network pause must not permanently disable always-on
       // listening. Keep exactly one retry timer and cap the backoff at 30 s.
@@ -48,6 +65,7 @@ export function createAudioFrameClient({ vad, token }) {
   }
   function close() {
     wanted = false; ready = false;
+    vad.setFrameBusActive?.(false);
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     const current = socket; socket = null;
     if (current) try { current.close(1000, 'capture stopped'); } catch (_error) {}

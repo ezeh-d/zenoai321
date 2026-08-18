@@ -92,6 +92,9 @@ class TestIntentRouting:
         ("Ask all my agents what they think", "council"),
         ("Send a message to John on Slack", "communication"),
         ("Fix this Python traceback", "coding"),
+        ("Complete my LinkedIn profile", "career"),
+        ("Find me good online work", "paid_work"),
+        ("Is this client suspicious?", "client_work"),
         ("Who is Apex?", "agents"),
     ])
     def test_intent_is_recognised(self, message, expected):

@@ -9,6 +9,64 @@ Status vocabulary, used strictly:
 Last updated: 2026-08-17. See `AGENT.md` for the dated engineering log
 behind each entry.
 
+## 2026-08-17 JARVIS/ULTRON full-system reconciliation — VERIFIED WITH EXTERNAL LIMITS
+
+The 24-phase upgrade specification was reconciled against the existing native
+ZENO architecture rather than used to create duplicate runtimes. The audit
+confirmed that the Kernel, bounded workers, Event Bus, voice/audio authority,
+agent registry, Windows/browser controllers, memory, learning/workflow,
+builder, health, security and observability layers already implement the
+requested contracts. Optional external frameworks remain adapters and do not
+replace ZENO.
+
+Five defects were repaired: approved learned-skill context was appended before
+the system prompt existed and silently lost; execution traces promoted normal
+returns to verified success; approved plugin scanning occurred at global tool
+import; and scheduled WinRT notification polls parked a general worker while a
+dedicated loop did the actual work. Website Studio cancellation could also race
+the shared watchdog and become `FAILED` after the owner explicitly cancelled.
+Skill context is now delivered after prompt assembly, lifecycle verification
+reuses the authoritative result classifier, plugins load once only for
+admin/extended requests, notification completion is asynchronous through its
+existing guarded WinRT runtime, and cancellation claims its terminal state
+atomically before terminating only its owned process tree.
+
+The missing Opportunity Engine is now real and local. It stores dated FACT,
+ESTIMATE, ASSUMPTION, OPINION and EXPERIMENT_RESULT evidence, revalidates
+expiry, requires all nine transparent 0-10 factors, and reports a 0-100
+relative score that is explicitly not an income probability. Its requested
+specialist component names reuse ARIS, TITAN, KATE, ZEAL, TOSIN and ORACLE; no
+duplicate permanent agents were added. Five tools stay outside the default
+provider payload and deletion remains confirmation-gated.
+
+Baseline verification passed 960/960. The final combined repository run,
+including Claude's concurrently added routing coverage, passes **1,010/1,010**
+in 236.84 seconds; Website Studio/upgrade passes 49/49 and the
+voice/website/workflow group passes 50/50. Compilation, dependencies, eleven
+JavaScript syntax checks and `git diff --check` pass. A live restart produced
+one responding, topmost, no-activate Mini Orb with real microphone audio,
+Stage 2 ready, four workers alive and queue zero. The clean desktop-owned first
+window measured 4.13 seconds (concurrent development-load launches were
+slower), still above target and recorded rather than hidden. When no
+custom local wake model is configured, the microphone and VAD remain active
+but the otherwise unused continuous PCM/WebSocket/backend frame bus now stays
+lazy, eliminating that idle pipeline without weakening real utterance capture.
+Idle particles remain visibly active at 4 FPS and meaningful active states at
+20 FPS; continuous glow remains enabled. A normal-load sample still measured
+11.25% total ZENO CPU with 89.2% system RAM pressure, so the residual WebView2
+GPU/compositor cost remains open pending a non-disruptive isolated five-minute
+measurement.
+Full
+evidence is in `ZENO_TEST_REPORT.md`. The required audit, architecture,
+capability, security, test, performance, GitHub integration and money-engine
+reports now exist at the repository root.
+
+External limits remain explicit: no custom consented ZENO wake model or owner
+voice corpus is available; arbitrary provider reasoning is not guaranteed in
+1.5 seconds; optional LiveKit/Agent Framework/Browser Use/Open Interpreter/Mem0
+backends must be installed, configured and measured before activation; and an
+opportunity score never authorizes transactions or guarantees earnings.
+
 ## 2026-08-17 production hardening follow-up — VERIFIED
 
 This pass preserved Claude's current Human Companion, remote microphone,
@@ -1419,3 +1477,76 @@ would mean deleting the property that makes them safe:
 Each is labelled PARTIAL because the roadmap reports what is true, not what
 sounds finished. Removing the limit would not complete the feature; it would
 replace an honest boundary with a claim ZENO could not keep.
+
+---
+
+## ZENO Career Profile / legitimate platform assistance — COMPLETE WITH OWNER-DATA LIMIT (2026-08-17)
+
+ZENO now has one lazy, authoritative `ZenoCareerProfile` for owner-verified
+job and freelance facts. It covers identity/title/summary, skills, employment,
+education, certifications, projects, portfolio, languages, availability,
+work preferences, rate/salary expectations, notice and authorization, CV and
+cover-letter assets, professional links, location/contact data and the
+configured registered Gmail. The SQLite store is local, transactionally
+updated, bounded to 50 revisions and creates no database connection or
+background worker merely because the module is imported.
+
+TITAN and the deterministic capability router reuse this source of truth.
+Missing facts remain explicitly missing; updates require an owner-confirmed
+flag, retain provenance, reject unknown fields and reject passwords, tokens,
+cookies, MFA/OTP values, passkeys, private keys and other credential material.
+Normal profile reads mask email/phone/contact values. A narrow browser-fill
+bridge can pass one confirmed scalar field straight to ZENO's existing bounded
+Playwright worker without returning that value to the model or audit input.
+The career route does not expose a click tool, so it cannot perform the final
+Save/Publish/Apply action through its normal tool set.
+
+The platform plan covers Indeed, LinkedIn, Upwork, Fiverr, Freelancer, remote
+job boards, company career portals and named alternatives. It requires a live
+terms check, prefers Continue with Google when the registered Gmail is
+configured, forbids fabricated career claims and unattended applications, and
+uses the exact boundary `OWNER AUTHENTICATION REQUIRED` for passwords, MFA,
+one-time codes, passkeys, fingerprint/security prompts and CAPTCHA. No external
+profile is reported changed until an observed postcondition exists.
+
+**Verified:** 51 focused profile/router checks and 98 broader
+agent/capability checks passed. The complete maintained suite passed
+1025/1025 in 243.80 seconds with four existing FastAPI `on_event`
+deprecation warnings and no failures. The remaining limit is intentional and
+truth-preserving: Divine has not yet supplied every personal career fact, so
+those fields are reported as missing rather than populated with invented data;
+authentication and final external submission remain owner actions.
+
+---
+
+## ZENO Paid-Work Engine — COMPLETE WITH EXTERNAL-PLATFORM LIMITS (2026-08-18)
+
+ZENO now has one lazy, authoritative paid-work lifecycle covering normalized
+opportunity intake and transparent scoring, truthful profile/CV/proposal
+preparation, application approval, client intent/risk, owner-bounded pricing and
+negotiation, contract approval, dependency-aware project execution, evidenced
+QA/delivery, revision and scope control, payment verification, skill-gap and
+reputation facts, and production-only business metrics. The engine reuses the
+existing Event Bus, audit log, permission engine, agent/mission runtime,
+Builder, browser and research seams. It adds no competing scheduler, browser,
+agent registry, network poller or permanent worker.
+
+The default application mode is `APPROVAL`. Password/MFA/OTP/passkey/CAPTCHA
+and security prompts pause for the owner. External application submission,
+contractual commitment, delivery and payment verification need owner evidence.
+Test records are explicitly tagged and excluded from real revenue, conversion,
+reputation and dashboard figures. Claude's separate cloud/social work was not
+rewritten; social leads enter through a narrow event contract.
+
+Verification passed 89 focused paid-work/profile/router tests, 81 adjacent
+agent/capability/project/mission tests and the complete 1,096-test ZENO suite.
+The configured full dry run passed every stage with zero external actions and
+left the complete production metrics object unchanged. Detailed evidence is in
+`ZENO_CAREER_ENGINE_REPORT.md` and the nine companion business reports.
+
+The remaining limits are deliberate and honest: live discovery uses existing
+browser/research evidence rather than claiming unrestricted job-board APIs;
+built-in platform adapters default to owner submission; unknown career facts
+remain missing; project records delegate real creation to existing Builder/tool
+execution; payment tracking never moves money. These boundaries prevent fake
+applications, fake clients, fake delivery and fake revenue.

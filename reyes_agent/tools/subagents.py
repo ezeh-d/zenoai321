@@ -80,7 +80,8 @@ _SPECIALISTS: dict[str, dict] = {
             "say so rather than inventing what a page says."
         ),
         "tools": {"search_notes", "list_notes", "search_vault_semantic", "vault_structure_report",
-                   "list_memories", "web_search", "get_news", "take_screenshot"},
+                   "list_memories", "web_search", "get_news", "take_screenshot",
+                   "opportunity_plan"},
     },
     "tosin": {
         "description": "TOSIN -- Software Engineering Intelligence. Writes code, scripts, websites, and 3D models as real files.",
@@ -135,7 +136,15 @@ _SPECIALISTS: dict[str, dict] = {
             "You are TITAN, ZENO's business and data specialist -- calculated "
             "CSV/JSON/Parquet results must come from inspect_dataset/query_dataset, never guessing; market research "
             "(web_search/get_news), tracking business/freelance work "
-            "(track_work), and drafting strategy/pricing notes. You give "
+            "(track_work), maintaining Divine's owner-confirmed career source "
+            "of truth (career_profile_*), and drafting strategy/pricing notes. "
+            "Never invent profile facts. For any password, MFA, passkey, "
+            "fingerprint, security prompt or CAPTCHA, stop and say exactly "
+            "OWNER AUTHENTICATION REQUIRED. You give "
+            "Use paid_work_* for the full opportunity/application/client/project/payment "
+            "lifecycle. Never treat a client payment claim as verified, bind Divine to a "
+            "contract, submit an application, or deliver work without the required owner "
+            "gate and observed evidence. "
             "analysis and recommendations only -- you have no tool that "
             "spends money, places a trade, sends an invoice, or executes a "
             "business transaction, and there will not be one. For "
@@ -146,7 +155,18 @@ _SPECIALISTS: dict[str, dict] = {
             "what to buy."
         ),
         "tools": {"track_work", "list_work", "update_work_status", "web_search", "get_news", "write_note",
+                   "career_profile_status", "career_profile_read", "career_profile_update",
+                   "career_profile_fill_field", "career_platform_plan",
+                   "paid_work_status", "paid_work_scout", "paid_work_ingest_opportunity",
+                   "paid_work_opportunities", "paid_work_prepare_application",
+                   "paid_work_record_submission", "paid_work_record_delivery",
+                   "paid_work_profile_variant", "paid_work_portfolio_add", "paid_work_portfolio_list",
+                   "paid_work_client_review", "paid_work_set_pricing", "paid_work_negotiate",
+                   "paid_work_client_message",
+                   "paid_work_contract", "paid_work_project", "paid_work_payment",
+                   "paid_work_owner_decision", "paid_work_focus",
                    "inspect_dataset", "query_dataset",
+                   "opportunity_plan", "opportunity_assess", "opportunity_list", "opportunity_get",
                    "get_investment_policy", "portfolio_report", "check_trade_against_policy",
                    "investment_performance_report"},
     },
@@ -205,7 +225,8 @@ _SPECIALISTS: dict[str, dict] = {
             "and report findings plainly with real numbers from the actual "
             "data, never invented ones."
         ),
-        "tools": {"daily_activity_summary", "current_activity", "list_memories", "search_vault_semantic"},
+        "tools": {"daily_activity_summary", "current_activity", "list_memories", "search_vault_semantic",
+                  "opportunity_list", "opportunity_get"},
     },
     "atlas": {
         "description": "ATLAS -- Mission Control. Coordinates tasks/deadlines/scheduled work into one plan. Terse, coordination-only output.",

@@ -68,8 +68,14 @@ Live desktop verification against the running application:
   1,651 ms, 1,524 ms and 1,052 ms.
 
 Measured Mini Orb first-window times were **7,513 ms** and **10,369 ms** while
-reusing a concurrently managed backend under development load. Both windows
-were responsive, but this remains above the sub-three-second target. The
-second host was then terminated when Claude's benchmark intentionally replaced
-all Python processes; a clean desktop-owned launch is recorded separately once
-that benchmark releases the port.
+reusing concurrently managed backends under development load. After Claude's
+benchmark completed, the clean desktop-owned launch showed the native boot orb
+in **4,126 ms**, completed core backend stages in **2,643 ms**, reached Stage 2,
+and reported live microphone audio. This is substantially better but remains
+above the sub-three-second target.
+
+The lazy PCM regression was also verified live: with no custom wake model, an
+eight-second idle sample published **0 frames**, kept the AudioManager worker
+`STANDBY`, and retained active VAD/real Mini Orb microphone input. The final
+4-FPS idle particle cap plus 20-FPS active-state contract passes 29 focused
+visual, overlay, VAD and upgrade tests.

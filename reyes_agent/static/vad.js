@@ -54,6 +54,7 @@ let pcmMute = null;
 let pcmChunks = [];
 let pcmSampleRate = 0;
 let pcmCapturing = false;
+let frameBusActive = false;
 
 let noiseFloor = 0.01;
 let speaking = false;
@@ -153,8 +154,6 @@ export async function start(options = {}) {
   // Deliberately NOT connected to ctx.destination -- routing the mic to the
   // speakers would create the very feedback echo cancellation exists to fix.
   buffer = new Uint8Array(analyser.fftSize);
-  setupPcmBus();
-
   recalibrate();
   resume();
   if (!visibilityListenerAttached) {
@@ -286,6 +285,18 @@ export function onPcmFrame(fn) {
   return () => { listeners.frame = listeners.frame.filter((item) => item !== fn); };
 }
 
+/**
+ * Enable continuous PCM only when a real realtime consumer exists (normally
+ * a configured local wake model).  VAD itself uses the lightweight analyser
+ * and does not need ScriptProcessor callbacks while the room is silent.
+ */
+export function setFrameBusActive(on) {
+  frameBusActive = Boolean(on);
+  if (frameBusActive) return setupPcmBus();
+  if (!pcmCapturing) teardownPcmBus();
+  return false;
+}
+
 /** The processed, single-owner stream used for recording/transcription. */
 export function mediaStream() { return stream; }
 
@@ -360,7 +371,9 @@ export function endPcmCapture() {
   pcmCapturing = false;
   pcmChunks = [];
   pcmSampleRate = 0;
-  return encodePcmWav(chunks, sampleRate);
+  const result = encodePcmWav(chunks, sampleRate);
+  if (!frameBusActive) teardownPcmBus();
+  return result;
 }
 
 /** Pause detection while ZENO speaks, preventing speaker echo as a command. */
@@ -371,6 +384,7 @@ export function resumeDetection() { resume(); }
 
 export function stop() {
   stopping = true;
+  frameBusActive = false;
   pause();
   endPcmCapture();
   teardownPcmBus();
@@ -403,6 +417,7 @@ export function capabilities() {
     used_fallback_device: usedFallbackDevice,
     frame_bus: {
       active: pcmProcessor !== null,
+      continuous: frameBusActive,
       subscribers: listeners.frame.length,
       owns_second_stream: false,
     },

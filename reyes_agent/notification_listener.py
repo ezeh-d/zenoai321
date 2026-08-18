@@ -144,6 +144,41 @@ def _run_on_runtime(factory: Callable[[], Awaitable[Any]]) -> Any:
         raise
 
 
+def _submit_on_runtime(
+    factory: Callable[[], Awaitable[Any]],
+    completed: Callable[[Any, BaseException | None], None],
+) -> None:
+    """Schedule one WinRT operation without parking a managed worker.
+
+    The scheduler already invokes ``_poll`` on the bounded pool.  Waiting on
+    ``future.result`` there consumed one of four general workers every eight
+    seconds even though a dedicated WinRT loop was doing the actual work.
+    Completion and backoff now happen on the existing runtime callback.
+    """
+    loop = _ensure_runtime()
+
+    async def invoke() -> Any:
+        try:
+            return await factory()
+        finally:
+            gc.collect()
+
+    coroutine = invoke()
+    try:
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+    except Exception:
+        coroutine.close()
+        raise
+
+    def done(result_future) -> None:
+        try:
+            completed(result_future.result(), None)
+        except BaseException as exc:  # cancellation must release the gate too
+            completed(None, exc)
+
+    future.add_done_callback(done)
+
+
 def shutdown_background() -> None:
     """Release the one notification event loop; safe to call repeatedly."""
     deadline = time.monotonic() + _WINRT_TIMEOUT_S + 0.5
@@ -346,24 +381,40 @@ def health() -> dict[str, object]:
 def _baseline_once() -> None:
     if not _begin_attempt():
         return
+
+    def completed(_result: Any, error: BaseException | None) -> None:
+        try:
+            if error is None:
+                _record_success()
+            else:
+                _record_failure(error if isinstance(error, Exception) else RuntimeError(str(error)))
+        finally:
+            _api_gate.release()
+
     try:
-        _run_on_runtime(_baseline)
-        _record_success()
+        _submit_on_runtime(_baseline, completed)
     except Exception as exc:  # noqa: BLE001 -- optional Windows API may be unavailable
         _record_failure(exc)
-    finally:
         _api_gate.release()
 
 
 def _poll() -> None:
     if not _begin_attempt():
         return
+
+    def completed(_result: Any, error: BaseException | None) -> None:
+        try:
+            if error is None:
+                _record_success()
+            else:
+                _record_failure(error if isinstance(error, Exception) else RuntimeError(str(error)))
+        finally:
+            _api_gate.release()
+
     try:
-        _run_on_runtime(lambda: _poll_once(_speak))
-        _record_success()
+        _submit_on_runtime(lambda: _poll_once(_speak), completed)
     except Exception as exc:  # noqa: BLE001 -- one bad poll must not stop future polls
         _record_failure(exc)
-    finally:
         _api_gate.release()
 
 

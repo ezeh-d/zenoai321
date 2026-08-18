@@ -391,7 +391,9 @@ def agent_introduction(agent: str) -> str:
         "needs them. Groups: missions (update/inspect a mission), campaigns "
         "(build/approve/run a batch), investing (portfolio policy, trades, "
         "performance), council (advisor list, past meetings), work (job/"
-        "freelance/content tracker), creative (image, 3D, canvas), comms "
+        "freelance/content tracker), career (verified career profile and safe "
+        "platform plan), paid_work (opportunities, applications, clients, contracts, "
+        "projects, delivery and payment tracking), creative (image, 3D, canvas), comms "
         "(calendar, read email), admin (plugins, permissions, voices, vault "
         "maintenance, scheduled checks), intelligence (undo history, "
         "situation, universal search, simulation, Health Center, personal "
@@ -409,7 +411,7 @@ def agent_introduction(agent: str) -> str:
         "properties": {
             "group": {
                 "type": "string",
-                "enum": ["missions", "campaigns", "investing", "council", "work",
+                "enum": ["missions", "campaigns", "investing", "opportunity", "council", "work", "career", "paid_work",
                           "creative", "comms", "admin", "intelligence", "phase3",
                           "analytics", "phase5", "extended"],
             }
@@ -422,11 +424,13 @@ def enable_tools(group: str) -> str:
     """Handled specially by agent.py, which widens the toolset for the rest
     of the turn. The registered function still returns a real result so any
     other caller (a sub-agent, a direct call) gets a sensible answer."""
-    from reyes_agent.tools import GROUP_NAMES, TOOLS, group_of
+    from reyes_agent.tools import GROUP_NAMES, TOOLS, ensure_plugins_loaded, group_of
 
     g = (group or "").strip().lower()
     if g not in GROUP_NAMES:
         return f"Unknown group '{group}'. Available: {', '.join(GROUP_NAMES)}."
+    if g in {"admin", "extended"}:
+        ensure_plugins_loaded()
     names = sorted(n for n in TOOLS if group_of(n) == g)
     return f"Loaded the '{g}' tools: {', '.join(names)}. Use them now."
 

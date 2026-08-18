@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZENO Paid Work</title>
+<style>
+:root{color-scheme:dark;--bg:#070b16;--card:#0f1728;--line:#23314d;--text:#eef5ff;--muted:#8fa2c2;--cyan:#35c1ff;--good:#51e6a8;--warn:#ffbd59}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% -20%,#122342 0,var(--bg) 45%);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
+main{max-width:1180px;margin:auto;padding:28px}.head{display:flex;justify-content:space-between;align-items:end;gap:20px;margin-bottom:20px}h1{margin:0;font-size:25px;letter-spacing:.06em}.state{color:var(--good)}.muted{color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.card{background:rgba(15,23,40,.9);border:1px solid var(--line);border-radius:14px;padding:15px;min-height:138px;box-shadow:0 14px 40px #0005}.card h2{margin:0 0 12px;color:var(--cyan);font-size:11px;letter-spacing:.13em}.row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid #ffffff0b}.row:last-child{border:0}.value{font-variant-numeric:tabular-nums;font-weight:650}.wide{grid-column:1/-1}.approvals{color:var(--warn)}.empty{padding:14px 0;color:var(--muted)}
+@media(max-width:600px){main{padding:16px}.head{align-items:start;flex-direction:column}}
+</style>
+</head>
+<body><main>
+  <div class="head"><div><h1>ZENO PAID-WORK ENGINE</h1><div class="muted">Real records only · test data excluded</div></div><div id="state" class="state">CONNECTING</div></div>
+  <div id="cards" class="grid"></div>
+</main>
+<script>
+const sections=['opportunities','applications','clients','projects','payments','performance','reputation'];
+const label=s=>String(s).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase());
+const esc=s=>String(s??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function card(name,data){return `<section class="card"><h2>${label(name)}</h2>${Object.entries(data||{}).map(([k,v])=>`<div class="row"><span class="muted">${label(k)}</span><span class="value">${esc(v)}</span></div>`).join('')||'<div class="empty">No records yet.</div>'}</section>`}
+async function refresh(){
+  if(document.hidden)return;
+  try{
+    const r=await fetch('/api/career/dashboard',{cache:'no-store'}); if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const d=await r.json();
+    document.getElementById('state').textContent='ONLINE';
+    const cards=sections.map(s=>card(s,d[s])).join('');
+    const approvals=(d.approvals||[]).map(a=>`<div class="row"><span>${esc(a.category)}</span><span class="approvals">${esc(a.status)}</span></div>`).join('')||'<div class="empty">Nothing needs owner approval.</div>';
+    document.getElementById('cards').innerHTML=cards+`<section class="card wide"><h2>OWNER APPROVAL CENTER</h2>${approvals}</section>`;
+  }catch(e){document.getElementById('state').textContent='UNAVAILABLE';}
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
+refresh(); const timer=setInterval(refresh,5000); addEventListener('pagehide',()=>clearInterval(timer),{once:true});
+</script></body></html>
