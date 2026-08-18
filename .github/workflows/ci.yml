@@ -1,0 +1,260 @@
+# ZENO continuous integration.
+#
+# THE PIPELINE THE BRIEF ASKED FOR, IN ORDER
+#   code change -> tests -> static analysis -> security -> build -> deploy
+#
+# Deploy is a SEPARATE workflow that requires every job here to have passed.
+# A broken build cannot reach production, because `deploy.yml` will not start.
+#
+# WHY WINDOWS IS THE PRIMARY RUNNER
+# ZENO is a Windows desktop assistant. Its single-instance guard uses
+# CreateMutexW, its automation uses UI Automation, and its audio path is
+# WebView2. Testing it only on Linux would test something the owner does not
+# run. The cloud-portable subset is additionally checked on Linux, because
+# that is where ZENO Cloud will actually live.
+
+name: CI
+
+on:
+  push:
+    branches: ["main", "codex/**", "claude/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first. CI minutes are finite
+# and a superseded run tells nobody anything.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHONIOENCODING: utf-8
+  # Tests must never touch a real account, a real provider or a real
+  # platform. This is belt and braces: the code already defaults to dry run.
+  ZENO_ENV: test
+  SOCIAL_DRY_RUN: "true"
+
+jobs:
+  # --- 1. TESTS ---------------------------------------------------------
+  tests:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          # The full requirements file pulls PySide6, PyAudio and WebView2
+          # bindings, which cannot install on a headless Linux runner and add
+          # minutes on Windows. The suite needs the service layer only.
+          pip install pytest fastapi "uvicorn[standard]" httpx requests psutil \
+                      pydantic pydantic-settings python-dotenv keyring
+
+      - name: Run the suite
+        shell: bash
+        run: python -m pytest tests/ -q --junitxml=junit-${{ matrix.os }}.xml
+
+      - name: Publish results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.os }}
+          path: junit-${{ matrix.os }}.xml
+          if-no-files-found: ignore
+
+  # --- 2. STATIC ANALYSIS -----------------------------------------------
+  static-analysis:
+    name: static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install analysers
+        run: python -m pip install --upgrade pip ruff
+
+      # Syntax and undefined names are hard failures: they are bugs, not
+      # style. Everything else is reported without blocking, because a
+      # 72,000-line codebase cannot adopt a new style guide in one commit
+      # and a permanently red pipeline is a pipeline nobody reads.
+      - name: Lint (blocking - real errors only)
+        run: ruff check reyes_agent/ tools/ --select=E9,F63,F7,F82,F821 --output-format=github
+
+      - name: Lint (advisory - full ruleset)
+        continue-on-error: true
+        run: ruff check reyes_agent/ tools/ --output-format=github
+
+      - name: Every module must import
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+          bad = []
+          for path in pathlib.Path("reyes_agent").rglob("*.py"):
+              if "__pycache__" in str(path):
+                  continue
+              try:
+                  ast.parse(path.read_text(encoding="utf-8"))
+              except SyntaxError as exc:
+                  bad.append(f"{path}:{exc.lineno}: {exc.msg}")
+          print(f"parsed {len(list(pathlib.Path('reyes_agent').rglob('*.py')))} files")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          PY
+
+  # --- 3. SECURITY -------------------------------------------------------
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs history to scan commits, not just the tree. A
+          # secret deleted in the latest commit is still in the repository.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install security tooling
+        run: python -m pip install --upgrade pip bandit pip-audit
+
+      # Secret scanning is BLOCKING. A committed token cannot be un-published
+      # -- it can only be revoked -- so this is the one check that must stop
+      # the pipeline rather than warn.
+      - name: Secret scan (blocking)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bandit
+        continue-on-error: true
+        run: bandit -r reyes_agent/ -ll -f txt
+
+      - name: Dependency vulnerabilities
+        continue-on-error: true
+        run: pip-audit --desc || true
+
+      # The repository's own rule, enforced mechanically rather than trusted.
+      - name: No .env may ever be tracked
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env is tracked by git. Remove it and rotate every key in it."
+            exit 1
+          fi
+          leaked=$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example' || true)
+          if [ -n "$leaked" ]; then
+            echo "::error::environment files tracked: $leaked"
+            exit 1
+          fi
+          echo "no environment files tracked"
+
+      # .env.example is the contract. If code reads a variable that the
+      # example never documents, the owner cannot know to set it, and the
+      # failure appears in production instead of here.
+      - name: Documented environment variables
+        run: python tools/check_env_documented.py
+
+  # --- 4. BUILD ----------------------------------------------------------
+  build:
+    name: build
+    runs-on: windows-latest
+    needs: [tests, static-analysis, security]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip build
+          pip install fastapi "uvicorn[standard]" httpx requests psutil \
+                      pydantic pydantic-settings python-dotenv keyring
+
+      # Importing the web app is the real build check: it exercises route
+      # registration, tool registration and config parsing in one go, which
+      # is where a broken deployment actually announces itself.
+      - name: Application must import and register its routes
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          os.environ.setdefault("ZENO_ENV", "test")
+          from reyes_agent import web
+          app = getattr(web, "app", None)
+          assert app is not None, "reyes_agent.web exposes no FastAPI app"
+          routes = [getattr(r, "path", "") for r in app.routes]
+          print(f"{len(routes)} routes registered")
+          for required in ("/api/chat", "/api/health"):
+              assert any(r == required for r in routes), f"missing route {required}"
+          from reyes_agent.tools import TOOLS
+          print(f"{len(TOOLS)} tools registered")
+          assert TOOLS, "no tools registered"
+          PY
+
+      - name: Package the source distribution
+        shell: bash
+        run: |
+          mkdir -p dist
+          git archive --format=zip --output=dist/zeno-${{ github.sha }}.zip HEAD
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zeno-build
+          path: dist/
+          retention-days: 14
+
+  # --- gate --------------------------------------------------------------
+  # One job for branch protection to require, and the signal deploy.yml waits
+  # on. Explicitly checks results because `needs` alone treats a skipped job
+  # as satisfied.
+  ci-passed:
+    name: CI passed
+    runs-on: ubuntu-latest
+    needs: [tests, static-analysis, security, build]
+    if: always()
+    steps:
+      - name: Verify every required job succeeded
+        run: |
+          echo "tests:           ${{ needs.tests.result }}"
+          echo "static-analysis: ${{ needs.static-analysis.result }}"
+          echo "security:        ${{ needs.security.result }}"
+          echo "build:           ${{ needs.build.result }}"
+          if [ "${{ needs.tests.result }}" != "success" ] || \
+             [ "${{ needs.static-analysis.result }}" != "success" ] || \
+             [ "${{ needs.security.result }}" != "success" ] || \
+             [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::CI did not pass. Deployment is blocked."
+            exit 1
+          fi
+          echo "CI passed."

@@ -53,6 +53,14 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                "list_notes", "link_notes", "search_vault_semantic",
                "explore_knowledge", "knowledge_graph_stats"),
     "web": ("web_search", "get_news", "website_check", "research_lab"),
+    # ZENO's own Instagram and TikTok. Status is the common question, so the
+    # read-only tools are first; publishing tools are here too because the
+    # owner asks about posting in the same breath as asking about numbers.
+    "social": ("social_status", "social_health", "social_content",
+               "social_ideas", "social_advance", "social_approval_card",
+               "social_approve", "social_schedule", "social_publish",
+               "social_leads", "social_comments", "social_classify",
+               "social_control", "social_identity", "social_setup"),
     "browser": ("browser_open", "browser_click", "browser_read", "browser_fill",
                 "browser_scroll", "browser_extract", "browser_screenshot",
                 "browser_close", "browser_vision_click", "web_search"),
@@ -74,6 +82,20 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                       "send_telegram_message", "check_email"),
     "business": ("portfolio_report", "paper_trade", "paper_portfolio",
                  "backtest_strategy", "create_campaign", "campaign_status"),
+    "career": ("career_profile_status", "career_profile_read",
+               "career_profile_update", "career_profile_fill_field",
+               "career_platform_plan",
+               "browser_open", "browser_read"),
+    "paid_work": ("paid_work_status", "paid_work_scout",
+                  "paid_work_ingest_opportunity", "paid_work_opportunities",
+                  "paid_work_prepare_application", "paid_work_record_submission",
+                  "paid_work_profile_variant", "paid_work_portfolio_list", "paid_work_focus",
+                  ),
+    "client_work": ("paid_work_status", "paid_work_client_review",
+                    "paid_work_client_message",
+                    "paid_work_set_pricing", "paid_work_negotiate",
+                    "paid_work_contract", "paid_work_project", "paid_work_payment",
+                    "paid_work_record_delivery", "paid_work_owner_decision"),
     "builder": ("build_project", "website_project", "write_project_file",
                 "list_project_files", "website_restore_checkpoint"),
     "creative": ("creator_project", "design_capabilities", "learning_mode",
@@ -95,8 +117,9 @@ BUDGETS: dict[str, int] = {
     "conversation": 3, "utility": 12, "memory": 16, "web": 8, "browser": 14,
     "desktop": 12, "files": 10, "files_destructive": 4, "coding": 14,
     "vision": 10, "agents": 8, "council": 6, "communication": 8,
-    "business": 10, "builder": 10, "creative": 8, "missions": 8,
-    "diagnostics": 10, "presentation": 8, "workflow": 6, "voice": 6,
+    "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
+    "builder": 10, "creative": 8, "missions": 8,
+    "social": 15, "diagnostics": 10, "presentation": 8, "workflow": 6, "voice": 6,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow
@@ -107,10 +130,38 @@ _INTENT: tuple[tuple[str, str], ...] = (
     ("files_destructive",
      r"^\s*(?:please\s+)?(?:delete|remove|erase|rm)\s+(?:the\s+|my\s+|this\s+)?\S+"),
 
+    # Social. Matches ZENO's OWN accounts and content operations. "post" alone
+    # is far too broad (post a letter, blog post), so every alternative here
+    # needs a social object or a possessive referring to ZENO's presence.
+    ("social",
+     r"\b(?:instagram|tiktok|tik tok|reels?|socials?|"
+     r"(?:your|zeno[''‘’]?s?) (?:followers?|posts?|videos?|content|captions?|"
+     r"hashtags?|account|audience|engagement)|"
+     r"(?:content|posting) (?:idea|ideas|calendar|plan|schedule)|"
+     r"(?:publish|schedule|approve|draft) (?:a |the |this |that )?"
+     r"(?:post|reel|video|caption|clip)|"
+     r"client leads?|potential clients?|social (?:media|dashboard|analytics)|"
+     r"(?:check|read|show) (?:your|my) comments|"
+     r"(?:your|zeno's) (?:comments|dms?|messages) )\b"),
+
     ("council", r"\b(?:council|all (?:my |the )?agents|everyone['’]?s view|"
                 r"ask (?:them|everyone)|executive meeting)\b"),
     ("agents", r"\b(?:who is|what does|who works under|role ?call|your agents?|"
                r"agent (?:status|roster)|which agent)\b"),
+    ("career", r"\b(?:(?:create|complete|update|maintain|optimise|optimize|audit|fix)\s+"
+               r"(?:my\s+)?(?:job|career|freelance|indeed|linkedin|upwork|fiverr|freelancer)?\s*profile|"
+               r"(?:indeed|linkedin|upwork|fiverr|freelancer)\s+(?:account|profile)|"
+               r"(?:my\s+)?(?:career profile|professional profile|cv versions?|cover letter templates?))\b"),
+    ("client_work", r"\b(?:client (?:replied|response|message|suspicious|risk|project|paid)|"
+                    r"check (?:this|the) client|what should i charge|negotiate (?:this|the)|"
+                    r"contract approval|active (?:client )?projects?|project ready|"
+                    r"scope creep|revision request|payment (?:due|overdue|reported|verified)|"
+                    r"has (?:the )?client paid|needs? my approval|verified revenue)\b"),
+    ("paid_work", r"\b(?:find (?:me )?(?:jobs?|work|freelance work|gigs?|clients?)|"
+                  r"best opportunities|prepare (?:this|the|my) (?:application|proposal)|"
+                  r"which cv|job (?:match|application|platform)|freelance (?:work|project)|"
+                  r"online work|application (?:history|status|approval)|"
+                  r"focus on .{0,40}(?:jobs?|projects?|work)|paid[- ]work)\b"),
     ("browser", r"\b(?:browse|browser|open (?:chrome|edge|firefox)|go to \S+\.\w|"
                 r"search (?:google|youtube|the web|online)|on (?:google|youtube)|"
                 r"click (?:the|that|first)|scroll (?:down|up)|this (?:page|site)|"

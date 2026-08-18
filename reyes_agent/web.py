@@ -728,6 +728,93 @@ def mini_orb() -> FileResponse:
     return FileResponse(_STATIC_DIR / "mini.html")
 
 
+@app.get("/career")
+def career_dashboard_page() -> FileResponse:
+    """Lazy, data-backed paid-work view; it creates no second runtime."""
+    return FileResponse(_STATIC_DIR / "career.html")
+
+
+@app.get("/api/career/dashboard")
+def career_dashboard() -> dict[str, Any]:
+    from reyes_agent.paid_work_engine import get_career_engine
+
+    return get_career_engine().dashboard(include_test=False)
+
+
+# --- social ------------------------------------------------------------
+# These are NOT in remote_access.boundary._PUBLIC_REMOTE_PREFIXES, so the
+# fail-closed boundary refuses them for any non-loopback caller. That is
+# deliberate: ZENO's social controls stay desktop-only until the cloud owner
+# authentication in ZENO_REMOTE_ACCESS.md exists. A test asserts it.
+@app.get("/api/social/dashboard")
+def social_dashboard() -> dict[str, Any]:
+    """The whole social overview. Safe to call when nothing is configured."""
+    from reyes_agent.social import dashboard
+
+    return dashboard.overview()
+
+
+@app.get("/api/social/summary")
+def social_summary() -> dict[str, str]:
+    """What ZENO says out loud when asked how its socials are doing."""
+    from reyes_agent.social import dashboard
+
+    return {"summary": dashboard.spoken_summary()}
+
+
+@app.get("/api/social/health")
+def social_health_route() -> dict[str, Any]:
+    """Per-platform integration health, plus the owner control panel state."""
+    from reyes_agent.social import control
+    from reyes_agent.social.adapters import health
+
+    return {"platforms": health(), "control": control.panel()}
+
+
+@app.get("/api/social/content")
+def social_content_route(status: str = "", platform: str = "") -> dict[str, Any]:
+    from reyes_agent.social import store as social_store
+
+    items = social_store.get_store().list_content(
+        status=(status.strip().upper() or None),
+        platform=(platform.strip().casefold() or None), limit=50)
+    return {"items": items, "count": len(items)}
+
+
+@app.get("/api/social/approval/{content_id}")
+def social_approval_route(content_id: str) -> dict[str, Any]:
+    """The owner approval card: preview, caption, tags, time and reasoning."""
+    from reyes_agent.social.pipeline import ContentPipeline
+
+    return ContentPipeline().approval_card(content_id)
+
+
+@app.get("/api/social/leads")
+def social_leads_route(status: str = "") -> dict[str, Any]:
+    from reyes_agent.social import store as social_store
+
+    rows = social_store.get_store().leads(
+        status=(status.strip().upper() or None), limit=50)
+    return {"leads": rows, "count": len(rows)}
+
+
+@app.get("/api/social/audit")
+def social_audit_route(limit: int = 50) -> dict[str, Any]:
+    """Every social action taken. Never contains a token or a password."""
+    from reyes_agent.social import store as social_store
+
+    return {"entries": social_store.get_store().audit_log(
+        limit=max(1, min(int(limit), 500)))}
+
+
+@app.post("/api/social/kill")
+def social_kill_route() -> dict[str, Any]:
+    """One action stops all social automation. Published posts are untouched."""
+    from reyes_agent.social import control
+
+    return {"ok": True, "detail": control.engage_kill_switch()}
+
+
 @app.get("/favicon.ico")
 def favicon() -> FileResponse:
     return FileResponse(_STATIC_DIR / "favicon.ico")

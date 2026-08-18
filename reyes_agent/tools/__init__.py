@@ -8,6 +8,7 @@ own module. The core loop never changes -- it only ever reads from `TOOLS`.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -142,6 +143,25 @@ TOOL_GROUPS: dict[str, str] = {
     "cancel_scheduled_check": "admin", "schedule_check": "admin",
     # work tracker
     "track_work": "work", "list_work": "work", "update_work_status": "work",
+    # Owner-verified job/freelance profile source of truth. External browser
+    # actions remain in the existing browser capability and permission gate.
+    "career_profile_status": "career", "career_profile_read": "career",
+    "career_profile_update": "career", "career_profile_fill_field": "career",
+    "career_platform_plan": "career",
+    # Complete paid-work lifecycle stays absent from ordinary turns.
+    "paid_work_status": "paid_work", "paid_work_scout": "paid_work",
+    "paid_work_ingest_opportunity": "paid_work", "paid_work_opportunities": "paid_work",
+    "paid_work_profile_variant": "paid_work", "paid_work_portfolio_add": "paid_work",
+    "paid_work_portfolio_list": "paid_work",
+    "paid_work_prepare_application": "paid_work", "paid_work_record_submission": "paid_work",
+    "paid_work_client_review": "paid_work",
+    "paid_work_client_message": "paid_work",
+    "paid_work_set_pricing": "paid_work", "paid_work_negotiate": "paid_work",
+    "paid_work_contract": "paid_work", "paid_work_project": "paid_work",
+    "paid_work_record_delivery": "paid_work",
+    "paid_work_payment": "paid_work", "paid_work_owner_decision": "paid_work",
+    "paid_work_social_event": "paid_work", "paid_work_dry_run": "paid_work",
+    "paid_work_focus": "paid_work",
     # media/creative
     "create_3d_model": "creative", "create_canvas": "creative",
     "create_database_view": "creative", "generate_image": "creative",
@@ -190,6 +210,11 @@ TOOL_GROUPS: dict[str, str] = {
     "agent_role_call": "agents", "agent_workers": "agents",
     "phone_mic_networks": "devices", "phone_mic_qr": "devices",
     "phone_mic_set_network": "devices", "phone_mic_current_network": "devices",
+    # Evidence-led money/opportunity intelligence.  It stays absent from
+    # ordinary turns and performs no market polling on startup.
+    "opportunity_plan": "opportunity", "opportunity_assess": "opportunity",
+    "opportunity_list": "opportunity", "opportunity_get": "opportunity",
+    "opportunity_delete": "opportunity",
     "episodic_search": "phase3", "read_document_structured": "phase3",
     "knowledge_graph_query": "phase3", "knowledge_graph_remember": "phase3",
     "engineering_backends": "phase3", "mobile_device_status": "phase3",
@@ -596,7 +621,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, coding_system, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, agent_identity, evidence_tools, mode_tools, messaging_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import awareness_tools, blender, browser, build, calendar, campaign_tools, career_tools, coding_system, social_tools, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, opportunity_tools, paid_work_tools, agent_identity, evidence_tools, mode_tools, messaging_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so
@@ -607,6 +632,11 @@ from reyes_agent import heartbeat  # noqa: E402,F401
 
 # Same top-level-module-that-registers-tools pattern as heartbeat.
 from reyes_agent import activity_monitor  # noqa: E402,F401
+
+
+_PLUGIN_LOAD_LOCK = threading.Lock()
+_PLUGINS_LOADED = False
+_LOADED_PLUGINS: list[str] = []
 
 
 def load_plugins() -> list[str]:
@@ -666,4 +696,19 @@ def load_plugins() -> list[str]:
     return loaded
 
 
-_LOADED_PLUGINS = load_plugins()
+def ensure_plugins_loaded() -> list[str]:
+    """Load approved plugins once, only after a plugin-capable request.
+
+    Importing the global tool registry is on every startup and provider
+    path.  Scanning manifests and launching plugin sandboxes there made a
+    supposedly lazy service an import-time side effect.  The admin/extended
+    tool entry points call this function explicitly instead.
+    """
+    global _PLUGINS_LOADED, _LOADED_PLUGINS
+    if _PLUGINS_LOADED:
+        return list(_LOADED_PLUGINS)
+    with _PLUGIN_LOAD_LOCK:
+        if not _PLUGINS_LOADED:
+            _LOADED_PLUGINS = load_plugins()
+            _PLUGINS_LOADED = True
+    return list(_LOADED_PLUGINS)
