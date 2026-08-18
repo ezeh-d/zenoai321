@@ -176,19 +176,71 @@ class TestLocalAddressAcrossIPVersions:
     night before it mattered.
     """
 
+    @staticmethod
+    def _an_address_on_this_machines_lan() -> str | None:
+        """A real neighbour address, derived from the live interface table.
+
+        Hard-coding one is wrong: `is_local_address` compares against THIS
+        machine's actual subnets, so 192.168.1.55 is only "our LAN" while the
+        Wi-Fi happens to be on 192.168.1.0/24. Picking .1 on whatever subnet
+        we are really on keeps the test true on any machine.
+        """
+        import ipaddress
+
+        try:
+            import psutil
+        except ImportError:  # pragma: no cover
+            return None
+        for addresses in psutil.net_if_addrs().values():
+            for entry in addresses:
+                if getattr(entry.family, "name", "") != "AF_INET":
+                    continue
+                if not entry.netmask or entry.address.startswith(("127.", "169.254.")):
+                    continue
+                try:
+                    network = ipaddress.IPv4Network(
+                        f"{entry.address}/{entry.netmask}", strict=False)
+                except ValueError:
+                    continue
+                # A /32 (Tailscale) contains no neighbour to point at.
+                if network.num_addresses < 4 or not network.is_private:
+                    continue
+                for host in network.hosts():
+                    if str(host) != entry.address:
+                        return str(host)
+        return None
+
     @pytest.mark.parametrize("address,local,why", [
         ("fe80::9c42:c4e5:fc47:ee", True, "link-local: same physical link by definition"),
         ("fd12:3456::1", True, "unique-local: private by design"),
-        ("::ffff:192.168.1.55", True, "IPv4-mapped, on our LAN"),
         ("::ffff:8.8.8.8", False, "IPv4-mapped, public"),
         ("2a00:1450:4009:81f::200e", False, "global IPv6 on somebody else's network"),
-        ("192.168.1.55", True, "plain LAN IPv4"),
         ("8.8.8.8", False, "public IPv4"),
         ("127.0.0.1", True, "loopback"),
         ("not-an-address", False, "garbage"),
     ])
     def test_classification(self, address, local, why):
         assert routes.is_local_address(address) is local, why
+
+    def test_an_address_on_our_own_subnet_is_local(self):
+        """The case that actually matters: a phone on the same Wi-Fi."""
+        neighbour = self._an_address_on_this_machines_lan()
+        if neighbour is None:
+            pytest.skip("this machine has no private IPv4 LAN to test against")
+        assert routes.is_local_address(neighbour) is True, neighbour
+        assert routes.is_local_address(f"::ffff:{neighbour}") is True, neighbour
+
+    def test_an_address_on_a_different_private_subnet_is_not_local(self):
+        """Private does not mean OURS.
+
+        10.x is private, but a phone on someone else's 10.x network is not on
+        this machine's LAN and must not be trusted as though it were.
+        """
+        neighbour = self._an_address_on_this_machines_lan()
+        stranger = "10.255.254.253"
+        if neighbour is not None and neighbour.startswith("10.255.254."):
+            stranger = "172.31.254.253"
+        assert routes.is_local_address(stranger) is False
 
     def test_a_zone_index_does_not_break_parsing(self):
         """Windows hands back fe80::1%12; the zone is not part of the address."""

@@ -90,13 +90,48 @@ def run_agent(
     #
     # It NARROWS, it never blocks: `enable_tools` still widens mid-turn, so a
     # misroute costs one round rather than a capability.
+    # The latest user turn, needed HERE by capability routing and again
+    # below by the cognition router. It used to be defined only below, and
+    # the routing block referenced an unbound `message` -- so every turn
+    # raised NameError, `except Exception` swallowed it, and the router
+    # never actually ran. One definition, used by both.
+    latest = next((m.get("content", "") for m in reversed(history)
+                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
+
+    # UNIVERSAL LANGUAGE INTELLIGENCE. Everything downstream -- capability
+    # routing, cognition, the intent parser, every agent -- reasons from
+    # English, so the conversion happens once, here, rather than each of them
+    # learning to read Pidgin.
+    #
+    # Confident English leaves the engine in ~3ms having done only a Unicode
+    # scan, so the fast path this file fought for is untouched. `latest` is
+    # replaced only when the engine actually changed something AND is
+    # confident; a low-confidence guess is left alone rather than rewriting
+    # the owner's words into something they did not say.
+    _language = None
+    if latest:
+        try:
+            from reyes_agent import language as _language_engine
+
+            _language = _language_engine.understand_text(latest)
+            if (not _language.fast_path and _language.english
+                    and _language.english != latest
+                    and _language.confidence >= 0.5):
+                history[-1] = dict(history[-1])
+                history[-1]["content"] = _language.english
+                history[-1]["original_text"] = latest
+                history[-1]["source_language"] = _language.language
+                latest = _language.english
+        except Exception:  # noqa: BLE001 -- language must never break a turn
+            _language = None
+
     _route = None
     tools = [] if config.MODEL_PROVIDER == "ollama" else tool_definitions(groups=enabled_groups)
-    if tools:
+    if tools and latest:
         try:
             from reyes_agent.routing import capability as _capability
 
-            _route = _capability.tools_for(message)
+            _route = _capability.tools_for(latest)
             _allowed = set(_route.tools)
             _narrowed = [t for t in tools if t["name"] in _allowed]
             # Never hand back an empty toolset on a turn that had some: an
@@ -112,8 +147,6 @@ def run_agent(
     # provider preference; it never answers and never blocks. A FAST turn is
     # not a dumber turn -- it is the same brain with a shorter leash, which is
     # what keeps "hey" from costing eight tool rounds.
-    latest = next((m.get("content", "") for m in reversed(history)
-                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
     decision = None
     try:
         from reyes_agent import cognition, task_engine

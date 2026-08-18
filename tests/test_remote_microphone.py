@@ -130,13 +130,29 @@ def test_digital_silence_is_demoted_before_source_selection() -> None:
 def test_streaming_stt_start_never_blocks_the_audio_consumer() -> None:
     from reyes_agent.voice.stt import streaming
 
-    transcriber = streaming.StreamingTranscriber(lambda _result: None)
-    transcriber._run = lambda: time.sleep(0.2)
-    started = time.perf_counter()
-    assert transcriber.start(wait_timeout_s=0.0) is True
-    elapsed = time.perf_counter() - started
-    transcriber.close()
-    assert elapsed < 0.05, f"socket startup blocked the audio worker for {elapsed:.3f}s"
+    # The property under test is that `start()` does NOT wait for the worker,
+    # which sleeps 200ms. A fixed 50ms budget was measuring thread-creation
+    # latency instead, and flaked under full-suite load on a machine at 84%
+    # RAM -- it passed 5/5 in isolation and failed inside the suite.
+    #
+    # Best-of-three against a budget derived from the worker's own duration:
+    # if start() joined the thread, EVERY attempt would exceed 200ms, so one
+    # fast attempt is proof it did not. Scheduler noise on the other attempts
+    # is not evidence of blocking.
+    worker_s = 0.2
+    attempts = []
+    for _ in range(3):
+        transcriber = streaming.StreamingTranscriber(lambda _result: None)
+        transcriber._run = lambda: time.sleep(worker_s)
+        started = time.perf_counter()
+        assert transcriber.start(wait_timeout_s=0.0) is True
+        attempts.append(time.perf_counter() - started)
+        transcriber.close()
+
+    best = min(attempts)
+    assert best < worker_s / 2, (
+        f"socket startup blocked the audio worker for {best:.3f}s "
+        f"(attempts: {[round(a, 3) for a in attempts]})")
 
 
 def test_remote_runtime_shutdown_releases_its_audio_subscription() -> None:

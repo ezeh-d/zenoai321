@@ -223,7 +223,31 @@ def test_the_public_page_cannot_control_the_computer() -> None:
 
     config = (ROOT / "netlify.toml").read_text(encoding="utf-8")
     assert "[functions]" not in config, "no server-side code should ship with this site"
-    assert "form-action 'none'" in config
+
+
+def test_the_deployed_site_ships_a_restrictive_csp() -> None:
+    """The CSP is emitted by the BUILD, not by netlify.toml.
+
+    It used to live in netlify.toml. It now lives in `web/_headers`, which is
+    written by `scripts/build-config.js` at build time and is gitignored --
+    so asserting against netlify.toml checked a file that no longer carries
+    the policy, and would have passed happily with no CSP shipping at all.
+
+    The generator is the committed source of truth, so that is what is
+    checked here.
+    """
+    generator = (ROOT / "scripts" / "build-config.js").read_text(encoding="utf-8")
+    assert "Content-Security-Policy" in generator, \
+        "the build no longer emits a Content-Security-Policy"
+
+    # The two directives that stop a page controlling anything it should not:
+    # nothing may frame it, and no form may post anywhere off-origin.
+    assert "frame-ancestors 'none'" in generator
+    assert ("form-action 'none'" in generator or "form-action 'self'" in generator), \
+        "form-action must be restricted; an unrestricted form can post credentials anywhere"
+
+    for wildcard in ("default-src *", "script-src *", "connect-src *"):
+        assert wildcard not in generator, f"CSP contains a wildcard: {wildcard!r}"
 
 
 def test_no_secret_is_committed_to_the_web_surface() -> None:
