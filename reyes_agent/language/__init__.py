@@ -9,6 +9,11 @@ is. It never executes anything: the intent parser, capability system and
 permission gates run afterwards, unchanged.
 """
 
+from reyes_agent.language.chunk import understand_document  # noqa: F401
+from reyes_agent.language.speech import (  # noqa: F401
+    SpeechUnderstanding,
+    understand_audio,
+)
 from reyes_agent.language.engine import (  # noqa: F401
     CLARIFY_THRESHOLD,
     SENSITIVE_THRESHOLD,
@@ -23,6 +28,7 @@ from reyes_agent.language.engine import (  # noqa: F401
 
 __all__ = [
     "Understanding", "understand_text", "translate_to_english", "translate_text",
+    "SpeechUnderstanding", "understand_audio", "understand_document",
     "normalize_to_plain_english", "diagnostics", "status",
     "SENSITIVE_THRESHOLD", "CLARIFY_THRESHOLD",
 ]

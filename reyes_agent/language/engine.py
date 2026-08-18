@@ -219,6 +219,24 @@ def understand_text(text: str, *, conversation_context: str = "",
     if checked.checks.get("negation") is False:
         overall = min(overall, 0.2)
 
+    # --- 9. Back-translation, only when it earns its cost -----------------
+    # Round-tripping doubles latency, so it runs only on input that is
+    # already doubtful. On confident input it would be a tax on every turn
+    # for a confirmation nobody needed.
+    if (_verify.should_back_translate(overall, sensitive=False)
+            and source not in ("en", "pcm", "unknown", "")):
+        try:
+            round_trip = _verify.back_translate_check(working, english, source)
+            if not round_trip.ok:
+                issues.extend(round_trip.issues)
+                overall = min(overall, round_trip.confidence)
+            else:
+                # Agreement is mild evidence, not a licence. It can lift a
+                # borderline reading, never make an uncertain one certain.
+                overall = min(1.0, overall + min(0.1, round_trip.confidence * 0.1))
+        except Exception:  # noqa: BLE001 -- verification must never break a turn
+            pass
+
     return Understanding(
         raw_text=raw, english=english, language=source, languages=languages,
         script=detection.script, code_switched=detection.code_switched,

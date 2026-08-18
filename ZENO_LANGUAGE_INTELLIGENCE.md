@@ -34,12 +34,18 @@ raw input
 | `language/memory.py` | Owner's own vocabulary |
 | `language/engine.py` | Orchestrator, confidence, fast path |
 
-## No model is downloaded
+## Models: one installed, on purpose
 
 The brief asks for MADLAD/GlotLID/SONAR "or equivalent" and, separately, that
 huge models must not be pulled without control and must not destabilise the
-Windows app. Those pull in opposite directions, so **this ships the
-architecture and no weights**:
+Windows app.
+
+**One model is now installed** — `Systran/faster-whisper-base`, 296 MB on
+disk, for multilingual speech. It was downloaded by an explicit command, not
+on import or on first use, and `python -m reyes_agent.language.cli setup`
+states the disk and RAM cost before doing anything.
+
+**Text translation still ships no weights.** The architecture is adapters:
 
 - `RuleAdapter` — Pidgin/slang/idiom → English. Offline, deterministic, ~3ms.
   A genuine translator for what it covers, not a stand-in.
@@ -160,9 +166,9 @@ LANGUAGE_DEBUG=false
 
 ## Tests
 
-**94 in `tests/test_language_engine.py`.** Full suite **1298 passing**, up
-from 1103, with no existing test modified except two that were themselves
-wrong (see below).
+**141** across `tests/test_language_engine.py` (94) and
+`tests/test_language_speech.py` (47). Full suite **1346 passing**, up from
+1103 at the start of this work.
 
 Weighted deliberately: negation, numbers, entities and code get exhaustive
 coverage; prose quality gets spot checks. An awkward translation is a quality
@@ -186,21 +192,126 @@ problem, an inverted negation is a destroyed filesystem.
   reports language and confidence only, rather than inventing a dialect label.
 - **Tone and emoji sentiment are not implemented.**
 
+## Speech (built)
+
+`language/speech.py` - one entry point, `understand_audio()`, shared by the
+desktop microphone, the phone microphone and the web client. It reuses
+`voice/stt/manager.py` (which already had a cloud/local circuit breaker) and
+adds what STT does not do:
+
+| behaviour | why |
+|---|---|
+| original transcript kept beside the English | debugging, corrections, display |
+| misheard names repaired | `open cloud` -> `open Claude` |
+| stutters collapsed, emphasis kept | `open open open Chrome` -> `open Chrome` |
+| silence hallucinations rejected | an empty room transcribes as "you" |
+| **partial transcripts can never authorise an action** | `delete the old backup` passes through `delete the old` |
+| language label stabilised | Whisper re-detects per chunk and flickers |
+
+**Name repair is deliberately conservative.** A correction applies only when
+the token follows a command verb *and* is close to a name ZENO actually
+knows. `the cloud is down` is untouched. The threshold is **0.72**, because
+that is what `cloud` -> `Claude` (0.727) needs; a sweep of 30 ordinary objects
+against the entity list found exactly one collision at that level
+(`window` -> `Windows`), handled by a guard list.
+
+### Installed
+
+**`Systran/faster-whisper-base` - ~100 languages, int8 on CPU.** 148 MB
+downloaded, **296 MB on disk** (the HuggingFace cache keeps a blob and a
+snapshot, and Windows without developer mode copies rather than symlinks).
+Configured in `.env` and reporting `STANDBY`.
+
+Verified on real audio generated with Windows SAPI:
+
+```
+"Please open Chrome and check my email"
+  -> transcript: "Please open Chrome and check my email."
+  -> language: en    latency: 6.1s (first load), backend faster-whisper-int8
+```
+
+## Documents, back-translation, candidates (built)
+
+**`language/chunk.py`** splits at the strongest boundary available -
+paragraph, then sentence, then clause, then a hard limit that still refuses
+to cut mid-word. Each chunk carries the previous chunk's tail as context. A
+`Glossary` fixes the first translation of each term so it stays consistent
+across a document. **A failed chunk keeps its original text and is reported
+by index** - silently omitting a paragraph is the worst possible failure for
+a document.
+
+**Back-translation** (`verify.back_translate_check`) round-trips the English
+and compares. It runs only when confidence is already below 0.85, because
+doubling latency to re-confirm something clear is a tax on every turn.
+
+**Ranked candidates** (`verify.rank_candidates`) score each reading by its own
+confidence plus agreement with the others. `candidates_conflict()` refuses to
+pick when two readings disagree about **negation** or about **which verb** is
+commanded - wording differences are fine, a disagreement about the action is
+not.
+
+## `zeno language` (built)
+
+```bash
+python -m reyes_agent.language.cli status
+python -m reyes_agent.language.cli setup standard --yes
+python -m reyes_agent.language.cli test
+```
+
+`setup` never downloads without an explicit tier *and* `--yes`, states the
+disk and RAM cost first, and checks free space. `status` reads installed sizes
+**off disk** rather than claiming them - an absent model reports 0 MB.
+
+Recommended tier is chosen from real hardware: this machine (8.4 GB RAM, 4
+threads, no CUDA) gets `standard`.
+
+## Web dashboard (built)
+
+`GET /api/language/status`, `POST /api/language/understand`,
+`POST /api/language/teach`, `GET /api/language/phrases`,
+`POST /api/language/phrases/clear`. All five are **desktop-only** - not
+allow-listed in `remote_access.boundary`, asserted by a test.
+
+## Three more bugs found while building this
+
+**6. The STT seam discarded the detected language.** `transcribe_result`
+narrowed its result to `{transcript, confidence}`, so Whisper's acoustic
+language guess - the one signal a text detector cannot derive - was computed
+and then thrown away. Now passed through additively; both original keys keep
+their exact meaning.
+
+**7. Candidate ranking inverted for every non-English negation.**
+`count_negation` only knows English negators, so for *"Ne supprime pas le
+fichier"* it scored the original as un-negated and **ranked "Delete the file"
+above "Do not delete the file"**.
+
+**8. Back-translation was blind to the case it exists for.** Both sides of the
+round trip are in the *source* language, and the same English-only counter
+reported a lost negation as preserved. *"ne supprime pas le fichier"* ->
+*"supprime le fichier"* scored as fine.
+
 ## NOT YET BUILT
 
-- Speech-side integration (§30–34): Whisper multilingual transcription,
-  accent handling, STT context correction, streaming language stabilisation.
-  The engine is ready — `understand_audio()` does not exist.
-- `SocialScheduler`-style background language jobs, document chunking
-  (§118–120), per-session glossary (§121).
-- Back-translation checking (§25) and multiple ranked candidates (§26).
-- Language status panel in the web dashboard (§60).
-- `zeno language setup` / model tier installer (§105–106).
-- Explicit output-language *response* mode is wired (`translate_text`) but not
-  surfaced as a command.
+
+- **Accent-specific tuning.** Whisper handles accents as well as Whisper does;
+  nothing here improves on it, and no Nigerian-accent evaluation was run.
+- **Streaming STT is not wired to `understand_audio`.** The partial/final
+  distinction and the language stabiliser exist and are tested, but the
+  streaming transcriber still calls the old path.
+- **Explicit output-language responses.** `translate_text` works; no command
+  surfaces it, so "tell him in French" is not yet something ZENO does.
+- **No language panel in the web UI.** The five routes exist and return real
+  data; nothing renders them.
+- **Tone and emoji sentiment** (§39, §71).
+- **Dialect identification** (§10) — reported as language + confidence only.
 
 ## Not verified
 
-No load testing of the language path, no measurement on a machine other than
-this one, and no evaluation against a labelled multilingual corpus — the
-accuracy claims here are the test cases in this repository, not a benchmark.
+- **No non-English speech was ever transcribed.** Only `en-US` voices are
+  installed on this machine, so the multilingual model's 100-language figure
+  is the model's claim, not a measurement. English audio was verified end to
+  end.
+- No evaluation against a labelled multilingual corpus. The accuracy claims
+  are the test cases in this repository, not a benchmark.
+- No load testing of the language path, and no measurement on any other
+  machine.

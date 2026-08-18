@@ -47,7 +47,14 @@ def test_deepgram_request_has_a_real_network_timeout_and_no_retry() -> None:
     finally:
         stt._client = original
 
-    assert result == {"transcript": "heard clearly", "confidence": 0.91}
+    # The two keys every caller depends on, checked by VALUE rather than by
+    # exact dict equality. The seam's promise is that `transcript` and
+    # `confidence` keep their meaning -- not that no key may ever be added.
+    # The language engine needs Whisper's acoustic language guess, which the
+    # manager used to compute and then discard, and an exact-equality
+    # assertion made that additive change look like a contract break.
+    assert result["transcript"] == "heard clearly"
+    assert result["confidence"] == 0.91
     assert captured["language"] == config.DEEPGRAM_LANGUAGE
     assert set(config.DEEPGRAM_KEYTERMS).issubset(set(captured["keyterm"]))
     assert "ZENO" in captured["keyterm"]

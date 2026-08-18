@@ -178,3 +178,144 @@ def verify(original: str, english: str, *, protected=None,
     confidence = max(0.0, min(1.0, confidence))
     return Verification(ok=hard_failures == 0, confidence=confidence,
                         issues=issues, checks=checks)
+
+
+# --- back-translation ----------------------------------------------------
+# Brief 25: translate the English BACK to the source language and compare it
+# with the original. Genuinely catches meaning drift a forward-only check
+# cannot -- but it doubles latency, so it is opt-in and reserved for input
+# that is already suspect.
+
+def should_back_translate(confidence: float, *, sensitive: bool = False) -> bool:
+    """Whether the extra round trip is worth it.
+
+    Never for confident input: doubling the latency of every turn to
+    re-confirm something already clear is exactly the kind of tax the fast
+    path exists to avoid.
+    """
+    if confidence >= 0.85:
+        return False
+    return sensitive or confidence < 0.6
+
+
+def back_translate_check(original: str, english: str, source_language: str,
+                         *, translator=None) -> Verification:
+    """Round-trip the English and compare it with what the owner actually said."""
+    if not source_language or source_language in ("en", "unknown", ""):
+        return Verification(True, 1.0, [], {"back_translation": True})
+
+    if translator is None:
+        from reyes_agent.language import translate as _translate
+
+        translator = _translate.translate
+
+    result = translator(english, "en", source_language)
+    if not getattr(result, "ok", False):
+        # Unavailable is not evidence of a problem. Reporting a failure here
+        # would penalise every language without a reverse adapter.
+        return Verification(True, 0.75, [], {"back_translation": True})
+
+    score = semantic_score(original, result.text)
+
+    # BOTH sides here are in the SOURCE language, so `count_negation` -- which
+    # only knows English negators -- returns 0 for both and reports a lost
+    # negation as preserved. That is a blind spot in exactly the check that
+    # exists to catch it: "ne supprime pas le fichier" round-tripping to
+    # "supprime le fichier" scored as fine.
+    def _negated(text: str) -> bool:
+        return source_has_negation(text) or count_negation(text) > 0
+
+    negation_kept = _negated(original) == _negated(result.text)
+
+    issues: list[str] = []
+    if not negation_kept:
+        issues.append("the round trip changed the negation")
+    if score < 0.25:
+        issues.append(f"the round trip drifted (similarity {score:.2f})")
+
+    return Verification(
+        ok=negation_kept,
+        confidence=max(0.0, min(1.0, score if negation_kept else 0.1)),
+        issues=issues,
+        checks={"back_translation": negation_kept, "round_trip_similarity": score >= 0.25},
+    )
+
+
+# --- ranked candidates ---------------------------------------------------
+# Brief 26: when input is ambiguous, produce several readings and rank them
+# rather than committing to one. Brief 131: if two candidates disagree about
+# what to DO, execute neither.
+
+@dataclass
+class Candidate:
+    text: str
+    engine: str
+    confidence: float
+    reason: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"text": self.text, "engine": self.engine,
+                "confidence": round(self.confidence, 3), "reason": self.reason}
+
+
+def rank_candidates(original: str, candidates: list[Candidate], *,
+                    context: str = "") -> list[Candidate]:
+    """Best first. Score is the engine's own confidence plus agreement."""
+    if not candidates:
+        return []
+
+    scored: list[tuple[float, Candidate]] = []
+    for candidate in candidates:
+        score = candidate.confidence
+        # Agreement with the other readings: a meaning several engines reach
+        # independently is more likely right than a lone confident one.
+        others = [c for c in candidates if c is not candidate]
+        if others:
+            agreement = sum(semantic_score(candidate.text, other.text)
+                            for other in others) / len(others)
+            score = score * 0.7 + agreement * 0.3
+        if context and semantic_score(candidate.text, context) > 0.2:
+            score += 0.05
+        # A candidate that lost the negation is not a candidate.
+        #
+        # `count_negation` only knows ENGLISH negators, so using it on the
+        # original inverted this test for every non-English input: for
+        # "Ne supprime pas le fichier" it scored the original as un-negated
+        # and PENALISED the correct reading "Do not delete the file" down to
+        # 0.15, ranking "Delete the file" first. The source side has to use
+        # the multilingual check.
+        original_negated = source_has_negation(original) or count_negation(original) > 0
+        if original_negated != (count_negation(candidate.text) > 0):
+            score *= 0.2
+        scored.append((score, candidate))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [Candidate(c.text, c.engine, min(1.0, s), c.reason) for s, c in scored]
+
+
+def candidates_conflict(candidates: list[Candidate]) -> tuple[bool, str]:
+    """Whether the top readings disagree about the ACTION.
+
+    Wording differences are normal and harmless. A disagreement about
+    negation, or about which verb is being commanded, means ZENO does not
+    know what it was asked to do -- and must not guess when the answer
+    decides whether a file survives.
+    """
+    if len(candidates) < 2:
+        return False, ""
+
+    first, second = candidates[0], candidates[1]
+    if (count_negation(first.text) > 0) != (count_negation(second.text) > 0):
+        return True, ("the readings disagree about whether this is negated: "
+                      f"{first.text!r} vs {second.text!r}")
+
+    def leading_verb(text: str) -> str:
+        stripped = re.sub(r"^(?:please|kindly)\s+", "", str(text).strip().lower())
+        stripped = re.sub(r"^(?:do not|don't|never)\s+", "", stripped)
+        first_word = re.split(r"[\s,]+", stripped)[0] if stripped else ""
+        return first_word if first_word in _IMPERATIVE_VERBS else ""
+
+    verbs = {leading_verb(first.text), leading_verb(second.text)} - {""}
+    if len(verbs) > 1:
+        return True, f"the readings disagree about the action: {sorted(verbs)}"
+    return False, ""

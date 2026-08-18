@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import (Cookie, Depends, FastAPI, File, Form, HTTPException, Request,
+from fastapi import (Body, Cookie, Depends, FastAPI, File, Form, HTTPException, Request,
                      UploadFile, WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -790,6 +790,58 @@ def social_summary() -> dict[str, str]:
     from reyes_agent.social import dashboard
 
     return {"summary": dashboard.spoken_summary()}
+
+
+# --- language intelligence ---------------------------------------------
+@app.get("/api/language/status")
+def language_status_route() -> dict[str, Any]:
+    """Detector, engines, speech models and hardware. Never claims a model
+    that is not actually installed -- sizes are read off disk."""
+    from reyes_agent.language import cli as language_cli
+
+    return language_cli.status()
+
+
+@app.post("/api/language/understand")
+def language_understand_route(payload: dict = Body(...)) -> dict[str, Any]:
+    """What ZENO understood, and how confident it is.
+
+    This is the "show detected translation" toggle and the debug view. It
+    returns processing METADATA -- language, confidence, which engine ran --
+    never hidden reasoning.
+    """
+    from reyes_agent.language import understand_text
+
+    text = str(payload.get("text", ""))[:8000]
+    return understand_text(text).as_dict()
+
+
+@app.post("/api/language/teach")
+def language_teach_route(payload: dict = Body(...)) -> dict[str, Any]:
+    """"When I say X, I mean Y." Owner vocabulary, individually removable."""
+    from reyes_agent.language import memory as language_memory
+
+    phrase = str(payload.get("phrase", "")).strip()
+    meaning = str(payload.get("meaning", "")).strip()
+    if not phrase or not meaning:
+        raise HTTPException(status_code=400, detail="phrase and meaning are required")
+    ok = language_memory.get_memory().teach(phrase, meaning, source="taught")
+    return {"ok": ok, "phrase": phrase}
+
+
+@app.get("/api/language/phrases")
+def language_phrases_route() -> dict[str, Any]:
+    from reyes_agent.language import memory as language_memory
+
+    return {"phrases": language_memory.get_memory().all(limit=200)}
+
+
+@app.post("/api/language/phrases/clear")
+def language_clear_route() -> dict[str, Any]:
+    """"ZENO, clear my learned language preferences." Only those."""
+    from reyes_agent.language import memory as language_memory
+
+    return {"ok": True, "removed": language_memory.get_memory().clear()}
 
 
 @app.get("/api/social/health")

@@ -81,11 +81,17 @@ def transcribe_result(audio: bytes) -> dict:
             if name == "deepgram":
                 _record_cloud_success()
             _emit(result)
-            # Preserve the established public seam. Backend/profile/latency
-            # details are emitted to diagnostics rather than changing every
-            # caller's result contract.
+            # Preserve the established public seam: `transcript` and
+            # `confidence` keep their exact meaning, so no existing caller
+            # changes. The rest is ADDED, not substituted -- the language
+            # engine needs Whisper's acoustic language guess, which is the
+            # one signal a text detector cannot derive, and dropping it here
+            # meant it was computed and then discarded.
             return {"transcript": str(result.get("transcript") or ""),
-                    "confidence": result.get("confidence")}
+                    "confidence": result.get("confidence"),
+                    "language": result.get("language"),
+                    "backend": result.get("backend", name),
+                    "latency_s": result.get("latency_s")}
         except Exception as exc:
             if name == "deepgram":
                 _record_cloud_failure(exc)
