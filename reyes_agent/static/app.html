@@ -518,6 +518,7 @@ function vChat(m){
     </div>
     <div class="disabled-note" id="micnote"></div>`;
   drawLog();
+  if (!S.chat.length && S.device) void loadConversation();
 
   const ta = $("ta");
   ta.addEventListener("input", () => { ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,130)+"px"; });
@@ -578,18 +579,24 @@ async function send(){
 /* Poll until the command reaches a terminal state. Reports the REAL outcome:
    TIMEOUT is reported as a timeout, never quietly as a reply. */
 async function waitFor(id, timeoutMs=120000){
+  const c=await waitCommandRecord(id,timeoutMs);
+  if(!c)return {role:"sys", text:"Still running — check the Tasks tab."};
+  const r=c.result||{};
+  if(c.status==="DONE")return {role:"ze",text:r.answer||r.detail||
+    (Object.keys(r).length?JSON.stringify(r,null,2):"Completed with no response body.")};
+  return {role:"sys",text:`${c.status}: ${r.error||r.detail||"no result reported"}`};
+}
+
+async function waitCommandRecord(id, timeoutMs=120000){
   const started = Date.now();
   while (Date.now() - started < timeoutMs){
     await new Promise(r => setTimeout(r, 1400));
     let c; try { c = await call("/api/owner/command/" + id); } catch { continue; }
     if (["DONE","FAILED","TIMEOUT","REJECTED","CANCELLED","EXPIRED"].includes(c.status)){
-      const r = c.result || {};
-      if (c.status === "DONE") return {role:"ze", text: r.answer || r.detail ||
-        (Object.keys(r).length ? JSON.stringify(r,null,2) : "Completed with no response body.")};
-      return {role:"sys", text: `${c.status}: ${r.error || r.detail || "no result reported"}`};
+      return c;
     }
   }
-  return {role:"sys", text:"Still running after 2 minutes — check the Tasks tab."};
+  return null;
 }
 
 /* ---------------- agents / tasks / memory ---------------- */
@@ -640,6 +647,20 @@ function vVoice(m){
     <button class="btn" disabled>Start listening</button>
     <div class="disabled-note">Internet voice streaming is not implemented in this build. ZENO will not request microphone permission or pretend to listen. Typed chat and the local/LAN phone microphone remain available.</div>
   </div>`;
+}
+
+async function loadConversation(){
+  try{
+    const cmd=await call("/api/owner/command",{method:"POST",body:{
+      action:"conversation_snapshot",device_id:S.device,payload:{},
+      idempotency_key:"conversation-"+Date.now()}});
+    const record=await waitCommandRecord(cmd.id,45000);
+    const messages=(record&&record.status==="DONE"&&record.result&&record.result.messages)||[];
+    if(!S.chat.length&&messages.length){
+      S.chat=messages.map(x=>({role:x.role==="user"?"me":"ze",text:String(x.content||"")}));
+      drawLog();
+    }
+  }catch{}
 }
 
 async function vApprovals(m){

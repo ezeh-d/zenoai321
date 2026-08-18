@@ -56,6 +56,7 @@
   <p class="tag">A Windows AI operating assistant. It hears, sees, remembers, plans,
      acts and verifies — on your own machine.</p>
   <div id="banner"><span class="dot" id="dot"></span><span id="banner-text">Checking whether ZENO is reachable…</span></div>
+  <p><a href="/app/">Open the secure ZENO Anywhere app</a></p>
 </header>
 
 <h2>System</h2>
@@ -105,7 +106,7 @@
   // window.ZENO_CONFIG (see zeno-config.js), which is PUBLIC by definition:
   // anything embedded in browser JavaScript is readable by anyone.
   var cfg = (window.ZENO_CONFIG || {});
-  var base = cfg.apiBaseUrl || "http://127.0.0.1:8765";
+  var base = cfg.apiBaseUrl || "";
 
   var dot = document.getElementById("dot");
   var text = document.getElementById("banner-text");
@@ -147,11 +148,16 @@
     if (!done) { done = true; offline("no response"); }
   }, 3500);
 
-  fetch(base + "/api/v1/public-status", { mode: "cors", cache: "no-store" })
+  if (!base) { clearTimeout(timer); done = true; offline("API URL is not configured"); return; }
+  fetch(base + "/health", { mode: "cors", cache: "no-store" })
     .then(function (r) { if (!r.ok) throw new Error("status " + r.status); return r.json(); })
     .then(function (data) {
       if (done) return;
-      done = true; clearTimeout(timer); online(data || {});
+      done = true; clearTimeout(timer);
+      dot.className = "dot " + (data.state === "ONLINE" ? "online" : "degraded");
+      text.textContent = data.state === "ONLINE"
+        ? "ZENO Anywhere gateway is online. Sign in to see private system state."
+        : "ZENO Anywhere gateway is present but remote access is disabled.";
     })
     .catch(function (err) {
       if (done) return;

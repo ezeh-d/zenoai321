@@ -1,0 +1,13 @@
+{
+  "name": "zeno-anywhere-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static, installable owner interface for ZENO Anywhere",
+  "scripts": {
+    "build": "node scripts/build-config.js",
+    "test": "node scripts/test-web-build.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

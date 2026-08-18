@@ -87,3 +87,5 @@ REYES (4)/
 
 # Generated at build time by scripts/build-config.js (Netlify runs this).
 web/zeno-config.js
+web/_headers
+web/app/
