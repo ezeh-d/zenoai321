@@ -39,6 +39,14 @@ def speak(text: str, stop_event: threading.Event) -> None:
             # remain lazy and SAPI is the final proven Windows fallback.
             from reyes_agent.voice.tts_router import speak_fallback
             speak_fallback(text, stop_event)
+    elif config.TTS_PROVIDER == "piper":
+        try:
+            _speak_piper(text, stop_event)
+        except TTSError:
+            # Same rule: a missing model or a load failure must not silence
+            # ZENO. SAPI is always there.
+            from reyes_agent.voice.tts_router import speak_fallback
+            speak_fallback(text, stop_event)
     else:
         raise TTSError(f"Unknown TTS_PROVIDER '{config.TTS_PROVIDER}'.")
 
@@ -125,6 +133,82 @@ def synthesize_bytes(text: str) -> bytes:
         return b"".join(chunks)
     except Exception as exc:  # noqa: BLE001
         raise TTSError(str(exc)) from exc
+
+
+# --- Piper (offline neural voice) -----------------------------------------
+
+_piper_voice = None
+
+
+def _get_piper_voice():
+    """Load the Piper voice once. Missing model -> TTSError -> SAPI fallback."""
+    global _piper_voice
+    if _piper_voice is None:
+        from pathlib import Path
+
+        model = config.PIPER_MODEL
+        if not model or not Path(model).exists():
+            raise TTSError(
+                f"Piper model not found at {model!r}. Download one into "
+                "models/piper/ or set PIPER_MODEL. Falling back to SAPI.")
+        try:
+            from piper import PiperVoice
+        except ImportError as exc:
+            raise TTSError("piper-tts isn't installed.") from exc
+        try:
+            cfg = model + ".json"
+            _piper_voice = PiperVoice.load(
+                model, config_path=cfg if Path(cfg).exists() else None)
+        except Exception as exc:  # noqa: BLE001
+            raise TTSError(f"couldn't load Piper voice: {exc}") from exc
+    return _piper_voice
+
+
+def piper_ready() -> bool:
+    from pathlib import Path
+
+    from importlib.util import find_spec
+    return bool(config.PIPER_MODEL and Path(config.PIPER_MODEL).exists()
+                and find_spec("piper") is not None)
+
+
+def _speak_piper(text: str, stop_event: threading.Event) -> None:
+    """Synthesise locally and stream to the speakers, stoppable mid-sentence."""
+    import sounddevice as sd
+
+    voice = _get_piper_voice()
+    rate = getattr(voice.config, "sample_rate", 22050)
+    out = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16")
+    out.start()
+    try:
+        for chunk in voice.synthesize(text):
+            if stop_event.is_set():
+                break
+            data = getattr(chunk, "audio_int16_bytes", None)
+            if data:
+                out.write(data)
+    except Exception as exc:  # noqa: BLE001
+        raise TTSError(str(exc)) from exc
+    finally:
+        out.stop()
+        out.close()
+
+
+def synthesize_wav_bytes(text: str) -> bytes:
+    """WAV bytes from Piper, for delivering offline audio to a browser tab.
+
+    The ElevenLabs `synthesize_bytes` needs an API key; this is the local,
+    no-key equivalent, so the web panel can get real ZENO audio with nothing
+    configured.
+    """
+    import io
+    import wave
+
+    voice = _get_piper_voice()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        voice.synthesize_wav(text, wav)
+    return buf.getvalue()
 
 
 def _speak_elevenlabs(text: str, stop_event: threading.Event) -> None:

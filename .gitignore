@@ -99,3 +99,8 @@ docker/certs/*.crt
 # Third-party hacking-tool collections -- never commit into ZENO.
 AllHackingTools-main/
 hackingtool-master/
+
+# Piper voice models (binary, ~60MB each) -- downloaded, not committed.
+models/piper/*.onnx
+models/piper/*.onnx.json
+models/piper/*.wav
