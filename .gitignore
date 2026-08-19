@@ -95,3 +95,7 @@ web/app/
 # so it is regenerated rather than committed.
 docker/certs/*.crt
 !docker/certs/.gitkeep
+
+# Third-party hacking-tool collections -- never commit into ZENO.
+AllHackingTools-main/
+hackingtool-master/

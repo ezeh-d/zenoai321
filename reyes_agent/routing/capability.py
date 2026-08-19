@@ -53,6 +53,11 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                "list_notes", "link_notes", "search_vault_semantic",
                "explore_knowledge", "knowledge_graph_stats"),
     "web": ("web_search", "get_news", "website_check", "research_lab"),
+    # Explicit language requests only. Understanding is automatic and
+    # invisible; these fire when the owner addresses language itself --
+    # "translate this", "what does this mean", "when I say X I mean Y".
+    "language": ("translate_text", "explain_language", "remember_phrase",
+                 "language_diagnostics"),
     # ZENO's own Instagram and TikTok. Status is the common question, so the
     # read-only tools are first; publishing tools are here too because the
     # owner asks about posting in the same breath as asking about numbers.
@@ -126,7 +131,7 @@ BUDGETS: dict[str, int] = {
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 8, "missions": 8,
     "social": 15, "diagnostics": 10, "presentation": 8, "workflow": 6, "voice": 6,
-    "security": 7,
+    "security": 7, "language": 6,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow
@@ -136,6 +141,20 @@ _INTENT: tuple[tuple[str, str], ...] = (
     # is not a request to delete, and must not be given the tool.
     ("files_destructive",
      r"^\s*(?:please\s+)?(?:delete|remove|erase|rm)\s+(?:the\s+|my\s+|this\s+)?\S+"),
+
+    # Explicit language operations. "translate" is unambiguous; the rest
+    # require the grammar of a request ABOUT language, not just a foreign
+    # word -- those are understood automatically without any tool.
+    ("language",
+     r"\btranslat(?:e|ed|ion|ing)\b|"
+     r"\b(?:say|write|reply|respond|put|tell (?:him|her|them|us))\b[^.?!]{0,30}\bin "
+     r"(?:french|spanish|yoruba|igbo|hausa|pidgin|arabic|german|italian|portuguese|"
+     r"mandarin|chinese|japanese|korean|russian|swahili|hindi|dutch|turkish|polish|greek)\b|"
+     r"\bwhat language\b|"
+     r"\bwhat does \w+ mean\b|"
+     r"\bwhen i say\b[^.?!]{1,60}\bi mean\b|"
+     r"\blanguage (?:debug|status|diagnostics|mode)\b|"
+     r"\bwhat languages (?:can|do)\b"),
 
     # Social. Matches ZENO's OWN accounts and content operations. "post" alone
     # is far too broad (post a letter, blog post), so every alternative here
