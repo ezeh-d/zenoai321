@@ -53,6 +53,9 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                "list_notes", "link_notes", "search_vault_semantic",
                "explore_knowledge", "knowledge_graph_stats"),
     "web": ("web_search", "get_news", "website_check", "research_lab"),
+    # Anime and manga/manhwa: AniList facts, reading a page, the shelf.
+    "anime": ("anime_search", "anime_info", "anime_recommend",
+              "anime_trending", "read_manga_page", "track_series", "my_shelf"),
     # Explicit language requests only. Understanding is automatic and
     # invisible; these fire when the owner addresses language itself --
     # "translate this", "what does this mean", "when I say X I mean Y".
@@ -131,7 +134,7 @@ BUDGETS: dict[str, int] = {
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 8, "missions": 8,
     "social": 15, "diagnostics": 10, "presentation": 8, "workflow": 6, "voice": 6,
-    "security": 7, "language": 6,
+    "security": 7, "language": 6, "anime": 8,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow
@@ -155,6 +158,16 @@ _INTENT: tuple[tuple[str, str], ...] = (
      r"\bwhen i say\b[^.?!]{1,60}\bi mean\b|"
      r"\blanguage (?:debug|status|diagnostics|mode)\b|"
      r"\bwhat languages (?:can|do)\b"),
+
+    # Anime / manga / manhwa. The medium words are unambiguous; the rest is
+    # the grammar of asking about watching or reading a series.
+    ("anime",
+     r"\b(?:anime|manga|manhwa|manhua|webtoon)s?\b|"
+     r"\bwhat should i (?:watch|read)\b|"
+     r"\bwhat am i (?:watching|reading)\b|"
+     r"\b(?:read|reading) (?:this |the |my )?(?:chapter|page)\b|"
+     r"\b(?:watch|reading|watching) list\b|"
+     r"\brecommend[^.?!]{0,25}\b(?:to (?:watch|read)|series)\b"),
 
     # Social. Matches ZENO's OWN accounts and content operations. "post" alone
     # is far too broad (post a letter, blog post), so every alternative here
