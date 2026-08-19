@@ -114,6 +114,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                 "list_project_files", "website_restore_checkpoint"),
     "creative": ("creator_project", "design_capabilities", "create_animation",
                  "animate_files", "generate_image", "learning_mode",
+                 "find_where_to_sell", "draft_listing",
                  "mastery_mode", "foodie_mode"),
     "missions": ("create_mission", "list_missions", "simulate_mission",
                  "resume_workspace"),
@@ -133,7 +134,7 @@ BUDGETS: dict[str, int] = {
     "desktop": 12, "files": 10, "files_destructive": 4, "coding": 14,
     "vision": 10, "agents": 8, "council": 6, "communication": 8,
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
-    "builder": 10, "creative": 8, "missions": 8,
+    "builder": 10, "creative": 10, "missions": 8,
     "social": 15, "diagnostics": 10, "presentation": 8, "workflow": 6, "voice": 6,
     "security": 7, "language": 6, "anime": 8,
 }
@@ -178,7 +179,10 @@ _INTENT: tuple[tuple[str, str], ...] = (
      r"\breels?\b|"
      r"\b(?:create|make|generate|produce) (?:me )?(?:an? |a short )?"
      r"(?:animation|video|clip|reel|image|picture|artwork|drawing|illustration)\b|"
-     r"\bdraw (?:me )?(?:an? )?(?:image|picture|art|illustration|scene|character)\b"),
+     r"\bdraw (?:me )?(?:an? )?(?:image|picture|art|illustration|scene|character)\b|"
+     r"\b(?:where (?:can|to|should) i sell|where to sell|how (?:do|can) i (?:sell|monetize|monetise))\b|"
+     r"\bmonet(?:ise|ize)\b|\b(?:draft|write) (?:a |the )?listing\b|"
+     r"\bsell (?:my |this |the )?(?:art|animation|artwork|drawing|design|work|creation)\b"),
 
     # Social. Matches ZENO's OWN accounts and content operations. "post" alone
     # is far too broad (post a letter, blog post), so every alternative here
