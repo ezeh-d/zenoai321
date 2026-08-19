@@ -78,6 +78,12 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
     "agents": ("agent_roster", "who_is_agent", "agent_roll_call", "agent_status",
                "agent_introduction", "delegate"),
     "council": ("convene_council", "executive_meeting", "agent_roster"),
+    # AVA's security testing. delegate is included so "AVA, pentest X" reaches
+    # her; the scope tools gate everything that touches a target.
+    "security": ("security_authorize", "security_scope", "security_revoke",
+                 "security_toolkit", "security_plan", "security_authorization_log",
+                 "security_sanctioned_targets", "security_import_bounty_scope",
+                 "security_lab", "delegate"),
     "communication": ("send_message", "send_slack_message",
                       "send_telegram_message", "check_email"),
     "business": ("portfolio_report", "paper_trade", "paper_portfolio",
@@ -120,6 +126,7 @@ BUDGETS: dict[str, int] = {
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 8, "missions": 8,
     "social": 15, "diagnostics": 10, "presentation": 8, "workflow": 6, "voice": 6,
+    "security": 7,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow
@@ -143,6 +150,16 @@ _INTENT: tuple[tuple[str, str], ...] = (
      r"client leads?|potential clients?|social (?:media|dashboard|analytics)|"
      r"(?:check|read|show) (?:your|my) comments|"
      r"(?:your|zeno's) (?:comments|dms?|messages) )\b"),
+
+    # AVA / security testing. Matches authorized-pentest language and AVA by
+    # name. "attack"/"scan" need a security object so "scan the document" and
+    # "attack the problem" do not route here.
+    ("security",
+     r"\b(?:ava|pentest|penetration test|red team|blue team|ethical hack|"
+     r"authorize (?:a )?target|(?:in |the )?scope|security (?:assessment|audit|test|toolkit)|"
+     r"(?:port |vulnerability |vuln )scan|exploit(?:ation)?|reconnaissance|"
+     r"(?:attack|scan|test|harden|secure|assess) (?:the |this |my )?"
+     r"(?:target|host|server|box|network|ip|domain|web ?app|site|machine|system))\b"),
 
     ("council", r"\b(?:council|all (?:my |the )?agents|everyone['’]?s view|"
                 r"ask (?:them|everyone)|executive meeting)\b"),

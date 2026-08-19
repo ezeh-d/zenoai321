@@ -437,6 +437,7 @@ AGENT_ROLES: dict[str, str] = {
     "aris": "Chief Research Officer",
     "tosin": "Chief Technology Officer",
     "stark": "Chief Security Officer",
+    "ava": "Offensive & Defensive Security Lead",
     "titan": "Chief Financial Officer",
     "kate": "Chief Education Officer",
     "ultron": "Chief Strategy Officer",

@@ -16,6 +16,7 @@ _IDENTITIES: dict[str, dict[str, str]] = {
     "aris": {"name": "ARIS", "color": "#3ddc7a", "icon": "research"},
     "tosin": {"name": "TOSIN", "color": "#a855f7", "icon": "code"},
     "stark": {"name": "STARK", "color": "#ef4444", "icon": "shield"},
+    "ava": {"name": "AVA", "color": "#e11d48", "icon": "target"},
     "zeal": {"name": "ZEAL", "color": "#f5c518", "icon": "creative"},
     "titan": {"name": "TITAN", "color": "#f97316", "icon": "business"},
     "apex": {"name": "APEX", "color": "#22d3ee", "icon": "gaming"},

@@ -1,0 +1,68 @@
+# ZENO Anywhere gateway on Fly.io.
+#
+# This deploys the GATEWAY only -- the authenticated cloud API and owner web
+# app. It never runs the desktop automation: the Windows machine dials OUT to
+# this gateway and pulls its own work, so nothing here can reach into the PC.
+#
+# SECRETS ARE NOT IN THIS FILE. It is committed to git. Every value here is
+# safe to be public. Real secrets go in with `fly secrets set` (see
+# scripts/deploy_fly.sh) and are injected as environment variables at runtime,
+# never written to the image or the repo.
+#
+# The app name is a placeholder. `fly launch` rewrites it to the name you pick.
+
+app = "zeno-anywhere"
+primary_region = "lhr"   # London -- closest Fly region to Nigeria with capacity
+
+[build]
+  dockerfile = "Dockerfile.anywhere"
+
+[env]
+  PORT = "8080"
+  # SQLite is authoritative and single-writer, so the gateway MUST run as one
+  # process. deployment.preflight() refuses to become ready otherwise, and a
+  # second worker would corrupt the database. Scale up by moving to Postgres,
+  # not by adding workers.
+  WEB_CONCURRENCY = "1"
+  REMOTE_ACCESS_ENABLED = "true"
+  # Every database lives on the persistent volume mounted below. Without this
+  # the owner credential and device tokens would vanish on every deploy.
+  ZENO_OWNER_AUTH_DB = "/var/lib/zeno/owner.sqlite"
+  ZENO_DEVICE_LINK_DB = "/var/lib/zeno/devices.sqlite"
+  ZENO_MEDIA_STORE_DB = "/var/lib/zeno/media.sqlite"
+  ZENO_WEB_PUSH_DB = "/var/lib/zeno/push.sqlite"
+
+# Persistent storage for the SQLite databases. A Fly volume survives deploys
+# and restarts; the container filesystem does not.
+[mounts]
+  source = "zeno_data"
+  destination = "/var/lib/zeno"
+
+[http_service]
+  internal_port = 8080
+  force_https = true          # the owner API sets Secure cookies; HTTP would drop them
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  # Never scale to zero. auto_stop is fine -- the machine wakes on the first
+  # request -- but min_machines_running = 1 keeps the desktop's heartbeat
+  # from waking a cold machine every 20 seconds.
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 150
+
+# The gateway is only "up" when it ANSWERS. /ready returns 503 until the owner
+# is provisioned and storage is configured, so Fly holds traffic off a machine
+# that booted but cannot serve.
+[[http_service.checks]]
+  interval = "20s"
+  timeout = "5s"
+  grace_period = "20s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"            # the image idles well under this; raise if voice is enabled
