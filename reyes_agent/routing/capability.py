@@ -112,7 +112,8 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                     "paid_work_record_delivery", "paid_work_owner_decision"),
     "builder": ("build_project", "website_project", "write_project_file",
                 "list_project_files", "website_restore_checkpoint"),
-    "creative": ("creator_project", "design_capabilities", "learning_mode",
+    "creative": ("creator_project", "design_capabilities", "create_animation",
+                 "animate_files", "generate_image", "learning_mode",
                  "mastery_mode", "foodie_mode"),
     "missions": ("create_mission", "list_missions", "simulate_mission",
                  "resume_workspace"),
@@ -168,6 +169,16 @@ _INTENT: tuple[tuple[str, str], ...] = (
      r"\b(?:read|reading) (?:this |the |my )?(?:chapter|page)\b|"
      r"\b(?:watch|reading|watching) list\b|"
      r"\brecommend[^.?!]{0,25}\b(?:to (?:watch|read)|series)\b"),
+
+    # Creative: making an animation, a reel, or drawing an image. "make a
+    # video" is included; a plain "draw" needs an object so "draw a diagram of
+    # the flow" (a coding ask) is not stolen -- it needs draw + art words.
+    ("creative",
+     r"\banimat(?:e|ion|ed|ing)\b|"
+     r"\breels?\b|"
+     r"\b(?:create|make|generate|produce) (?:me )?(?:an? |a short )?"
+     r"(?:animation|video|clip|reel|image|picture|artwork|drawing|illustration)\b|"
+     r"\bdraw (?:me )?(?:an? )?(?:image|picture|art|illustration|scene|character)\b"),
 
     # Social. Matches ZENO's OWN accounts and content operations. "post" alone
     # is far too broad (post a letter, blog post), so every alternative here
