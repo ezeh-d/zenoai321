@@ -302,6 +302,49 @@ def status() -> dict[str, Any]:
         "semantic_verifier": "structural + token overlap"
                              if _verify._scorer is None else "model",
         "owner_phrases": len(_memory.get_memory().all(limit=1000)),
+        # Speech was missing from this report even after the model was
+        # installed, so `zeno language status` and the web panel showed a
+        # language engine with no voice. Read from the STT manager rather
+        # than asserted, so an uninstalled model reports NOT_CONFIGURED.
+        "speech": _speech_status(),
         "note": "Understanding is best-effort and reports its own confidence. "
                 "No claim of universal coverage.",
+    }
+
+
+def _speech_status() -> dict[str, Any]:
+    """What the speech side actually has, asked rather than assumed."""
+    try:
+        from reyes_agent.voice.stt import manager
+
+        report = manager.status()
+    except Exception as exc:  # noqa: BLE001
+        return {"state": "UNAVAILABLE", "detail": f"{type(exc).__name__}: {exc}"[:160]}
+
+    # The manager reports {"primary": {...}, "fallback": {...}} -- the cloud
+    # backend and the local one. The first version of this function guessed
+    # {"backends": {"faster_whisper": ...}} and reported state UNKNOWN with an
+    # empty model while a working multilingual model sat right there.
+    primary = report.get("primary", {}) if isinstance(report, dict) else {}
+    fallback = report.get("fallback", {}) if isinstance(report, dict) else {}
+    local_model = str(fallback.get("model", ""))
+
+    # READY on either side means speech works. A cloud backend that is ready
+    # is not "no speech" just because no local model is installed.
+    states = {str(primary.get("state", "")), str(fallback.get("state", ""))}
+    if "READY" in states:
+        state = "READY"
+    elif "STANDBY" in states:
+        state = "STANDBY"
+    else:
+        state = str(primary.get("state") or fallback.get("state") or "NOT_CONFIGURED")
+
+    return {
+        "state": state,
+        "cloud": {"backend": primary.get("backend", ""), "state": primary.get("state", "")},
+        "local": {"model": local_model, "state": fallback.get("state", ""),
+                  "loaded": bool(fallback.get("loaded"))},
+        # ".en" models are English-only. Claiming multilingual speech on one
+        # would be exactly the overclaim this file is meant to avoid.
+        "multilingual_local": bool(local_model) and not local_model.endswith(".en"),
     }

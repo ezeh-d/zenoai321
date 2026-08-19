@@ -89,3 +89,9 @@ REYES (4)/
 web/zeno-config.js
 web/_headers
 web/app/
+
+# TLS-interception CAs exported from the host's own trust store by
+# tools/verify_docker.ps1. Machine-specific (this install's antivirus root),
+# so it is regenerated rather than committed.
+docker/certs/*.crt
+!docker/certs/.gitkeep

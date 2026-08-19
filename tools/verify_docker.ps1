@@ -19,6 +19,38 @@ Write-Host "   ok" -ForegroundColor Green
 Write-Host ($status.Trim())
 
 Write-Host "`n2. Docker Desktop" -ForegroundColor Cyan
+
+# Docker Desktop 4.87 leaves a dangling unix-socket reparse point behind on
+# shutdown, and on the NEXT start it cannot remove its own file:
+#
+#   initializing Secrets Engine: listening on unix://...engine.sock:
+#   remove ...engine.sock: The file cannot be accessed by the system.
+#
+# The socket is a symlink whose target no longer exists, so `del`, `rmdir` and
+# even `fsutil reparsepoint delete` all refuse it. Renaming the PARENT
+# directory works, because that never touches the broken entry -- and Docker
+# recreates the directory cleanly on start. Without this the engine fails to
+# start on roughly every second launch.
+$sock = "$env:LOCALAPPDATA\docker-secrets-engine\engine.sock"
+if (Test-Path $sock -ErrorAction SilentlyContinue) {
+    Write-Host "   clearing the stale secrets socket"
+    Get-Process 'Docker Desktop','com.docker.backend','com.docker.build' -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 5
+    $dir = Split-Path $sock -Parent
+    $aside = "$env:LOCALAPPDATA\docker-secrets-engine.stale-$(Get-Date -Format yyyyMMddHHmmss)"
+    cmd /c "move `"$dir`" `"$aside`"" | Out-Null
+    if (Test-Path $dir) {
+        Write-Host "   could not clear it; the engine will probably refuse to start" -ForegroundColor Yellow
+    } else {
+        Write-Host "   cleared (moved aside; Docker recreates it)"
+        # Old copies are dead weight, and each holds an undeletable entry.
+        Get-ChildItem "$env:LOCALAPPDATA" -Filter 'docker-secrets-engine.stale-*' -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name | Select-Object -SkipLast 3 |
+            ForEach-Object { cmd /c "rmdir /s /q `"$($_.FullName)`"" 2>&1 | Out-Null }
+    }
+}
+
 if (-not (Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue)) {
     Write-Host "   not running; starting it"
     Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe" -ErrorAction SilentlyContinue

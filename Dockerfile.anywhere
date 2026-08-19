@@ -6,6 +6,34 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8080
 
 WORKDIR /srv/zeno
+
+# Extra trusted CAs, for a machine behind TLS interception.
+#
+# This build originally died on:
+#   SSL: CERTIFICATE_VERIFY_FAILED - unable to get local issuer certificate
+# because the host runs Avast Web/Mail Shield, which re-signs every HTTPS
+# connection with its own root. The host trusts that root; a fresh container
+# does not.
+#
+# The fix is to TRUST the root, not to bypass verification. `--trusted-host
+# pypi.org` would also have made the build pass, by turning off the check that
+# tells you a package came from PyPI -- on a machine where something is
+# already sitting in the middle of the connection, that is the wrong trade.
+#
+# docker/certs/ is populated by tools/verify_docker.ps1 from the host's own
+# trust store and is gitignored, because the certificate is specific to this
+# machine's antivirus install. On a machine without interception the directory
+# holds only .gitkeep and this step does nothing.
+COPY docker/certs/ /usr/local/share/ca-certificates/
+RUN if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
+        apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+        && update-ca-certificates \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+# requests/pip bundle their own CA store and ignore the system one.
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
 COPY requirements-anywhere.txt ./
 RUN pip install --no-cache-dir -r requirements-anywhere.txt \
     && useradd --create-home --uid 10001 zeno \

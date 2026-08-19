@@ -295,13 +295,8 @@ reported a lost negation as preserved. *"ne supprime pas le fichier"* ->
 
 - **Accent-specific tuning.** Whisper handles accents as well as Whisper does;
   nothing here improves on it, and no Nigerian-accent evaluation was run.
-- **Streaming STT is not wired to `understand_audio`.** The partial/final
-  distinction and the language stabiliser exist and are tested, but the
-  streaming transcriber still calls the old path.
 - **Explicit output-language responses.** `translate_text` works; no command
   surfaces it, so "tell him in French" is not yet something ZENO does.
-- **No language panel in the web UI.** The five routes exist and return real
-  data; nothing renders them.
 - **Tone and emoji sentiment** (§39, §71).
 - **Dialect identification** (§10) — reported as language + confidence only.
 

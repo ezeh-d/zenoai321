@@ -396,3 +396,64 @@ def test_the_runtime_keeps_the_owners_words_when_confidence_is_low():
     """A low-confidence rewrite is worse than the original: the brain can ask
     about an odd sentence, it cannot recover a wrongly rewritten meaning."""
     assert "heard.confidence >= 0.5" in _runtime_source()
+
+
+# --- status and the web panel -------------------------------------------
+def test_status_reports_speech_state():
+    """The report showed a language engine with no voice at all.
+
+    `status()` omitted speech entirely, so `zeno language status` and the web
+    panel could not tell an installed multilingual model from none.
+    """
+    from reyes_agent.language import status
+
+    speech_state = status()["speech"]
+    assert speech_state["state"] in {"READY", "STANDBY", "NOT_CONFIGURED",
+                                     "UNAVAILABLE", "UNKNOWN"}
+    assert "local" in speech_state and "cloud" in speech_state
+
+
+def test_status_reads_the_real_manager_shape():
+    """The first version guessed {"backends": {"faster_whisper": ...}}.
+
+    The manager actually reports {"primary": ..., "fallback": ...}, so it
+    reported UNKNOWN with an empty model while a working multilingual model
+    was installed. Guarding the shape, not the values.
+    """
+    from reyes_agent.voice.stt import manager
+
+    report = manager.status()
+    assert "primary" in report and "fallback" in report, (
+        "the STT manager shape changed; language status reads primary/fallback")
+
+
+def test_an_english_only_model_is_not_called_multilingual():
+    """`base.en` transcribes English only. Reporting it as multilingual would
+    be exactly the overclaim the brief forbids."""
+    from reyes_agent.language.engine import _speech_status
+
+    state = _speech_status()
+    model = state["local"]["model"]
+    if model.endswith(".en"):
+        assert state["multilingual_local"] is False
+    elif model:
+        assert state["multilingual_local"] is True
+
+
+def test_the_web_app_renders_the_language_panel():
+    """Five language routes existed and nothing displayed them."""
+    import pathlib
+
+    page = pathlib.Path("reyes_agent/static/app.html").read_text(encoding="utf-8")
+    assert "Language intelligence" in page
+    # Wired to the REAL routes, not placeholder markup.
+    assert "/api/language/status" in page
+    assert "/api/language/understand" in page
+
+
+def test_the_language_panel_shows_the_original_beside_the_english():
+    """If ZENO misreads a sentence, the owner can only see it by comparing."""
+    import pathlib
+
+    page = pathlib.Path("reyes_agent/static/app.html").read_text(encoding="utf-8")
+    assert "You said" in page and "ZENO understood" in page

@@ -957,7 +957,61 @@ async function vSettings(m){
     </div>
     <div class="card"><h3>Trusted browsers</h3><div id="browserlist"><div class="muted">Loading…</div></div>
     </div>
+    <div class="card"><h3>Language intelligence</h3>
+      <div id="langstat"><div class="muted">Loading…</div></div>
+      <label for="langtry">Try a phrase</label>
+      <input id="langtry" type="text" placeholder="Abeg open Chrome make I check am" dir="auto">
+      <button class="btn ghost" id="langgo">Show what ZENO understands</button>
+      <div id="langout" style="margin-top:10px"></div>
+    </div>
     <div class="card"><h3>Recent security events</h3><div id="aud"><div class="muted">Loading…</div></div></div>`;
+
+  /* Language panel. Every value here is read from /api/language/status --
+     nothing is asserted by the page. A model that is not installed shows
+     NOT_CONFIGURED rather than a reassuring blank. */
+  (async () => {
+    try {
+      const s = await call("/api/language/status");
+      const e = s.engine || {}, sp = s.speech || {};
+      const engines = (e.translation_engines || [])
+        .map(x => `${esc(x.engine)} <span class="tag ${x.state === "healthy" ? "ok" : ""}">${esc(x.state)}</span>`)
+        .join(" ") || `<span class="na">none</span>`;
+      $("langstat").innerHTML = `
+        <div class="row"><span class="k">Engine</span><span class="v">
+          <span class="tag ${e.enabled ? "ok" : "bad"}">${e.enabled ? "on" : "off"}</span></span></div>
+        <div class="row"><span class="k">Replies in</span><span class="v">${esc(e.default_response_language || "en")}</span></div>
+        <div class="row"><span class="k">Privacy</span><span class="v">${esc(e.privacy || "")}</span></div>
+        <div class="row"><span class="k">Translation</span><span class="v">${engines}</span></div>
+        <div class="row"><span class="k">Speech</span><span class="v">
+          <span class="tag ${sp.state === "READY" ? "ok" : sp.state === "STANDBY" ? "warn" : "bad"}">${esc(sp.state || "unknown")}</span></span></div>
+        <div class="row"><span class="k">Local model</span><span class="v">${
+          sp.local && sp.local.model
+            ? esc(sp.local.model) + (sp.multilingual_local ? "" : " <span class='tag warn'>English only</span>")
+            : `<span class="na">not installed</span>`}</span></div>
+        <div class="row"><span class="k">Owner phrases</span><span class="v">${e.owner_phrases ?? 0}</span></div>`;
+    } catch (err) { $("langstat").innerHTML = `<div class="na">${esc(err.message)}</div>`; }
+  })();
+
+  $("langgo").onclick = async () => {
+    const text = $("langtry").value.trim();
+    if (!text) return;
+    $("langout").innerHTML = `<div class="muted">Understanding…</div>`;
+    try {
+      const u = await call("/api/language/understand", {method: "POST", body: {text}});
+      /* Show the original beside the English. If ZENO misread the sentence,
+         the owner can only see that by comparing the two. */
+      $("langout").innerHTML = `
+        <div class="row"><span class="k">You said</span><span class="v" dir="auto">${esc(u.raw_text)}</span></div>
+        <div class="row"><span class="k">ZENO understood</span><span class="v">${esc(u.english_meaning)}</span></div>
+        <div class="row"><span class="k">Language</span><span class="v">${esc((u.detected_languages || []).join(", ") || u.language)}${
+          u.code_switched ? ` <span class="tag">mixed</span>` : ""}</span></div>
+        <div class="row"><span class="k">Confidence</span><span class="v">
+          <span class="tag ${u.confidence >= 0.75 ? "ok" : u.confidence >= 0.35 ? "warn" : "bad"}">${Math.round(u.confidence * 100)}%</span></span></div>
+        ${u.issues && u.issues.length ? `<div class="disabled-note">${esc(u.issues.join("; "))}</div>` : ""}
+        ${u.suspicious ? `<div class="disabled-note">Flagged as suspicious: ${esc((u.injection_markers || []).join(", "))}</div>` : ""}`;
+    } catch (err) { $("langout").innerHTML = `<div class="na">${esc(err.message)}</div>`; }
+  };
+  $("langtry").addEventListener("keydown", e => { if (e.key === "Enter") $("langgo").click(); });
 
   $("addpasskey").disabled=!window.PublicKeyCredential||!isSecureContext;
   $("addpasskey").onclick=async()=>{
