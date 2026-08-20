@@ -189,10 +189,16 @@ def test_legacy_cli_delegates_to_the_one_startup_task(monkeypatch) -> None:
     from tools import zeno_anywhere_startup
 
     monkeypatch.setattr(zeno_anywhere_startup, "status", lambda: (True, "installed"))
-    monkeypatch.setattr(
-        zeno_anywhere_startup, "start", lambda: (True, "scheduled start"))
+    calls: list[bool] = []
+    running = iter((False, False, True))
+    monkeypatch.setattr(zeno_anywhere_startup, "start",
+                        lambda: (calls.append(True) is None, "scheduled start"))
+    monkeypatch.setattr(anywhere, "supervisor_running", lambda: next(running))
+    monkeypatch.setattr(anywhere.time, "sleep", lambda _seconds: None)
     assert anywhere.autostart_installed() is True
-    assert anywhere._start_registered_task() == (True, "scheduled start")
+    assert anywhere._start_registered_task() == (
+        True, "ZENO Anywhere started through Task Scheduler.")
+    assert calls == [True]
 
 
 def test_netlify_rendezvous_has_dependency_auth_and_expiry_contracts() -> None:

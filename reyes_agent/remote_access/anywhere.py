@@ -692,7 +692,26 @@ def _start_registered_task() -> tuple[bool, str]:
 
     if not autostart_installed():
         return start_detached()
-    return zeno_anywhere_startup.start()
+    if supervisor_running():
+        return False, "ZENO Anywhere is already running."
+
+    # Task Scheduler can briefly keep the previous invocation in RUNNING after
+    # Supervisor.run() has exited.  /Run returns success in that window but
+    # IgnoreNew means it starts nothing.  Retry until a NEW supervisor PID is
+    # real instead of trusting the scheduler's request receipt as completion.
+    deadline = _now() + 75.0
+    last_detail = "Task Scheduler did not confirm a start."
+    while _now() < deadline:
+        ok, detail = zeno_anywhere_startup.start()
+        last_detail = detail
+        if not ok:
+            time.sleep(2.0)
+            continue
+        for _ in range(10):
+            if supervisor_running():
+                return True, "ZENO Anywhere started through Task Scheduler."
+            time.sleep(0.5)
+    return False, f"start requested but no supervisor PID appeared: {last_detail}"
 
 
 def _main(argv: list[str]) -> int:
