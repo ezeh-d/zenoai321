@@ -34,6 +34,7 @@ import html
 import re
 import time
 import urllib.parse
+from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -95,7 +96,7 @@ def to_text(markup: str) -> tuple[str, str, list[str]]:
 
 
 def fetch(url: str, budget: limits.Budget, *, allow: tuple[str, ...] = (),
-          deny: tuple[str, ...] = ()) -> Extract:
+          deny: tuple[str, ...] = (), session: Any = None) -> Extract:
     """One page, bounded, robots-respecting, and screened."""
     permitted, why = limits.may_fetch(url, budget, allow=allow, deny=deny)
     if not permitted:
@@ -110,23 +111,37 @@ def fetch(url: str, budget: limits.Budget, *, allow: tuple[str, ...] = (),
     limits.wait_for_host(url)
     extract = Extract(url=url)
     try:
-        response = requests.get(
-            url, timeout=limits.PER_REQUEST_TIMEOUT_S, stream=True,
-            headers={"User-Agent": limits.USER_AGENT, "Accept": "text/html,text/plain"})
-        extract.status = response.status_code
-        kind = (response.headers.get("content-type") or "").lower()
-        if "html" not in kind and "text" not in kind:
-            extract.error = f"not a text document ({kind or 'unknown type'})"
-            return extract
+        request = session.get if session is not None else requests.get
+        # Redirects are deliberately not followed. A safe public URL can
+        # redirect to a loopback/cloud-metadata target after our validation;
+        # the caller must provide the final URL so it is validated separately.
+        with closing(request(
+                url, timeout=limits.PER_REQUEST_TIMEOUT_S, stream=True,
+                allow_redirects=False,
+                headers={"User-Agent": limits.USER_AGENT,
+                         "Accept": "text/html,text/plain"})) as response:
+            extract.status = response.status_code
+            if 300 <= extract.status < 400:
+                extract.error = "redirect refused; provide the final public URL"
+                return extract
+            kind = (response.headers.get("content-type") or "").lower()
+            if "html" not in kind and "text" not in kind:
+                extract.error = f"not a text document ({kind or 'unknown type'})"
+                return extract
 
-        # Read with a hard cap so a huge or endless response cannot exhaust memory.
-        chunks, total = [], 0
-        for chunk in response.iter_content(65536):
-            chunks.append(chunk)
-            total += len(chunk)
-            if total >= limits.MAX_BYTES_PER_PAGE:
-                break
-        markup = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+            # Read with an exact hard cap. The previous loop appended the
+            # whole last chunk and could exceed the documented limit by 64 KiB.
+            chunks, total = [], 0
+            for chunk in response.iter_content(65536):
+                remaining = limits.MAX_BYTES_PER_PAGE - total
+                if remaining <= 0:
+                    break
+                piece = chunk[:remaining]
+                chunks.append(piece)
+                total += len(piece)
+                if len(piece) < len(chunk) or total >= limits.MAX_BYTES_PER_PAGE:
+                    break
+            markup = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001
         extract.error = f"{type(exc).__name__}: {exc}"
         return extract
@@ -230,11 +245,21 @@ def research(question: str, urls: list[str], *, max_pages: int = 0,
     started = time.time()
 
     extracts = []
-    for url in urls:
-        if budget.exhausted:
-            budget.note_skip(url, "budget reached before this page")
-            continue
-        extracts.append(fetch(url, budget, allow=allow, deny=deny))
+    try:
+        import requests
+
+        session = requests.Session()
+    except Exception:  # fetch() will return the precise missing-client error
+        session = None
+    try:
+        for url in urls:
+            if budget.exhausted:
+                budget.note_skip(url, "budget reached before this page")
+                continue
+            extracts.append(fetch(url, budget, allow=allow, deny=deny, session=session))
+    finally:
+        if session is not None:
+            session.close()
 
     kept, duplicates = dedupe(extracts)
     ranked = rank(kept, question)

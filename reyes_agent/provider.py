@@ -20,6 +20,7 @@ translates the response back into a plain `AgentTurn`.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -95,87 +96,102 @@ _gemini_client: Any = None
 _ollama_client: Any = None
 _anthropic_sdk: Any = None
 _openai_sdk: Any = None
+_client_init_lock = threading.RLock()
 
 
 def _anthropic_module() -> Any:
     global _anthropic_sdk
     if _anthropic_sdk is None:
-        import anthropic
+        with _client_init_lock:
+            if _anthropic_sdk is None:
+                import anthropic
 
-        _anthropic_sdk = anthropic
+                _anthropic_sdk = anthropic
     return _anthropic_sdk
 
 
 def _openai_module() -> Any:
     global _openai_sdk
     if _openai_sdk is None:
-        import openai
+        with _client_init_lock:
+            if _openai_sdk is None:
+                import openai
 
-        _openai_sdk = openai
+                _openai_sdk = openai
     return _openai_sdk
 
 
 def _get_anthropic_client() -> Any:
     global _anthropic_client
     if _anthropic_client is None:
-        if not config.ANTHROPIC_API_KEY:
-            raise ProviderError(
-                "No ANTHROPIC_API_KEY set. Add one to .env, then restart."
-            )
-        _anthropic_client = _anthropic_module().Anthropic(
-            api_key=config.ANTHROPIC_API_KEY,
-            timeout=float(config.AI_REQUEST_TIMEOUT_S),
-            max_retries=0,
-        )
+        with _client_init_lock:
+            if _anthropic_client is None:
+                if not config.ANTHROPIC_API_KEY:
+                    raise ProviderError(
+                        "No ANTHROPIC_API_KEY set. Add one to .env, then restart."
+                    )
+                _anthropic_client = _anthropic_module().Anthropic(
+                    api_key=config.ANTHROPIC_API_KEY,
+                    timeout=float(config.AI_REQUEST_TIMEOUT_S),
+                    max_retries=0,
+                )
     return _anthropic_client
 
 
 def _get_openai_client() -> Any:
     global _openai_client
     if _openai_client is None:
-        if not config.OPENAI_API_KEY:
-            raise ProviderError("No OPENAI_API_KEY set. Add one to .env, then restart.")
-        kwargs = {"api_key": config.OPENAI_API_KEY,
-                  "timeout": float(config.AI_REQUEST_TIMEOUT_S), "max_retries": 0}
-        if config.OPENAI_BASE_URL:
-            kwargs["base_url"] = config.OPENAI_BASE_URL
-        _openai_client = _openai_module().OpenAI(**kwargs)
+        with _client_init_lock:
+            if _openai_client is None:
+                if not config.OPENAI_API_KEY:
+                    raise ProviderError("No OPENAI_API_KEY set. Add one to .env, then restart.")
+                kwargs = {"api_key": config.OPENAI_API_KEY,
+                          "timeout": float(config.AI_REQUEST_TIMEOUT_S), "max_retries": 0}
+                if config.OPENAI_BASE_URL:
+                    kwargs["base_url"] = config.OPENAI_BASE_URL
+                _openai_client = _openai_module().OpenAI(**kwargs)
     return _openai_client
 
 
 def _get_xai_client() -> Any:
     global _xai_client
     if _xai_client is None:
-        if not config.XAI_API_KEY:
-            raise ProviderError("No XAI_API_KEY set. Add one to .env, then restart.")
-        _xai_client = _openai_module().OpenAI(
-            api_key=config.XAI_API_KEY, base_url="https://api.x.ai/v1",
-            timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
-        )
+        with _client_init_lock:
+            if _xai_client is None:
+                if not config.XAI_API_KEY:
+                    raise ProviderError("No XAI_API_KEY set. Add one to .env, then restart.")
+                _xai_client = _openai_module().OpenAI(
+                    api_key=config.XAI_API_KEY, base_url="https://api.x.ai/v1",
+                    timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+                )
     return _xai_client
 
 
 def _get_gemini_client() -> Any:
     global _gemini_client
     if _gemini_client is None:
-        if not config.GEMINI_API_KEY:
-            raise ProviderError("No GEMINI_API_KEY set. Add one to .env, then restart.")
-        _gemini_client = _openai_module().OpenAI(
-            api_key=config.GEMINI_API_KEY,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
-        )
+        with _client_init_lock:
+            if _gemini_client is None:
+                if not config.GEMINI_API_KEY:
+                    raise ProviderError("No GEMINI_API_KEY set. Add one to .env, then restart.")
+                _gemini_client = _openai_module().OpenAI(
+                    api_key=config.GEMINI_API_KEY,
+                    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                    timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+                )
     return _gemini_client
 
 
 def _get_ollama_client() -> Any:
     global _ollama_client
     if _ollama_client is None:
-        # Ollama's OpenAI-compatible endpoint ignores the key -- any string works.
-        _ollama_client = _openai_module().OpenAI(
-            api_key="ollama", base_url=config.OLLAMA_BASE_URL,
-            timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
-        )
+        with _client_init_lock:
+            if _ollama_client is None:
+                # Ollama's OpenAI-compatible endpoint ignores the key -- any string works.
+                _ollama_client = _openai_module().OpenAI(
+                    api_key="ollama", base_url=config.OLLAMA_BASE_URL,
+                    timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+                )
     return _ollama_client
 
 

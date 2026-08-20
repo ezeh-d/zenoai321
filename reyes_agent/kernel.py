@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -192,6 +193,14 @@ class ZenoKernel:
         try:
             from reyes_agent import agent_runtime
             agent_runtime.shutdown()
+        except Exception:
+            pass
+        try:
+            # Council is lazy. Do not import it merely to shut down, but when
+            # it was used its shared provider pool must not outlive ZENO.
+            council = sys.modules.get("reyes_agent.council")
+            if council is not None:
+                council.shutdown_executor(wait=True)
         except Exception:
             pass
         try:

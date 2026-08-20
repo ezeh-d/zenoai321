@@ -248,8 +248,9 @@ ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_flash_v2_5").strip
 # Piper: fully offline neural voice. TTS_PROVIDER=piper uses it; it falls back
 # to SAPI if the model file is missing, so setting the provider can never make
 # ZENO mute. The model is a Piper .onnx voice (see models/piper/).
-PIPER_MODEL = os.environ.get(
-    "PIPER_MODEL", str(PROJECT_ROOT / "models" / "piper" / "en_US-amy-medium.onnx")).strip()
+PIPER_MODEL = (os.environ.get("ZENO_PIPER_MODEL", "").strip()
+               or os.environ.get("PIPER_MODEL", "").strip()
+               or str(PROJECT_ROOT / "models" / "piper" / "en_US-amy-medium.onnx"))
 
 # The push-to-talk hold key (see the `keyboard` package for valid names).
 PTT_KEY = os.environ.get("PTT_KEY", "space").strip()

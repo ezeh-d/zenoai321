@@ -52,6 +52,34 @@ _DB_PATH = config.VAULT_PATH / "07-System" / "heartbeat" / "state.db"
 _CITATION_RE = re.compile(r"\[([A-Z0-9][A-Z0-9\-_.]{2,40})\]")
 _MAX_ADVISORS = 4          # keeps a meeting to a sane latency/cost
 _ADVISOR_TOOL_ROUNDS = 2
+_executor: ThreadPoolExecutor | None = None
+_executor_lock = threading.Lock()
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    """One lazy, reusable, process-bounded council pool.
+
+    A pool per meeting multiplied provider threads under concurrent requests
+    (ten four-advisor meetings produced 37 worker threads in the baseline).
+    One shared pool preserves independent concurrent calls while enforcing the
+    existing four-advisor resource budget across the whole process.
+    """
+    global _executor
+    if _executor is None:
+        with _executor_lock:
+            if _executor is None:
+                _executor = ThreadPoolExecutor(
+                    max_workers=_MAX_ADVISORS, thread_name_prefix="zeno-council")
+    return _executor
+
+
+def shutdown_executor(*, wait: bool = True) -> None:
+    """Release council threads during kernel shutdown; safe and restartable."""
+    global _executor
+    with _executor_lock:
+        executor, _executor = _executor, None
+    if executor is not None:
+        executor.shutdown(wait=wait, cancel_futures=True)
 
 
 @dataclass
@@ -217,8 +245,8 @@ def hold_meeting(question: str, context: str = "") -> dict:
 
     # Independent AND concurrent. Isolation is preserved because each
     # future gets its own context; parallelism only affects wall-clock.
-    with ThreadPoolExecutor(max_workers=max(1, len(chosen))) as pool:
-        opinions = list(pool.map(lambda d: _run_advisor(d, question, context), chosen))
+    opinions = list(_get_executor().map(
+        lambda d: _run_advisor(d, question, context), chosen))
 
     skeptic = _run_skeptic(question, opinions)
     analysis = _analyze(opinions)
