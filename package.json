@@ -7,6 +7,9 @@
     "build": "node scripts/build-config.js",
     "test": "node scripts/test-web-build.js"
   },
+  "dependencies": {
+    "@netlify/blobs": "11.0.1"
+  },
   "engines": {
     "node": ">=20"
   }

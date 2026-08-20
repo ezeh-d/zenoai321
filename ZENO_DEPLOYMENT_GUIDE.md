@@ -75,6 +75,13 @@ Then set `ZENO_PUBLIC_API_URL` in Netlify's environment UI so their build
 matches. Nothing secret goes there: everything in `zeno-config.js` reaches the
 browser and is public by definition.
 
+For the account-less quick-tunnel fallback, the stable launcher now discovers
+the currently verified tunnel through `/api/endpoint`; it no longer needs a
+new static deploy for every tunnel URL. That function stores only the URL and
+timestamp. Writes require `ZENO_ANYWHERE_SECRET`, which must be configured in
+Netlify's environment and in the owner's local Windows secret store. The
+launcher rejects stale records and non-`trycloudflare.com` addresses.
+
 ### After the site exists
 
 ```
@@ -95,10 +102,22 @@ cloudflared tunnel --url http://127.0.0.1:8090
 dials Cloudflare and holds the connection. That is the same property the
 desktop device connector relies on.
 
-**A quick-tunnel URL changes every restart.** Fine for testing; for anything
-lasting, a named tunnel bound to a domain is the answer. Until then the
-Netlify build has to be re-run whenever the URL changes, because the CSP
-pins it.
+**A quick-tunnel URL changes every restart.** The rendezvous/launcher follows
+that change automatically after it is deployed, but this is still a testing
+fallback: Cloudflare provides no uptime guarantee, browser-origin state changes
+with the URL, and passkeys require a stable origin. A named tunnel or hosted
+gateway is the production answer.
+
+Install the independent Windows supervisor with:
+
+```powershell
+.\.venv\Scripts\python.exe tools\zeno_anywhere_startup.py install
+```
+
+It starts at owner logon, runs hidden under Task Scheduler, prevents duplicate
+instances, restarts failed children with bounded backoff, and reports `ONLINE`
+only after a real public `/app` request succeeds. No IDE or terminal needs to
+remain open.
 
 ## `OWNER ACTION REQUIRED` — Docker
 

@@ -104,3 +104,6 @@ hackingtool-master/
 models/piper/*.onnx
 models/piper/*.onnx.json
 models/piper/*.wav
+
+# Local Netlify folder
+.netlify

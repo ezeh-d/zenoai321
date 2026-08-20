@@ -1,14 +1,15 @@
 # ZENO public web surface.
 #
-# This deploys a STATIC site and nothing else. There is deliberately no
-# functions directory and no proxy to the desktop machine: the brief is
-# explicit that no public endpoint may control the owner's computer, and the
-# simplest way to guarantee that is to have no server-side code here at all.
+# This deploys a static site plus ONE narrow function: the ZENO Anywhere
+# rendezvous (/api/endpoint). That function stores a single string -- the
+# current Cloudflare tunnel URL -- and can neither reach nor control the
+# owner's computer. Writes need a shared secret; the URL must match the
+# tunnel shape; reads are public (the login behind the URL is the gate). That
+# is the whole server-side surface, and it exists only so the owner never has
+# to remember a changing tunnel address.
 #
-# No secrets belong in this file. It is committed to git. Anything the page
-# needs at runtime is public by definition, because it ends up in browser
-# JavaScript where anyone can read it. Private values go in Netlify's
-# environment-variable UI and are used only at BUILD time.
+# No secrets belong in this file. It is committed to git. ZENO_ANYWHERE_SECRET
+# lives in Netlify's environment-variable UI, never here.
 
 [build]
   publish = "web"
@@ -16,6 +17,16 @@
 
 [build.environment]
   NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+
+# The rendezvous, routed explicitly BEFORE the SPA catch-all so the greedy
+# /* rewrite below cannot swallow it.
+[[redirects]]
+  from = "/api/endpoint"
+  to = "/.netlify/functions/endpoint"
+  status = 200
 
 # Direct navigation to a nested route must serve the app rather than 404.
 [[redirects]]

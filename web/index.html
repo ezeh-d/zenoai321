@@ -121,6 +121,40 @@
 
   button.addEventListener("click", connect);
   input.addEventListener("keydown", function (e) { if (e.key === "Enter") connect(); });
+
+  // AUTO-DISCOVERY. The owner's PC publishes its current tunnel URL to the
+  // rendezvous (/api/endpoint, same origin). Fetch it so the owner never has
+  // to paste anything -- "handle a changing tunnel URL automatically".
+  //
+  // Only a genuine trycloudflare.com URL is accepted, so even if the
+  // rendezvous were tampered with it could not send the owner to a phishing
+  // page. And auto-redirect happens at most once per tab (a sessionStorage
+  // guard) so a momentarily-down tunnel cannot cause a reload loop.
+  var SHAPE = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
+  (function discover() {
+    fetch("/api/endpoint", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        var url = data && String(data.url || "").trim().replace(/\/+$/, "");
+        var updated = Number(data && data.updated || 0);
+        var fresh = updated > 0 && Date.now() - updated >= 0 &&
+                    Date.now() - updated <= 120000;
+        if (!fresh || data.stale || !url || !SHAPE.test(url)) return; // manual fallback
+        input.value = url;
+        try { localStorage.setItem(KEY, url); } catch (e) {}
+        var tried = false;
+        try { tried = sessionStorage.getItem("zeno_autotried") === "1"; } catch (e) {}
+        if (tried) {
+          msg.textContent = "✓ ZENO is online — tap Open ZENO.";
+          button.focus();
+        } else {
+          try { sessionStorage.setItem("zeno_autotried", "1"); } catch (e) {}
+          msg.textContent = "✓ ZENO is online. Opening…";
+          window.location.href = url + "/app";
+        }
+      })
+      .catch(function () { /* no rendezvous configured yet; manual paste works */ });
+  })();
 })();
 </script>
 

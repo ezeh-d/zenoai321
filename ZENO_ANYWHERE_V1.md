@@ -115,6 +115,38 @@ build copies the audited FastAPI owner shell into `web/app`, emits only the
 public API origin, validates HTTPS, generates exact `connect-src` headers, and
 contains no API key or connector token.
 
+### Terminal-independent Windows fallback
+
+When no permanent gateway host or named Cloudflare tunnel is available, the
+Windows supervisor can keep the local PWA plus an account-less quick tunnel
+running after every owner logon. It is a fallback, not a production gateway:
+
+```powershell
+.\.venv\Scripts\python.exe tools\zeno_anywhere_startup.py install
+.\.venv\Scripts\python.exe tools\zeno_anywhere_startup.py status
+.\.venv\Scripts\python.exe -m reyes_agent.remote_access.anywhere status
+```
+
+The hidden scheduled task owns one supervisor instance and restarts it on
+failure. The supervisor owns bounded server/tunnel children, verifies the
+public `/app` path before reporting `ONLINE`, and publishes the verified URL
+every 30 seconds. The Netlify rendezvous expires it after 90 seconds, so a
+dead PC cannot leave a stale launcher target indefinitely. The launcher also
+checks freshness and accepts only `https://*.trycloudflare.com` addresses.
+
+Configure the same long random `ZENO_ANYWHERE_SECRET` in the owner's Windows
+secret store/environment and in Netlify's environment UI. Set
+`ZENO_ANYWHERE_ENTRY=https://zenoai321.netlify.app` on Windows. The secret is
+used only to authenticate rendezvous writes and is never returned to the
+browser or written into Task Scheduler.
+
+This mode needs no Claude, Codex, VS Code, CMD, or PowerShell process after
+installation. It still requires the owner to be logged into Windows, the PC
+to be awake, outbound Cloudflare connectivity, and a deployed Netlify build.
+Account-less Quick Tunnels have no uptime guarantee and their changing origin
+is unsuitable for durable passkeys/cookies. A stable cloud gateway or named
+tunnel remains the production architecture.
+
 ## Container deployment
 
 `Dockerfile.anywhere` contains only the cloud gateway dependencies and runs as
@@ -166,3 +198,6 @@ distributed rate limiting and shared pub/sub.
 - A real production hostname, TLS, Render/cloud account, physical phone PWA
   install, microphone permission and passkey ceremony require the owner's
   actual domain/device/hosting credentials and cannot be simulated by tests.
+- The scheduled quick-tunnel fallback is self-healing but not permanently
+  address-stable. Netlify deployment and its environment secret require an
+  authenticated owner Netlify session; source code cannot supply that access.

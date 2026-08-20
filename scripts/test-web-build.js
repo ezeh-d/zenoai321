@@ -39,4 +39,14 @@ if (!worker.includes('addEventListener("push"') ||
     !worker.includes('addEventListener("notificationclick"')) {
   throw new Error("service worker is missing native push handlers");
 }
+const launcher = fs.readFileSync(path.join(root, "web", "index.html"), "utf8");
+for (const contract of ["/api/endpoint", "data.stale", "Date.now() - updated <= 120000",
+                        "trycloudflare\\.com"]) {
+  if (!launcher.includes(contract)) throw new Error("missing rendezvous safety contract: " + contract);
+}
+const endpoint = fs.readFileSync(
+  path.join(root, "netlify", "functions", "endpoint.mjs"), "utf8");
+for (const contract of ["timingSafeEqual", "MAX_AGE_MS", 'req.method === "DELETE"']) {
+  if (!endpoint.includes(contract)) throw new Error("missing endpoint safety contract: " + contract);
+}
 console.log("ZENO Anywhere web build checks passed");
