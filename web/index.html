@@ -56,8 +56,73 @@
   <p class="tag">A Windows AI operating assistant. It hears, sees, remembers, plans,
      acts and verifies — on your own machine.</p>
   <div id="banner"><span class="dot" id="dot"></span><span id="banner-text">Checking whether ZENO is reachable…</span></div>
-  <p><a href="/app/">Open the secure ZENO Anywhere app</a></p>
 </header>
+
+<!-- CONNECT LAUNCHER
+     ZENO runs on the owner's PC and is reached through a Cloudflare tunnel.
+     A FREE tunnel (no domain) hands out a fresh https://…trycloudflare.com
+     address each time it starts. This page remembers the current one and
+     bounces you to <tunnel>/app, where the app and the API share an origin --
+     so the login cookies work and there is no cross-origin CORS to fight.
+     When the tunnel restarts and prints a new URL, paste it once here. -->
+<section class="wrap" style="margin-top:8px">
+  <div class="card" style="max-width:38rem;margin:0 auto;padding:20px">
+    <div class="name" style="font-size:.76rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)">Connect to your ZENO</div>
+    <p class="small muted" style="margin:8px 0 12px">
+      On your PC, run <code>python -m reyes_agent.remote_access.tunnel</code>.
+      Paste the <code>https://…trycloudflare.com</code> address it prints:
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="zeno-url" type="url" inputmode="url" placeholder="https://something.trycloudflare.com"
+             style="flex:1;min-width:220px;padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit">
+      <button id="zeno-go"
+              style="padding:11px 18px;border-radius:10px;border:0;background:var(--accent);color:#04121f;font-weight:650;cursor:pointer">Open ZENO</button>
+    </div>
+    <div id="zeno-connect-msg" class="small muted" style="margin-top:10px;min-height:1.2em"></div>
+  </div>
+</section>
+
+<script>
+(function () {
+  "use strict";
+  var KEY = "zeno_tunnel_url";
+  var input = document.getElementById("zeno-url");
+  var button = document.getElementById("zeno-go");
+  var msg = document.getElementById("zeno-connect-msg");
+
+  // Pre-fill with the last URL used, or a build-time one if configured.
+  var saved = "";
+  try { saved = localStorage.getItem(KEY) || ""; } catch (e) {}
+  // build-config.js writes apiBaseUrl; app.html historically read apiBase.
+  // Accept either, so a build-time ZENO_PUBLIC_API_URL still pre-fills.
+  var cfg = window.ZENO_CONFIG || {};
+  var built = cfg.apiBaseUrl || cfg.apiBase || "";
+  input.value = saved || built || "";
+
+  function clean(url) {
+    url = (url || "").trim().replace(/\/+$/, "");
+    if (url && !/^https?:\/\//i.test(url)) url = "https://" + url;
+    return url;
+  }
+
+  function connect() {
+    var url = clean(input.value);
+    if (!url) { msg.textContent = "Paste the tunnel URL first."; return; }
+    // A https URL is required off localhost: the app uses a secure cookie
+    // that a browser will not send over plain http.
+    if (!/^https:\/\//i.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(url)) {
+      msg.textContent = "That must be an https:// address."; return;
+    }
+    try { localStorage.setItem(KEY, url); } catch (e) {}
+    msg.textContent = "Opening " + url + "/app …";
+    // Same-origin with the API once we land there -- cookies and CORS just work.
+    window.location.href = url + "/app";
+  }
+
+  button.addEventListener("click", connect);
+  input.addEventListener("keydown", function (e) { if (e.key === "Enter") connect(); });
+})();
+</script>
 
 <h2>System</h2>
 <div class="grid" id="systems">
