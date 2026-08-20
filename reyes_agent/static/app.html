@@ -46,17 +46,20 @@ header{
 .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
 .dot.off{background:var(--bad)}
 .dot.warn{background:var(--warn)}
-main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px}
+main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px;scrollbar-width:none}
+main::-webkit-scrollbar{display:none}
 nav{
   display:flex;border-top:1px solid var(--line);background:var(--panel);
   position:sticky;bottom:0;z-index:20;overflow-x:auto;scrollbar-width:none
 }
 nav button{
-  flex:1 0 62px;padding:9px 2px 11px;font-size:10px;letter-spacing:.05em;
+  flex:1 0 54px;padding:9px 2px 11px;font-size:10px;letter-spacing:.05em;
   color:var(--faint);display:flex;flex-direction:column;align-items:center;gap:3px
 }
 nav button.sel{color:var(--accent)}
 nav svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7}
+header #t-dev{display:block;max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+header #signout{white-space:nowrap}
 
 /* ---------- orb ---------- */
 .orbwrap{display:flex;flex-direction:column;align-items:center;gap:14px;padding:22px 0 8px}
@@ -113,6 +116,7 @@ input[type=email],input[type=password],input[type=text]{
   border-radius:12px;outline:none;min-height:var(--tap)
 }
 input:focus{border-color:var(--accent)}
+input[type=file]{width:100%;padding:10px;background:var(--panel2);border:1px solid var(--line);border-radius:12px}
 .btn{
   width:100%;padding:12px;border-radius:12px;background:var(--accent);color:#04121f;
   font-weight:650;margin-top:10px
@@ -137,6 +141,27 @@ label{display:block;font-size:11.5px;color:var(--faint);margin:11px 0 5px;letter
 .tag.bad{color:var(--bad);border-color:rgba(255,95,109,.4)}
 .tag.warn{color:var(--warn);border-color:rgba(245,181,68,.4)}
 .disabled-note{font-size:11.5px;color:var(--warn);margin-top:7px;line-height:1.45}
+.preview{width:100%;max-height:280px;object-fit:contain;border-radius:12px;border:1px solid var(--line);background:#05070b;margin-top:10px}
+
+/* One lightweight companion orb inside the PWA. A web page cannot draw over
+   other Android apps; this remains visible only while ZENO's PWA is visible. */
+#mini-orb{position:fixed;left:calc(100vw - 76px);top:calc(100dvh - 146px);z-index:50;
+  width:58px;height:58px;border-radius:29px;background:rgba(14,20,32,.94);
+  border:1px solid var(--line);box-shadow:0 8px 28px rgba(0,0,0,.42);
+  touch-action:none;user-select:none;display:flex;align-items:center;gap:9px;
+  padding:7px;overflow:hidden;transition:width .18s ease,border-radius .18s ease}
+#mini-orb.expanded{width:190px;border-radius:18px}
+#mini-orb .mini-core{position:relative;width:42px;height:42px;flex:0 0 42px}
+#mini-orb .mini-core i{position:absolute;inset:4px;border-radius:50%;
+  background:radial-gradient(circle at 34% 30%,#8fd0ff,var(--accent) 45%,var(--accent2));
+  animation:breathe 4.6s ease-in-out infinite}
+#mini-orb .mini-core b{position:absolute;inset:0;border-radius:50%;
+  background:radial-gradient(circle,rgba(77,163,255,.32),transparent 70%);
+  animation:halo 4.6s ease-in-out infinite}
+#mini-orb.busy .mini-core i{animation-duration:1.15s}
+#mini-orb.off .mini-core i{background:radial-gradient(circle at 34% 30%,#59647a,#333c4c 70%)}
+#mini-state{white-space:nowrap;font-size:12px;color:var(--dim);min-width:120px}
+@media (prefers-reduced-motion:reduce){#mini-orb,.mini-core i,.mini-core b{animation:none;transition:none}}
 </style>
 </head>
 <body>
@@ -163,8 +188,27 @@ label{display:block;font-size:11.5px;color:var(--faint);margin:11px 0 5px;letter
 <section id="pending">
   <div class="loginbox card">
     <h2 style="margin:0 0 8px">Approve this browser</h2>
-    <p class="muted">Sign-in succeeded, but this browser is not trusted yet. On the Windows machine run:</p>
-    <pre id="pendingcmd" style="white-space:pre-wrap;word-break:break-all;background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px;font:11.5px/1.6 ui-monospace,monospace"></pre>
+    <p class="muted">Sign-in succeeded, but this browser is not trusted yet.</p>
+
+    <!-- UNLOCK PHRASE: approve this browser by typing or SAYING the owner's
+         secret phrase, instead of walking to the PC. The mic uses the browser's
+         own speech recognition to type the phrase for you. -->
+    <div id="unlockbox" style="display:none;margin:6px 0 14px">
+      <label style="display:block;font-size:.85rem;color:var(--muted);margin-bottom:6px">Unlock phrase</label>
+      <div style="display:flex;gap:8px">
+        <input id="unlockphrase" type="password" autocomplete="off" placeholder="say or type it"
+               style="flex:1;min-width:0;padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit">
+        <button class="icon" id="unlockmic" title="Speak the phrase" type="button"
+                style="width:44px;height:44px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);display:grid;place-items:center;flex:none">🎙️</button>
+        <button class="btn" id="unlockgo" type="button" style="width:auto;margin:0;padding:11px 16px">Unlock</button>
+      </div>
+      <div id="unlockmsg" class="muted small" style="margin-top:8px;min-height:1.1em"></div>
+    </div>
+
+    <details style="margin-bottom:10px"><summary class="muted small" style="cursor:pointer">Or approve from the PC</summary>
+      <p class="muted small" style="margin:8px 0 6px">On the Windows machine run:</p>
+      <pre id="pendingcmd" style="white-space:pre-wrap;word-break:break-all;background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px;font:11.5px/1.6 ui-monospace,monospace"></pre>
+    </details>
     <p class="muted" id="pendingstate">Waiting for approval…</p>
     <button class="btn ghost" id="checkapproval">Check again</button>
     <button class="btn danger" id="pendinglogout">Sign out</button>
@@ -189,6 +233,7 @@ label{display:block;font-size:11.5px;color:var(--faint);margin:11px 0 5px;letter
     <button data-tab="tasks"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>Tasks</button>
     <button data-tab="memory"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14l-4-3-4 3-4-3-4 3z"/></svg>Memory</button>
     <button data-tab="voice"><svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/></svg>Voice</button>
+    <button data-tab="share"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 15l-5-5L5 20"/></svg>Share</button>
     <button data-tab="devices"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>Devices</button>
     <button data-tab="approvals"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><circle cx="12" cy="12" r="9"/></svg>Approvals</button>
     <button data-tab="activity"><svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>Activity</button>
@@ -196,6 +241,11 @@ label{display:block;font-size:11.5px;color:var(--faint);margin:11px 0 5px;letter
     <button data-tab="health"><svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>Health</button>
     <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 19.4 9a2 2 0 1 1 0 4z"/></svg>Settings</button>
   </nav>
+</div>
+
+<div id="mini-orb" class="hide" role="button" tabindex="0"
+     aria-label="ZENO mini orb; drag to move, tap to expand">
+  <span class="mini-core"><b></b><i></i></span><span id="mini-state">ZENO ready</span>
 </div>
 
 <script src="/zeno-config.js"></script>
@@ -228,6 +278,7 @@ const S = {
   tab: "home", chat: [], busy: false, poll: null, pendingDeviceSetup: null,
   events: null, commandWaiters: new Map(), voiceState: "IDLE",
   recorder: null, voiceTimer: null, voiceStream: null,
+  shareFile: null, sharePurpose: "file", shareUrl: "", location: null,
 };
 localStorage.setItem("zeno_browser_device", S.browserDevice);
 
@@ -340,11 +391,13 @@ function showLogin(msg){
   S.recorder=null;S.voiceStream=null;S.voiceState="IDLE";
   $("login").classList.add("on"); $("pending").classList.remove("on");
   $("app").classList.add("hide");
+  $("mini-orb").classList.add("hide");
   $("loginerr").textContent = msg || "";
 }
 function showApp(){
   $("login").classList.remove("on"); $("pending").classList.remove("on");
   $("app").classList.remove("hide");
+  $("mini-orb").classList.remove("hide"); initMiniOrb();
   render(); refreshStatus(); openRealtime();
   if (S.poll) clearInterval(S.poll);
   S.poll = setInterval(refreshStatus, 30000);
@@ -385,8 +438,45 @@ function showPending(){
   $("pending").classList.add("on");
   $("pendingcmd").textContent =
     `python tools/zeno_anywhere_admin.py approve-browser ${S.browserDevice}`;
+  // Show the unlock-phrase box only if the owner has set a phrase.
+  fetch(api("/api/owner/auth/unlock/status"), {credentials:"include"})
+    .then(r=>r.ok?r.json():null)
+    .then(d=>{ if(d && d.configured) $("unlockbox").style.display="block"; })
+    .catch(()=>{});
   if (S.poll) clearInterval(S.poll);
   S.poll = setInterval(checkApproval, 5000);
+}
+
+async function submitUnlock(){
+  const phrase = $("unlockphrase").value.trim();
+  if (!phrase){ $("unlockmsg").textContent = "Say or type your phrase."; return; }
+  $("unlockmsg").textContent = "Checking…";
+  try {
+    await call("/api/owner/auth/unlock", {method:"POST", body:{phrase}});
+    $("unlockmsg").textContent = "✓ Unlocked.";
+    if (S.poll){ clearInterval(S.poll); S.poll = null; }
+    showApp();
+  } catch(e){
+    $("unlockphrase").value = "";
+    $("unlockmsg").textContent = e.message || "That phrase was not accepted.";
+  }
+}
+
+// Voice: the browser's own speech recognition types the phrase for you, so
+// saying "john unlock" fills the field. Falls back to typing where the API
+// is unavailable (the mic button just does nothing then).
+function speakUnlock(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR){ $("unlockmsg").textContent = "Voice isn't supported here — type it instead."; return; }
+  const rec = new SR();
+  rec.lang = "en-US"; rec.interimResults = false; rec.maxAlternatives = 1;
+  $("unlockmsg").textContent = "Listening…";
+  rec.onresult = (ev)=>{
+    $("unlockphrase").value = ev.results[0][0].transcript;
+    submitUnlock();                       // heard it -> try immediately
+  };
+  rec.onerror = ()=>{ $("unlockmsg").textContent = "Didn't catch that — try again or type it."; };
+  try { rec.start(); } catch(e){ $("unlockmsg").textContent = "Couldn't start the mic."; }
 }
 async function checkApproval(){
   try {
@@ -400,6 +490,9 @@ async function checkApproval(){
 }
 $("checkapproval").onclick = checkApproval;
 $("pendinglogout").onclick = () => $("signout").click();
+$("unlockgo").onclick = submitUnlock;
+$("unlockmic").onclick = speakUnlock;
+$("unlockphrase").addEventListener("keydown", e => { if (e.key === "Enter") submitUnlock(); });
 
 function fromB64(value){
   const s=String(value).replace(/-/g,"+").replace(/_/g,"/");
@@ -489,7 +582,8 @@ async function refreshStatus(){
     if (dev) localStorage.setItem("zeno_device", S.device);
     setDot("d-dev","t-dev", dev && dev.state === "ONLINE",
            dev ? (dev.label || "laptop") + " " + dev.state.toLowerCase() : "no device");
-    document.querySelector(".orb")?.classList.toggle("off", !(dev && dev.state === "ONLINE"));
+    document.querySelectorAll(".orb").forEach(o=>o.classList.toggle("off", !(dev && dev.state === "ONLINE")));
+    updateMiniState();
     if (["home","devices","settings"].includes(S.tab)) render();
   } catch (e) {
     if (e.message !== "unauthorised"){
@@ -502,6 +596,56 @@ function setDot(dotId, textId, on, label){
   const d = $(dotId); if (!d) return;
   d.className = "dot " + (on ? "on" : "off");
   $(textId).textContent = label;
+}
+
+function updateMiniState(){
+  const orb=$("mini-orb"),label=$("mini-state");if(!orb||!label)return;
+  const online=!!((LAST&&LAST.devices)||[]).find(d=>d.device_id===S.device&&d.state==="ONLINE");
+  const state=S.voiceState==="RECORDING"?"Listening":
+    S.voiceState==="UPLOADING"?"Sending":S.voiceState==="THINKING"?"Thinking":
+    S.voiceState==="SPEAKING"?"Speaking":S.busy?"Working":online?"Ready":"Laptop offline";
+  label.textContent="ZENO · "+state;
+  orb.classList.toggle("busy",S.busy||["UPLOADING","THINKING","SPEAKING"].includes(S.voiceState));
+  orb.classList.toggle("off",!online);
+}
+
+let miniReady=false;
+function initMiniOrb(){
+  const orb=$("mini-orb");if(!orb||miniReady)return;miniReady=true;
+  let saved={};try{saved=JSON.parse(localStorage.getItem("zeno_mini_pos")||"{}");}catch{}
+  const clamp=()=>{
+    const w=orb.offsetWidth||58,h=orb.offsetHeight||58;
+    const x=Math.max(6,Math.min(innerWidth-w-6,Number(saved.x??innerWidth-w-12)));
+    const y=Math.max(6,Math.min(innerHeight-h-6,Number(saved.y??innerHeight-h-86)));
+    orb.style.left=x+"px";orb.style.top=y+"px";saved={x,y};
+  };
+  clamp();addEventListener("resize",clamp,{passive:true});
+  let drag=null;
+  orb.addEventListener("pointerdown",e=>{
+    drag={id:e.pointerId,x:e.clientX,y:e.clientY,left:parseFloat(orb.style.left)||0,
+      top:parseFloat(orb.style.top)||0,moved:false};orb.setPointerCapture(e.pointerId);
+  });
+  orb.addEventListener("pointermove",e=>{
+    if(!drag||e.pointerId!==drag.id)return;
+    const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+    if(Math.abs(dx)+Math.abs(dy)>6)drag.moved=true;
+    const x=Math.max(6,Math.min(innerWidth-orb.offsetWidth-6,drag.left+dx));
+    const y=Math.max(6,Math.min(innerHeight-orb.offsetHeight-6,drag.top+dy));
+    orb.style.left=x+"px";orb.style.top=y+"px";saved={x,y};
+    clearTimeout(initMiniOrb.saveTimer);
+    initMiniOrb.saveTimer=setTimeout(()=>localStorage.setItem(
+      "zeno_mini_pos",JSON.stringify(saved)),120);
+  });
+  const finish=e=>{
+    if(!drag||e.pointerId!==drag.id)return;
+    if(drag.moved)localStorage.setItem("zeno_mini_pos",JSON.stringify(saved));
+    else{orb.classList.toggle("expanded");setTimeout(clamp,190)}
+    drag=null;
+  };
+  orb.addEventListener("pointerup",finish);
+  orb.addEventListener("pointercancel",finish);
+  orb.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();orb.classList.toggle("expanded");}});
+  updateMiniState();
 }
 
 /* ---------------- navigation ---------------- */
@@ -527,7 +671,7 @@ function ago(ts){
 function render(){
   const m = $("main");
   ({home:vHome, chat:vChat, agents:vAgents, tasks:vTasks,
-    memory:vMemory, voice:vVoice, devices:vDevices, approvals:vApprovals,
+    memory:vMemory, voice:vVoice, share:vShare, devices:vDevices, approvals:vApprovals,
     activity:vActivity, notifications:vNotifications, health:vHealth,
     settings:vSettings}[S.tab] || vHome)(m);
 }
@@ -618,7 +762,7 @@ async function send(){
   const text = ta.value.trim(); if (!text || S.busy) return;
   ta.value = ""; ta.style.height = "auto";
   S.chat.push({role:"me", text}); drawLog();
-  S.busy = true; document.querySelector(".orb")?.classList.add("busy");
+  S.busy = true; document.querySelectorAll(".orb").forEach(o=>o.classList.add("busy"));updateMiniState();
   try {
     if (!S.device){
       S.chat.push({role:"sys", text:"No device is registered, so there is nothing to run this on. Register your laptop on the Devices tab."});
@@ -639,7 +783,7 @@ async function send(){
     S.chat.push({role:"sys", text: e.message === "network"
       ? "Cannot reach ZENO right now." : "Failed: " + e.message});
   } finally {
-    S.busy = false; document.querySelector(".orb")?.classList.remove("busy"); drawLog();
+    S.busy = false; document.querySelectorAll(".orb").forEach(o=>o.classList.remove("busy"));updateMiniState();drawLog();
   }
 }
 
@@ -735,6 +879,7 @@ function setVoiceState(state, note=""){
   const tag=$("voicetag"); if(tag) tag.textContent=state;
   const status=$("voicenote"); if(status&&note) status.textContent=note;
   const button=$("voice-start"); if(button) button.textContent=S.recorder?"Stop and send":"Start listening";
+  updateMiniState();
 }
 
 async function toggleVoiceCapture({chat=false}={}){
@@ -773,6 +918,7 @@ async function toggleVoiceCapture({chat=false}={}){
           const responseBlob=await fetchMedia("/api/owner/voice/"+encodeURIComponent(result.audio_id));
           audio=URL.createObjectURL(responseBlob);
           const player=new Audio(audio);
+          player.onended=()=>setVoiceState("READY","Voice response finished.");
           try{await player.play();setVoiceState("SPEAKING","Playing ZENO's verified response.");}
           catch{setVoiceState("READY","Your browser blocked autoplay. Press Play response.");}
           setTimeout(()=>URL.revokeObjectURL(audio),10*60*1000);
@@ -788,6 +934,142 @@ async function toggleVoiceCapture({chat=false}={}){
     if(stream)stream.getTracks().forEach(track=>track.stop());
     S.voiceStream=null;S.recorder=null;setVoiceState("FAILED",e.name==="NotAllowedError"?"Microphone permission was not granted for this site.":e.message);
   }
+}
+
+/* ---------------- camera / files / location / permissions ---------------- */
+const ATTACHMENT_ACCEPT=[
+  "image/jpeg","image/png","image/webp","image/gif","image/heic",
+  "application/pdf","text/plain","text/csv","application/json",
+  ".docx",".xlsx",".pptx"
+].join(",");
+
+function vShare(m){
+  m.innerHTML=`
+    <div class="card"><h3>Camera</h3>
+      <input id="camera-input" class="hide" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment">
+      <button class="btn" id="take-photo" ${S.device?"":"disabled"}>Take or choose photo</button>
+      <div class="disabled-note">Camera access starts only after you press this button. ZENO never activates it in the background.</div>
+    </div>
+    <div class="card"><h3>File</h3>
+      <input id="file-input" type="file" accept="${ATTACHMENT_ACCEPT}" ${S.device?"":"disabled"}>
+      <div class="disabled-note">Images, PDF, DOCX, XLSX, PPTX, UTF-8 text, CSV and JSON only; maximum 12 MB. Executables, macros and disguised files are refused.</div>
+    </div>
+    <div class="card"><h3>Selected item</h3>
+      <div id="share-selected" class="na">Nothing selected.</div>
+      <div id="share-preview"></div>
+      <label for="share-prompt">What should ZENO do with it?</label>
+      <input id="share-prompt" type="text" value="${S.sharePurpose==="camera"?"Describe this image and read visible text.":"Summarize this file and report important facts."}">
+      <button class="btn" id="share-send" disabled>Send securely to ZENO</button>
+      <div id="share-result" style="margin-top:12px"></div>
+    </div>
+    <div class="card"><h3>Location</h3>
+      <button class="btn ghost" id="location-get">Use my current location once</button>
+      <div id="location-result" class="disabled-note">Location is off. ZENO does not poll or track it.</div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn sm" id="location-send" disabled>Send to ZENO</button>
+        <button class="btn danger sm" id="location-clear" disabled>Forget</button>
+      </div>
+    </div>
+    <div class="card"><h3>Phone permissions</h3>
+      <div id="permission-list"><div class="muted">Checking browser permission state…</div></div>
+      <div class="disabled-note">Android/browser settings remain authoritative. ZENO requests a permission only when you use its feature and cannot bypass Family Link or system privacy controls.</div>
+    </div>
+    <div class="card"><h3>Mini orb</h3>
+      <div class="muted">The small ZENO orb can be dragged and tapped to expand. Android browsers cannot place a web page over other apps; a true system-wide overlay would require a separately installed Android app and explicit “Display over other apps” permission.</div>
+    </div>`;
+
+  $("take-photo").onclick=()=>$("camera-input").click();
+  $("camera-input").onchange=e=>selectSharedFile(e.target.files&&e.target.files[0],"camera");
+  $("file-input").onchange=e=>selectSharedFile(e.target.files&&e.target.files[0],"file");
+  $("share-send").onclick=submitAttachment;
+  $("location-get").onclick=requestLocation;
+  $("location-send").onclick=sendLocation;
+  $("location-clear").onclick=()=>{S.location=null;vShare(m)};
+  updatePermissionDashboard();
+}
+
+function selectSharedFile(file,purpose){
+  const out=$("share-result");if(out)out.innerHTML="";
+  if(!file)return;
+  if(file.size>12*1024*1024){if(out)out.innerHTML=`<div class="na">File exceeds 12 MB.</div>`;return;}
+  S.shareFile=file;S.sharePurpose=purpose;
+  if(S.shareUrl){URL.revokeObjectURL(S.shareUrl);S.shareUrl="";}
+  $("share-selected").className="muted";
+  $("share-selected").textContent=`${file.name} · ${Math.max(1,Math.round(file.size/1024))} KB`;
+  if(file.type.startsWith("image/")){
+    S.shareUrl=URL.createObjectURL(file);
+    $("share-preview").innerHTML=`<img class="preview" alt="Selected phone image preview">`;
+    $("share-preview").querySelector("img").src=S.shareUrl;
+  }else $("share-preview").innerHTML="";
+  $("share-prompt").value=purpose==="camera"?"Describe this image and read visible text.":"Summarize this file and report important facts.";
+  $("share-send").disabled=!S.device;
+}
+
+async function submitAttachment(){
+  const button=$("share-send"),out=$("share-result");
+  if(!S.shareFile||!S.device)return;
+  button.disabled=true;out.innerHTML=`<div class="muted">Encrypting and uploading…</div>`;
+  try{
+    const form=new FormData();form.append("device_id",S.device);
+    form.append("purpose",S.sharePurpose);
+    form.append("prompt",$("share-prompt").value.trim());
+    form.append("upload",S.shareFile,S.shareFile.name);
+    const cmd=await callForm("/api/owner/attachment",form);
+    if(cmd.refused)throw new Error(cmd.reason||"Attachment request was refused.");
+    out.innerHTML=`<div class="muted">${esc(cmd.note||"Queued for the laptop.")} Analysing…</div>`;
+    const record=await waitCommandRecord(cmd.id,180000);
+    if(!record){out.innerHTML=`<div class="na">Still running — check Tasks.</div>`;return;}
+    const result=record.result||{};
+    out.innerHTML=record.status==="DONE"
+      ? `<div class="msg ze" style="max-width:100%">${esc(result.answer||result.detail||"Completed without an answer.")}</div>`
+      : `<div class="na">${esc(record.status+": "+(result.error||"no result reported"))}</div>`;
+  }catch(e){out.innerHTML=`<div class="na">${esc(e.message==="network"?"Cannot reach ZENO right now.":e.message)}</div>`;}
+  finally{button.disabled=false;}
+}
+
+function requestLocation(){
+  const out=$("location-result");
+  if(!navigator.geolocation){out.textContent="Geolocation is unavailable in this browser.";return;}
+  out.textContent="Waiting for Android/browser permission…";
+  navigator.geolocation.getCurrentPosition(position=>{
+    S.location={lat:position.coords.latitude,lng:position.coords.longitude,
+      accuracy:position.coords.accuracy,at:new Date(position.timestamp).toISOString()};
+    out.textContent=`Ready to share once: ${S.location.lat.toFixed(5)}, ${S.location.lng.toFixed(5)} (±${Math.round(S.location.accuracy)} m).`;
+    $("location-send").disabled=!S.device;$("location-clear").disabled=false;
+    updatePermissionDashboard();
+  },error=>{out.textContent=error.code===1?"Location permission was not granted.":"Current location is unavailable.";updatePermissionDashboard();},
+  {enableHighAccuracy:false,timeout:10000,maximumAge:60000});
+}
+
+async function sendLocation(){
+  const out=$("location-result");if(!S.location||!S.device)return;
+  $("location-send").disabled=true;out.textContent="Sending this one location to ZENO…";
+  const text=`I explicitly shared my current location for this request: latitude ${S.location.lat.toFixed(6)}, longitude ${S.location.lng.toFixed(6)}, accuracy about ${Math.round(S.location.accuracy)} metres, captured ${S.location.at}. Acknowledge the location and use it only for my current request.`;
+  try{
+    const cmd=await call("/api/owner/command",{method:"POST",body:{
+      action:"ask",device_id:S.device,text,payload:{text},
+      idempotency_key:crypto.randomUUID?crypto.randomUUID():String(Date.now())}});
+    if(cmd.refused)throw new Error(cmd.reason||"Location request was refused.");
+    const done=await waitFor(cmd.id,120000);out.textContent=done.text;
+  }catch(e){out.textContent=e.message==="network"?"Cannot reach ZENO right now.":e.message;}
+  finally{S.location=null;$("location-clear").disabled=true;}
+}
+
+async function permissionState(name){
+  if(name==="notifications")return "Notification" in window?Notification.permission:"unsupported";
+  if(!navigator.permissions||!navigator.permissions.query)return "ask when used";
+  try{return (await navigator.permissions.query({name})).state;}catch{return "ask when used";}
+}
+
+async function updatePermissionDashboard(){
+  const target=$("permission-list");if(!target)return;
+  const names=["microphone","camera","geolocation","notifications"];
+  const states=await Promise.all(names.map(permissionState));
+  if(!$("permission-list"))return;
+  target.innerHTML=names.map((name,index)=>{
+    const state=states[index],cls=state==="granted"?"ok":state==="denied"?"bad":"warn";
+    return `<div class="row"><span class="k">${name[0].toUpperCase()+name.slice(1)}</span><span class="tag ${cls}">${esc(state)}</span></div>`;
+  }).join("")+`<div class="row"><span class="k">Files</span><span class="tag warn">choose each time</span></div>`;
 }
 
 async function loadConversation(){

@@ -52,9 +52,9 @@ ACCESS_TTL_S = 30 * 60           # 30 minutes
 # safety net is unchanged: losing the phone means revoking that device from the
 # PC, which kills its sessions instantly regardless of this value.
 try:
-    _REFRESH_DAYS = max(1, min(365, int(os.environ.get("ZENO_OWNER_REFRESH_DAYS", "90"))))
+    _REFRESH_DAYS = max(1, min(365, int(os.environ.get("ZENO_OWNER_REFRESH_DAYS", "365"))))
 except ValueError:
-    _REFRESH_DAYS = 90
+    _REFRESH_DAYS = 365
 REFRESH_TTL_S = _REFRESH_DAYS * 24 * 3600
 MAX_FAILED = 5                   # consecutive failures before lockout
 LOCKOUT_S = 900.0                # 15 minutes

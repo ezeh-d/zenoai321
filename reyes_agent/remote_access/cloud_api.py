@@ -38,11 +38,11 @@ from typing import Any
 from fastapi import (APIRouter, Body, Depends, File, Form, Header,
                      HTTPException, Request, UploadFile)
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from reyes_agent.auth import get_owner_auth
-from reyes_agent.remote_access import (device_link, domains, media_store,
-                                       policy, realtime, web_push)
+from reyes_agent.remote_access import (attachment_store, device_link, domains,
+                                       media_store, policy, realtime, web_push)
 
 router = APIRouter(prefix="/api/owner", tags=["owner"])
 
@@ -57,6 +57,7 @@ REGISTERED_ACTIONS: dict[str, str] = {
     "task_status": "READ_ONLY",
     "conversation_snapshot": "READ_ONLY",
     "voice_turn": "READ_ONLY",
+    "analyze_attachment": "READ_ONLY",
     "open_app": "STANDARD_DEVICE",  # open a named application
     "close_app": "SENSITIVE_DEVICE",
     "run_automation": "SENSITIVE_DEVICE",
@@ -188,6 +189,45 @@ def auth_refresh(request: Request, payload: dict = Body(default={})) -> JSONResp
     return _session_response(result, request)
 
 
+@router.get("/auth/unlock/status")
+def auth_unlock_status() -> dict[str, Any]:
+    """Whether an unlock phrase exists, so the pending screen can offer it.
+    Reveals nothing but a boolean."""
+    from reyes_agent.auth import unlock as _unlock
+
+    return _unlock.status()
+
+
+@router.post("/auth/unlock")
+def auth_unlock(request: Request, payload: dict = Body(...),
+                authorization: str | None = Header(None),
+                x_zeno_csrf: str | None = Header(None)) -> dict[str, Any]:
+    """Approve THIS browser with the owner's unlock phrase, instead of walking
+    to the PC. Requires an already password-authenticated session -- this is
+    not a login bypass, it is the approval step done by a shared secret."""
+    token = _bearer(authorization, request)
+    auth = get_owner_auth()
+    ok, reason = auth.verify(token, csrf=(x_zeno_csrf or ""), require_csrf=True)
+    if not ok:
+        raise HTTPException(status_code=401, detail=reason or "Sign in first.")
+    info = auth.session_info(token)
+    if not info:
+        raise HTTPException(status_code=401, detail="Sign in first.")
+    if info.get("trusted"):
+        return {"ok": True, "trusted": True, "note": "already trusted"}
+
+    from reyes_agent.auth import unlock as _unlock
+
+    good, why = _unlock.get_unlock().verify(
+        str(payload.get("phrase", "")), identity=_client_identity(request))
+    if not good:
+        # 429 for lockout so the client shows "wait"; 403 for a wrong phrase.
+        code = 429 if "Wait" in why else 403
+        raise HTTPException(status_code=code, detail=why)
+    auth.approve_browser_device(info["device_id"])
+    return {"ok": True, "trusted": True}
+
+
 @router.post("/auth/logout")
 def auth_logout(request: Request, authorization: str | None = Header(None)) -> JSONResponse:
     # Deliberately no CSRF requirement: logging out is safe to over-trigger,
@@ -280,6 +320,17 @@ def _voice_command(command_id: str, device_id: str):
     return command
 
 
+def _attachment_command(command_id: str, device_id: str):
+    command = device_link.get_link().command(command_id)
+    if (command is None or command.device_id != device_id or
+            command.action != "analyze_attachment" or command.status not in {
+                device_link.IN_FLIGHT, device_link.ACKNOWLEDGED}):
+        raise HTTPException(
+            status_code=403,
+            detail="Attachment is not bound to an active device command.")
+    return command
+
+
 @router.post("/device/media/read")
 def device_media_read(payload: dict = Body(...)) -> Response:
     device_id = _device(str(payload.get("device_id", "")), str(payload.get("token", "")))
@@ -299,6 +350,36 @@ def device_media_read(payload: dict = Body(...)) -> Response:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return Response(blob.data, media_type=blob.content_type,
                     headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.post("/device/attachment/read")
+def device_attachment_read(payload: dict = Body(...)) -> Response:
+    """Return one command-bound attachment to its authenticated desktop."""
+    device_id = _device(str(payload.get("device_id", "")),
+                        str(payload.get("token", "")))
+    command_id = str(payload.get("command_id", ""))
+    command = _attachment_command(command_id, device_id)
+    attachment_id = str(payload.get("attachment_id", ""))
+    if str(command.payload.get("attachment_id", "")) != attachment_id:
+        raise HTTPException(
+            status_code=403, detail="Attachment does not match the command.")
+    try:
+        blob = attachment_store.get_attachment_store().read(
+            attachment_id, target_device=device_id, command_id=command_id)
+    except attachment_store.AttachmentStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except attachment_store.AttachmentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (attachment_store.AttachmentAccessDenied, ValueError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return Response(
+        blob.data, media_type=blob.content_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-ZENO-Attachment-Name": quote(blob.filename, safe=""),
+            "X-ZENO-Attachment-Purpose": blob.purpose,
+        })
 
 
 @router.post("/device/media/write")
@@ -347,6 +428,13 @@ def device_complete(payload: dict = Body(...)) -> dict[str, Any]:
                     command_id=command_id)
             except Exception:
                 pass  # TTL cleanup remains the fail-safe; completion must survive cleanup.
+        if command and command.action == "analyze_attachment":
+            try:
+                attachment_store.get_attachment_store().release(
+                    str(command.payload.get("attachment_id", "")),
+                    target_device=device_id, command_id=command_id)
+            except Exception:
+                pass  # Short TTL cleanup remains the fail-safe.
         web_push.get_service().enqueue(
             "ZENO task finished" if bool(payload.get("success", False)) else "ZENO task failed",
             "Open ZENO to see the verified result.", kind="task")
@@ -603,6 +691,79 @@ def register(app) -> None:
         body = command.as_dict()
         body.update(ok=True, media_id=media_id,
                     note="Encrypted voice turn queued for your ZENO desktop.")
+        return body
+
+    @protected.post("/attachment")
+    async def enqueue_attachment(
+            request: Request, device_id: str = Form(...),
+            purpose: str = Form("file"), prompt: str = Form(""),
+            upload: UploadFile = File(...),
+            token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+        """Queue a camera frame or intentional file without exposing a path."""
+        info = get_owner_auth().session_info(token)
+        if not info or not info.get("trusted"):
+            raise HTTPException(status_code=403, detail="Trusted browser required.")
+        link = device_link.get_link()
+        state = link.device_state(device_id)
+        if not state.get("known"):
+            raise HTTPException(status_code=404, detail="Unknown device.")
+        rate = policy.check_rate("command", _client_identity(request))
+        if not rate.allowed:
+            raise HTTPException(status_code=429, detail=rate.as_dict())
+
+        question = " ".join(str(prompt or "").split())[:600]
+        if not question:
+            question = ("Describe this image and read visible text." if
+                        str(purpose).casefold() == "camera" else
+                        "Summarize this file and report important facts.")
+        decision = policy.evaluate(question, allow_control=False)
+        if not decision.allowed:
+            return {"ok": False, "refused": True, "reason": decision.reason,
+                    "category": decision.category}
+
+        data = await upload.read(attachment_store.MAX_ATTACHMENT_BYTES + 1)
+        if len(data) > attachment_store.MAX_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=413, detail="Attachment is too large.")
+        store = None
+        attachment_id = ""
+        try:
+            store = attachment_store.get_attachment_store()
+            attachment_id = store.create(
+                browser_device=str(info["device_id"]), target_device=device_id,
+                data=data, content_type=str(upload.content_type or ""),
+                filename=str(upload.filename or "upload"), purpose=purpose)
+            command = link.enqueue(
+                device_id, "analyze_attachment",
+                {"attachment_id": attachment_id, "prompt": question},
+                category="READ_ONLY", idempotency_key="",
+                requesting_device=f"owner-web:{info['device_id']}",
+                requires_approval=False,
+                expires_in_s=attachment_store.DEFAULT_TTL_S)
+            if not store.bind_command(
+                    attachment_id, command_id=command.id,
+                    target_device=device_id):
+                link.cancel(command.id, requesting_device="owner-web")
+                raise RuntimeError("Could not bind the attachment to its command.")
+        except attachment_store.AttachmentStoreUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (attachment_store.AttachmentCapacityExceeded, ValueError) as exc:
+            if store and attachment_id:
+                store.discard(attachment_id)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (KeyError, PermissionError) as exc:
+            if store and attachment_id:
+                store.discard(attachment_id)
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except Exception:
+            if store and attachment_id:
+                store.discard(attachment_id)
+            raise
+        body = command.as_dict()
+        body.update(
+            ok=True, attachment_id=attachment_id, device_state=state.get("state"),
+            note=("Encrypted attachment queued. The desktop is offline and will "
+                  "process it after reconnecting." if state.get("state") == "OFFLINE"
+                  else "Encrypted attachment queued for the connected desktop."))
         return body
 
     @protected.get("/voice/{media_id}")
