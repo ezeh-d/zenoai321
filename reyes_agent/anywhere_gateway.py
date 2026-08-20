@@ -85,12 +85,12 @@ def create_app(*, enabled: bool | None = None) -> FastAPI:
         response.headers["Referrer-Policy"] = "no-referrer"
         is_shell = request.url.path.startswith("/app") or request.url.path == "/zeno-config.js"
         response.headers["Permissions-Policy"] = (
-            "camera=(), microphone=(self), geolocation=(), payment=(), usb=()"
+            "camera=(self), microphone=(self), geolocation=(self), payment=(), usb=()"
             if is_shell else
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
             "connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; "
             "form-action 'self'" if is_shell else
             "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; "

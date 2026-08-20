@@ -22,6 +22,8 @@ class PhoneSecurityTests(unittest.TestCase):
         self.temp.cleanup()
     def test_pairing_is_one_time_and_only_a_hash_is_persisted(self) -> None:
         pair = self.security.create_pair()
+        self.assertTrue(pair["manual_code"].isdigit())
+        self.assertEqual(len(pair["manual_code"]), 6)
         self.assertTrue(self.security._valid_pair(pair["token"]))
         with self.security._connection() as conn:
             row = conn.execute("SELECT token_hash FROM pairs").fetchone()

@@ -1550,3 +1550,61 @@ built-in platform adapters default to owner submission; unknown career facts
 remain missing; project records delegate real creation to existing Builder/tool
 execution; payment tracking never moves money. These boundaries prevent fake
 applications, fake clients, fake delivery and fake revenue.
+
+---
+
+## ZENO Anywhere Phone Web Companion — SECURE MEDIA UPGRADE COMPLETE WITH WEB LIMITS (2026-08-20)
+
+The current phone PWA now adds explicit, owner-initiated camera capture, a
+bounded file picker, one-shot geolocation, a permission dashboard and one
+lightweight draggable in-app ZENO mini-orb. Camera and location are permitted
+only for the `/app` shell; every other gateway route keeps them denied. The
+camera never starts automatically, geolocation is not watched, selected files
+are not given filesystem access and the orb creates no JavaScript animation
+loop. Its position persists locally and is clamped back on-screen after a
+viewport or orientation change.
+
+Phone attachments use a short-lived AES-256-GCM SQLite channel instead of
+putting bytes, paths or secrets into command JSON. Input is bound to the
+verified browser device, the selected Windows device and one command ID;
+content type and file signatures are checked, active/macro Office content is
+rejected, storage and archive expansion are bounded, and plaintext bytes and
+filenames are cryptographically released after terminal processing. The
+desktop connector performs real image/document analysis on the existing
+bounded worker pool, keeps its heartbeat alive, uses a read-only agent scope
+and removes its extraction temp file. An unavailable analyzer reports failure
+instead of simulated success.
+
+The existing desktop Settings pairing authority is reused rather than
+duplicated. It presents a temporary QR containing a high-entropy one-time
+token plus a six-digit manual fallback; only hashes are stored, codes expire,
+one new offer cancels the prior unconsumed offer and consumption is atomic.
+The newer Anywhere owner session, passkey/device approval and Claude's
+owner-configured unlock phrase remain the login authority. Unlock phrases are
+now bounded, require at least two words, use atomic attempt accounting and
+cannot report a browser trusted if the durable approval update failed.
+
+The PWA consumes authenticated Server-Sent Events for nonblocking device/task
+state updates and retains bounded polling as a compatibility fallback. Its
+existing standards-based Web Push service delivers completion, approval and
+security notifications when VAPID is configured and the browser grants
+permission; sensitive task content is not placed on the lock screen.
+WebAuthn/passkey, session/device revocation, CSRF, strict origins, rate limits
+and server-side provider secrets remain in the existing Anywhere architecture.
+
+**Verified:** the new encrypted attachment and unlock suites pass, including
+wrong-device/command isolation, expiry/capacity, content spoofing, macro
+rejection, upload-to-desktop lifecycle, temp cleanup, read-only execution and
+gateway policy boundaries. The broader Anywhere/security regression suite also
+passes. Mobile browser QA at 390×844 and 320×600 confirmed portrait layout,
+drag persistence, off-screen recovery and no console errors.
+
+**Intentional web limits:** a PWA cannot draw over other Android apps, run an
+unrestricted always-on background microphone/camera, bypass Family Link or
+Android permission prompts, or guarantee autoplay. A native Android companion
+would be required for a system overlay/foreground service and native
+notification-channel controls; browser Web Push delivery remains subject to
+Android/Chrome background policy. Continuous camera/video understanding,
+generic audio/video file analysis and physical-phone camera/passkey acceptance
+are not claimed by this increment; authenticated SSE/Web Push and the explicit
+camera/document path are the implemented, tested surface.

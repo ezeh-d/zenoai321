@@ -142,7 +142,10 @@ class PhoneSecurity:
             pass
 
     def create_pair(self) -> dict[str, Any]:
-        token, manual = secrets.token_urlsafe(32), f"{secrets.randbelow(10**8):08d}"
+        # The QR keeps the full 256-bit random token. The manual fallback is
+        # the six-digit format shown in the companion flow; it remains
+        # short-lived, rate-limited and single-use.
+        token, manual = secrets.token_urlsafe(32), f"{secrets.randbelow(10**6):06d}"
         expires = time.time() + PAIR_TTL_S
         with self._connection() as conn:
             conn.execute("UPDATE pairs SET cancelled=1 WHERE consumed=0")

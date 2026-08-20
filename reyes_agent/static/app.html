@@ -194,15 +194,16 @@ label{display:block;font-size:11.5px;color:var(--faint);margin:11px 0 5px;letter
          secret phrase, instead of walking to the PC. The mic uses the browser's
          own speech recognition to type the phrase for you. -->
     <div id="unlockbox" style="display:none;margin:6px 0 14px">
-      <label style="display:block;font-size:.85rem;color:var(--muted);margin-bottom:6px">Unlock phrase</label>
+      <label style="display:block;font-size:.85rem;color:var(--dim);margin-bottom:6px">Unlock phrase</label>
       <div style="display:flex;gap:8px">
         <input id="unlockphrase" type="password" autocomplete="off" placeholder="say or type it"
-               style="flex:1;min-width:0;padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit">
+               style="flex:1;min-width:0;padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit">
         <button class="icon" id="unlockmic" title="Speak the phrase" type="button"
                 style="width:44px;height:44px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);display:grid;place-items:center;flex:none">🎙️</button>
         <button class="btn" id="unlockgo" type="button" style="width:auto;margin:0;padding:11px 16px">Unlock</button>
       </div>
       <div id="unlockmsg" class="muted small" style="margin-top:8px;min-height:1.1em"></div>
+      <div class="disabled-note">Typing is the private option. The mic uses your browser's speech-recognition service, which may process the phrase through the browser vendor.</div>
     </div>
 
     <details style="margin-bottom:10px"><summary class="muted small" style="cursor:pointer">Or approve from the PC</summary>

@@ -76,6 +76,7 @@ ACTION_CATEGORIES = {
     "task_status": "READ_ONLY",
     "conversation_snapshot": "READ_ONLY",
     "voice_turn": "READ_ONLY",
+    "analyze_attachment": "READ_ONLY",
     "open_app": "STANDARD_DEVICE",
     "close_app": "SENSITIVE_DEVICE",
     "run_automation": "SENSITIVE_DEVICE",

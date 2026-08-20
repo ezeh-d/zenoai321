@@ -44,7 +44,8 @@ _DB = Path(os.environ.get("LOCALAPPDATA", str(config.PROJECT_ROOT))) / "ZENO" / 
 
 MAX_FAILED = 5
 LOCKOUT_S = 900.0
-MIN_PHRASE_LEN = 4
+MIN_PHRASE_LEN = 10
+MAX_PHRASE_LEN = 120
 
 
 import re as _re
@@ -66,7 +67,7 @@ class UnlockPhrase:
     def __init__(self, db_path: Path | None = None) -> None:
         self._db = db_path or _DB
         self._db.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._init_db()
 
     @contextmanager
@@ -103,18 +104,24 @@ class UnlockPhrase:
         normalised = _normalise(phrase)
         if len(normalised) < MIN_PHRASE_LEN:
             return False, f"The unlock phrase must be at least {MIN_PHRASE_LEN} characters."
+        if len(normalised) > MAX_PHRASE_LEN:
+            return False, f"The unlock phrase must be at most {MAX_PHRASE_LEN} characters."
+        if len(normalised.split()) < 2:
+            return False, "Use at least two words for the unlock phrase."
         hashed, salt = _hash_password(normalised)
-        with self._connection() as conn:
-            conn.execute(
-                "INSERT INTO phrase(id,phrase_hash,phrase_salt,updated) VALUES(1,?,?,?) "
-                "ON CONFLICT(id) DO UPDATE SET phrase_hash=excluded.phrase_hash, "
-                "phrase_salt=excluded.phrase_salt, updated=excluded.updated",
-                (hashed, salt, time.time()))
+        with self._lock:
+            with self._connection() as conn:
+                conn.execute(
+                    "INSERT INTO phrase(id,phrase_hash,phrase_salt,updated) VALUES(1,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET phrase_hash=excluded.phrase_hash, "
+                    "phrase_salt=excluded.phrase_salt, updated=excluded.updated",
+                    (hashed, salt, time.time()))
         return True, "Unlock phrase set."
 
     def clear(self) -> bool:
-        with self._connection() as conn:
-            changed = conn.execute("DELETE FROM phrase WHERE id=1").rowcount
+        with self._lock:
+            with self._connection() as conn:
+                changed = conn.execute("DELETE FROM phrase WHERE id=1").rowcount
         return bool(changed)
 
     def _locked(self, identity: str) -> tuple[bool, float]:
@@ -144,18 +151,26 @@ class UnlockPhrase:
     def verify(self, phrase: str, *, identity: str = "unknown") -> tuple[bool, str]:
         """Constant-time check with lockout. Returns (ok, reason)."""
         identity = str(identity or "unknown")[:120]
-        locked, until = self._locked(identity)
-        if locked:
-            return False, f"Too many attempts. Wait {int(until - time.time())}s."
-        with self._connection() as conn:
-            row = conn.execute("SELECT phrase_hash,phrase_salt FROM phrase WHERE id=1").fetchone()
-        if row is None:
-            return False, "No unlock phrase is set."
-        ok = _verify_password(_normalise(phrase), row["phrase_hash"], row["phrase_salt"])
-        if not ok:
-            self._record_failure(identity)
-            return False, "Incorrect unlock phrase."
-        self._clear_failures(identity)
+        normalised = _normalise(phrase)
+        with self._lock:
+            locked, until = self._locked(identity)
+            if locked:
+                return False, f"Too many attempts. Wait {int(until - time.time())}s."
+            with self._connection() as conn:
+                row = conn.execute(
+                    "SELECT phrase_hash,phrase_salt FROM phrase WHERE id=1").fetchone()
+            if row is None:
+                return False, "No unlock phrase is set."
+            # Bound input before the intentionally expensive scrypt check.
+            if len(normalised) > MAX_PHRASE_LEN:
+                self._record_failure(identity)
+                return False, "Incorrect unlock phrase."
+            ok = _verify_password(
+                normalised, row["phrase_hash"], row["phrase_salt"])
+            if not ok:
+                self._record_failure(identity)
+                return False, "Incorrect unlock phrase."
+            self._clear_failures(identity)
         # hmac.compare_digest already used inside _verify_password.
         return True, ""
 

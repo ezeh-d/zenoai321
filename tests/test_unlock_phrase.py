@@ -28,6 +28,16 @@ def test_a_too_short_phrase_is_refused(store):
     assert ok is False and "at least" in reason
 
 
+def test_a_long_single_word_is_not_accepted_as_a_phrase(store):
+    ok, reason = store.set_phrase("thisisnotasecondfactor")
+    assert ok is False and "two words" in reason
+
+
+def test_an_oversized_phrase_is_rejected_before_scrypt(store):
+    ok, reason = store.set_phrase("word " * 100)
+    assert ok is False and "at most" in reason
+
+
 def test_the_phrase_is_stored_only_as_a_hash(store, tmp_path):
     store.set_phrase("john unlock")
     blob = (tmp_path / "unlock.sqlite").read_bytes()
@@ -92,3 +102,42 @@ def test_set_unlock_cli_uses_getpass_never_argv():
 
     source = inspect.getsource(set_unlock)
     assert "getpass" in source and "sys.argv" not in source
+
+
+def test_unlock_route_never_claims_trust_when_approval_update_fails(monkeypatch):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from reyes_agent.auth import unlock as unlock_module
+    from reyes_agent.remote_access import cloud_api
+
+    class FakeAuth:
+        @staticmethod
+        def verify(_token, *, csrf, require_csrf):
+            return (csrf == "csrf" and require_csrf), ""
+
+        @staticmethod
+        def session_info(_token):
+            return {"device_id": "blocked-browser", "trusted": False}
+
+        @staticmethod
+        def approve_browser_device(_device_id):
+            return False
+
+    class FakeUnlock:
+        @staticmethod
+        def verify(_phrase, *, identity):
+            return True, ""
+
+    monkeypatch.setattr(cloud_api, "get_owner_auth", lambda: FakeAuth())
+    monkeypatch.setattr(unlock_module, "get_unlock", lambda: FakeUnlock())
+    request = Request({
+        "type": "http", "method": "POST", "path": "/api/owner/auth/unlock",
+        "headers": [], "client": ("127.0.0.1", 5000),
+        "server": ("testserver", 443), "scheme": "https",
+    })
+    with pytest.raises(HTTPException) as error:
+        cloud_api.auth_unlock(
+            request, {"phrase": "valid phrase"},
+            authorization="Bearer session", x_zeno_csrf="csrf")
+    assert error.value.status_code == 409

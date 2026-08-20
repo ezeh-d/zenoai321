@@ -224,7 +224,12 @@ def auth_unlock(request: Request, payload: dict = Body(...),
         # 429 for lockout so the client shows "wait"; 403 for a wrong phrase.
         code = 429 if "Wait" in why else 403
         raise HTTPException(status_code=code, detail=why)
-    auth.approve_browser_device(info["device_id"])
+    changed = auth.approve_browser_device(info["device_id"])
+    updated = auth.session_info(token) or {}
+    if not changed or not updated.get("trusted"):
+        raise HTTPException(
+            status_code=409,
+            detail="This browser could not be approved in its current state.")
     return {"ok": True, "trusted": True}
 
 
