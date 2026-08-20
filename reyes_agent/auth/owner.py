@@ -45,7 +45,17 @@ from reyes_agent import config
 # refresh token keeps the owner logged in without keeping a long-lived
 # credential in the browser where XSS could reach it.
 ACCESS_TTL_S = 30 * 60           # 30 minutes
-REFRESH_TTL_S = 14 * 24 * 3600   # 14 days
+# How long a trusted browser stays signed in WITHOUT re-entering the password.
+# Every refresh rotates the token and resets this window, so a phone used even
+# occasionally never has to log in again. 90 days by default; the owner can
+# shorten it (ZENO_OWNER_REFRESH_DAYS) if they prefer tighter sessions. The
+# safety net is unchanged: losing the phone means revoking that device from the
+# PC, which kills its sessions instantly regardless of this value.
+try:
+    _REFRESH_DAYS = max(1, min(365, int(os.environ.get("ZENO_OWNER_REFRESH_DAYS", "90"))))
+except ValueError:
+    _REFRESH_DAYS = 90
+REFRESH_TTL_S = _REFRESH_DAYS * 24 * 3600
 MAX_FAILED = 5                   # consecutive failures before lockout
 LOCKOUT_S = 900.0                # 15 minutes
 CHALLENGE_TTL_S = 300.0

@@ -92,10 +92,15 @@ def _session_response(result, request: Request) -> JSONResponse:
     secure = (not domains.dev_mode() or request.url.scheme == "https" or
               forwarded == "https")
     same_site = "none" if secure else "lax"
+    # Cookie lifetimes track the auth service's own TTLs, so extending the
+    # sign-in window is a one-place change (owner.REFRESH_TTL_S) and the cookie
+    # never outlives, or dies before, the token it carries.
+    from reyes_agent.auth import owner as _owner
+
     response.set_cookie("zeno_session", session.token, httponly=True, secure=secure,
-                        samesite=same_site, max_age=30 * 60, path="/")
+                        samesite=same_site, max_age=_owner.ACCESS_TTL_S, path="/")
     response.set_cookie("zeno_refresh", session.refresh, httponly=True, secure=secure,
-                        samesite=same_site, max_age=14 * 24 * 3600,
+                        samesite=same_site, max_age=_owner.REFRESH_TTL_S,
                         path="/api/owner/auth")
     response.headers["Cache-Control"] = "no-store"
     return response
