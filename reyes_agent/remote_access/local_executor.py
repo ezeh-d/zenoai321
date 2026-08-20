@@ -107,8 +107,17 @@ def ensure_device() -> dict[str, str]:
     # rotates the token in place instead of accumulating approved ghost
     # devices after profile recovery.
     device_id = str(metadata.get("device_id", "")).strip() or _DEFAULT_DEVICE_ID
+    # Label it as the owner's laptop, by hostname, so the phone shows a device
+    # they recognise ("My laptop (DESKTOP-...)") rather than an internal name.
+    import socket
+
+    try:
+        host = socket.gethostname()
+    except OSError:
+        host = ""
+    label = f"My laptop ({host})" if host else "My laptop"
     registered = link.register(
-        label="ZENO Anywhere local executor", platform="windows",
+        label=label, platform="windows",
         device_id=device_id, approved=True, scopes=_SCOPES,
     )
     creds = {"device_id": registered["device_id"], "token": registered["token"]}
