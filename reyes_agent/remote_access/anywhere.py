@@ -497,6 +497,19 @@ class Supervisor:
         STOP_FLAG.unlink(missing_ok=True)
         _log("supervisor_started", pid=os.getpid(), port=PORT)
 
+        # Configure the in-server local executor BEFORE the server is spawned,
+        # so the child inherits ZENO_GATEWAY_URL/DEVICE_ID/DEVICE_TOKEN and
+        # runs the desktop agent in-process. Without this the owner app's chat,
+        # roll-call and controls would enqueue and never run. Best-effort:
+        # reachability must not depend on it.
+        try:
+            from reyes_agent.remote_access import local_executor
+
+            info = local_executor.enable()
+            _log("local_executor_enabled", device=info["device_id"][:16])
+        except Exception as exc:  # noqa: BLE001
+            _log("local_executor_failed", error=str(exc)[:150])
+
         try:
             while not self._stop.is_set():
                 if STOP_FLAG.exists():
