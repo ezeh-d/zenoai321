@@ -191,7 +191,16 @@ class TestLocalAddressAcrossIPVersions:
             import psutil
         except ImportError:  # pragma: no cover
             return None
-        for addresses in psutil.net_if_addrs().values():
+        # Hyper-V / WSL / Docker install host-only virtual switches
+        # (vEthernet, 172.x, 192.168.128.x). is_local_address correctly does
+        # NOT treat those as the owner's real LAN -- so a test that grabbed the
+        # first private adapter started failing the moment WSL was installed
+        # for Docker. Skip the virtual adapters by name and use the real one.
+        virtual = ("vethernet", "wsl", "hyper-v", "vmware", "virtualbox",
+                   "loopback", "docker", "default switch")
+        for name, addresses in psutil.net_if_addrs().items():
+            if any(marker in name.lower() for marker in virtual):
+                continue
             for entry in addresses:
                 if getattr(entry.family, "name", "") != "AF_INET":
                     continue

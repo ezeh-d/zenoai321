@@ -18,6 +18,14 @@ _PUBLIC_REMOTE_PREFIXES = (
     "/api/phone/devices", "/api/phone/audio/", "/api/phone/session/",
     "/api/phone/health", "/api/phone/tts", "/api/phone/approvals",
     "/ws/phone",
+    # The owner web app and its API, reachable through the gateway. These are
+    # NOT protected by network position -- they are protected by
+    # OwnerAuthService: every /api/owner route except login/refresh/logout and
+    # the device-token callbacks requires a session, and login is rate-limited
+    # with lockout and nonce replay protection. That is why they can be public
+    # over the tunnel while /api/social and the desktop API stay closed. Added
+    # only once OwnerAuthService existed to be that gate.
+    "/app", "/api/owner/",
 )
 _PUBLIC_REMOTE_EXACT = {
     "/", "/chat", "/companion", "/phone-manifest.json", "/phone-sw.js",
