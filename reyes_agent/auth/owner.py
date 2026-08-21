@@ -45,6 +45,11 @@ from reyes_agent import config
 # refresh token keeps the owner logged in without keeping a long-lived
 # credential in the browser where XSS could reach it.
 ACCESS_TTL_S = 30 * 60           # 30 minutes
+# A fingerprint (passkey) step-up "unlocks actions" on an already signed-in
+# phone for this long -- it is sudo, not a second login. When the window lapses
+# the owner simply re-scans; a restart clears every elevation (re-scan), which
+# is the safe default. Consequential tools run only while a session is elevated.
+ELEVATION_TTL_S = 10 * 60        # 10 minutes
 # How long a trusted browser stays signed in WITHOUT re-entering the password.
 # Every refresh rotates the token and resets this window, so a phone used even
 # occasionally never has to log in again. 90 days by default; the owner can
@@ -150,6 +155,9 @@ class OwnerAuthService:
         self._db = db_path or _DB
         self._db.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        # session token -> unix time the fingerprint "action unlock" expires.
+        # In-memory on purpose: short-lived, and a restart safely re-locks.
+        self._elevations: dict[str, float] = {}
         self._init_db()
 
     # ---- storage --------------------------------------------------------
@@ -762,6 +770,92 @@ class OwnerAuthService:
                               address=identity, device_id=device_id)
         self._audit("passkey_login_ok", identity=identity, device=device_label)
         return AuthResult(True, session=session)
+
+    # ---- fingerprint step-up (action unlock) ----------------------------
+    def passkey_stepup_options(self, *, rp_id: str) -> dict[str, Any]:
+        """Challenge for a fingerprint step-up that unlocks actions on a phone
+        that is ALREADY signed in. Same assertion as passkey login, a distinct
+        challenge purpose so a login challenge cannot be replayed as an unlock."""
+        from webauthn import generate_authentication_options
+        from webauthn.helpers import base64url_to_bytes, options_to_json
+        from webauthn.helpers.structs import (PublicKeyCredentialDescriptor,
+                                              UserVerificationRequirement)
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT credential_id FROM credentials WHERE revoked=0 "
+                "ORDER BY created DESC LIMIT 20").fetchall()
+        if not rows:
+            raise PermissionError("No active owner passkey is registered.")
+        challenge = secrets.token_bytes(32)
+        self._save_challenge(challenge, "passkey-stepup")
+        options = generate_authentication_options(
+            rp_id=rp_id, challenge=challenge,
+            allow_credentials=[PublicKeyCredentialDescriptor(
+                id=base64url_to_bytes(row["credential_id"])) for row in rows],
+            user_verification=UserVerificationRequirement.REQUIRED)
+        return json.loads(options_to_json(options))
+
+    def finish_passkey_stepup(self, token: str, credential: dict[str, Any], *,
+                              challenge: str, origin: str, rp_id: str) -> tuple[bool, str]:
+        """Verify a fingerprint assertion and ELEVATE this session (no new
+        login). The session must already be valid and its browser trusted, so
+        an unlock is always 'a trusted phone + a live fingerprint', never one
+        alone."""
+        from webauthn import verify_authentication_response
+        from webauthn.helpers import base64url_to_bytes
+
+        info = self.session_info(token)
+        if not info or not info.get("trusted"):
+            return False, "A trusted signed-in session is required."
+        expected = self._take_challenge(challenge, "passkey-stepup")
+        credential_id = str(credential.get("id") or credential.get("rawId") or "")
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT credential_id,public_key,sign_count FROM credentials "
+                "WHERE credential_id=? AND revoked=0", (credential_id,)).fetchone()
+        if row is None:
+            self._audit("stepup_failed", reason="unknown_passkey")
+            return False, "Unknown or revoked passkey."
+        try:
+            verified = verify_authentication_response(
+                credential=credential, expected_challenge=base64url_to_bytes(expected),
+                expected_rp_id=rp_id, expected_origin=origin,
+                credential_public_key=row["public_key"],
+                credential_current_sign_count=row["sign_count"],
+                require_user_verification=True)
+        except Exception:  # no credential detail in logs or response
+            self._audit("stepup_failed", reason="verify")
+            return False, "Fingerprint verification failed."
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE credentials SET sign_count=?,last_used=? WHERE credential_id=?",
+                (verified.new_sign_count, time.time(), credential_id))
+        with self._lock:
+            self._elevations[token] = time.time() + ELEVATION_TTL_S
+        self._audit("stepup_ok")
+        return True, ""
+
+    def session_elevated(self, token: str) -> bool:
+        """True while this session's fingerprint action-unlock is still valid."""
+        if not token:
+            return False
+        with self._lock:
+            until = self._elevations.get(token, 0.0)
+            if until <= time.time():
+                self._elevations.pop(token, None)
+                return False
+            return True
+
+    def elevation_status(self, token: str) -> dict[str, Any]:
+        with self._lock:
+            until = self._elevations.get(token, 0.0)
+        left = max(0, int(until - time.time()))
+        return {"elevated": left > 0, "seconds_left": left, "ttl_s": ELEVATION_TTL_S}
+
+    def clear_elevation(self, token: str) -> None:
+        with self._lock:
+            self._elevations.pop(token, None)
 
     def revoke_passkey(self, credential_id: str) -> bool:
         with self._connection() as conn:

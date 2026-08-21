@@ -121,8 +121,8 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
     "diagnostics": ("system_health", "system_status", "phase3_status",
                     "evolution_report", "awareness_status", "digital_dna",
                     "voice_profile_status", "ocr_capabilities"),
-    "presentation": ("siwes_evidence", "prepare_for_visit",
-                     "start_visitor_session", "set_serious_mode"),
+    "presentation": ("t21_services", "t21_remember", "siwes_evidence",
+                     "prepare_for_visit", "start_visitor_session", "set_serious_mode"),
     "workflow": ("workflow_run", "workflow_teach", "workflow_confirm"),
     "voice": ("learn_my_voice", "voice_profile_status", "set_mic_level"),
 }
@@ -258,7 +258,7 @@ _INTENT: tuple[tuple[str, str], ...] = (
     ("files", r"\b(?:file|folder|directory|read (?:the )?\S+\.\w+|save (?:it |this )?to|"
               r"list (?:the )?(?:files|dir))\b"),
     ("presentation", r"\b(?:siwes|evidence|portfolio|engr bello|visitor|"
-                     r"presentation|serious mode|ultron)\b"),
+                     r"presentation|serious mode|ultron|t21)\b"),
     ("diagnostics", r"\b(?:health|diagnostic|status of|are you (?:ok|working)|"
                     r"system status)\b"),
     ("voice", r"\b(?:learn my voice|my voice|microphone level|mic level)\b"),

@@ -602,6 +602,24 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
         audit.log("autonomy_auto_approved", tool=name, input=tool_input)
         return execute_tool(tool, tool_input)
 
+    # A consequential tool requested during an AUTHENTICATED, TRUSTED-owner
+    # remote turn runs now instead of queuing for desktop approval: the owner
+    # scanned a fingerprint (a WebAuthn assertion) to elevate this session, so
+    # the fingerprint IS the approval. Unlike passive autonomy this is a fresh,
+    # strong, per-session human authorization, so it runs ordinary
+    # control/communication tools -- but NOT the denylisted arbitrary-execution,
+    # irreversible, public or security tools, which always take an explicit
+    # desktop confirmation. Audited like every other auto-run.
+    from reyes_agent import confirmation as _confirmation
+    if (must_confirm and _confirmation.auto_approve_active()
+            and _confirmation.remote_auto_run_allowed(name)
+            and not voice_requires_confirmation):
+        from reyes_agent import audit
+
+        audit.log("remote_owner_auto_approved", tool=name, input=tool_input,
+                  reason=_confirmation.auto_approve_active())
+        return execute_tool(tool, tool_input)
+
     if must_confirm:
         from reyes_agent import confirmation
 
@@ -622,7 +640,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import android_tools, anime_tools, animation_tools, awareness_tools, creative_market_tools, blender, browser, build, calendar, campaign_tools, career_tools, coding_system, social_tools, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, language_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, opportunity_tools, paid_work_tools, agent_identity, evidence_tools, mode_tools, messaging_tools, security_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import android_tools, anime_tools, animation_tools, awareness_tools, creative_market_tools, blender, browser, build, calendar, campaign_tools, career_tools, coding_system, social_tools, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, language_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, opportunity_tools, paid_work_tools, agent_identity, evidence_tools, mode_tools, messaging_tools, security_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, t21_tools, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

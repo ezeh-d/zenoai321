@@ -10,6 +10,7 @@ time out into a safe default" from AGENT.md's Tier 6 section, applied.
 
 from __future__ import annotations
 
+import contextvars
 import itertools
 import threading
 import time
@@ -19,6 +20,79 @@ from typing import Any, Literal
 Status = Literal["pending", "approved", "denied", "expired"]
 
 PENDING_TIMEOUT_SECONDS = 15 * 60
+
+
+# --- trusted-owner auto-approve -------------------------------------------
+# A consequential tool normally queues here for someone with eyes on the web
+# panel. But when an AUTHENTICATED owner on a TRUSTED device issues a remote
+# command, that owner IS the someone -- routing it back to the PC to click
+# "approve" is the exact friction that made the phone feel broken. Inside this
+# context a would-be-queued action runs immediately instead.
+#
+# It is a ContextVar, so it is scoped to the single turn that set it and never
+# leaks to a background turn running on another thread. It is enabled ONLY by
+# the remote owner-command executor (every command there already passed the
+# trusted-owner gate), and the high-risk floor in tools.run_tool still holds --
+# a tool whose confidence is unknown is never auto-run this way, so this is not
+# an arbitrary-shell backdoor. Every auto-run is audited.
+_owner_auto_approve: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "zeno_owner_auto_approve", default="")
+
+
+class owner_auto_approve:
+    """Context manager enabling trusted-owner auto-approve for its duration."""
+
+    def __init__(self, reason: str = "trusted-owner") -> None:
+        self._reason = reason or "trusted-owner"
+        self._token: contextvars.Token | None = None
+
+    def __enter__(self) -> "owner_auto_approve":
+        self._token = _owner_auto_approve.set(self._reason)
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        if self._token is not None:
+            _owner_auto_approve.reset(self._token)
+        return False
+
+
+def auto_approve_active() -> str:
+    """The reason string if trusted-owner auto-approve is in effect, else ''."""
+    return _owner_auto_approve.get()
+
+
+# Even WITH a fingerprint step-up, these never auto-run from a remote device --
+# a phone unlock must not be able to fire a catastrophic, irreversible, public
+# or code-execution action on its own. They still run, but only after an
+# explicit desktop confirmation. Everything else consequential (open/close app,
+# browser control, send a message, create a file) runs once the owner scanned.
+_REMOTE_NEVER_AUTORUN: frozenset[str] = frozenset({
+    # arbitrary code / shell / device execution -- section 18 forbids exposing
+    # this from the phone
+    "run_command", "coding_execute", "device_execute", "phone_action",
+    "mcp_action", "skill_run",
+    # irreversible / destructive
+    "delete_file", "move_file", "forget_fact", "forget_relationship",
+    "restore_memory_version", "memory_migrate_to_mem0", "undo_last_actions",
+    "opportunity_delete", "skill_delete", "website_restore_checkpoint",
+    # meta-approval that could rubber-stamp other actions
+    "skill_approve", "skill_disable", "workflow_confirm", "career_profile_update",
+})
+# Whole families that post publicly, move money, or drive security tooling.
+_REMOTE_NEVER_AUTORUN_PREFIXES: tuple[str, ...] = ("security_", "social_", "paid_work_")
+
+
+def remote_auto_run_allowed(tool_name: str) -> bool:
+    """Whether a fingerprint-elevated remote turn may auto-run this tool.
+
+    True for ordinary control/communication tools; False for arbitrary
+    execution, irreversible destruction, public posting, money and security
+    tooling -- those always take an explicit desktop confirmation even after a
+    step-up."""
+    name = str(tool_name or "")
+    if name in _REMOTE_NEVER_AUTORUN:
+        return False
+    return not name.startswith(_REMOTE_NEVER_AUTORUN_PREFIXES)
 
 
 @dataclass
