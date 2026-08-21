@@ -284,9 +284,11 @@ def classify_tool_result(result: Any) -> dict[str, Any]:
     if isinstance(parsed, dict):
         state = str(parsed.get("state") or parsed.get("status") or parsed.get("outcome") or "").strip().casefold()
         if parsed.get("ok") is False or parsed.get("success") is False or state in _FAILED_RESULT_STATES:
-            from reyes_agent.failures import classify
+            from reyes_agent import failures
+            info = failures.explain(text_value)
             return {"outcome": "failed", "verification_state": "failed", "state": state,
-                    "error_category": classify(text_value)}
+                    "error_category": info["category"],
+                    "retryable": info["retryable"], "recovery": info["recovery"]}
         if state in _WAITING_RESULT_STATES:
             return {"outcome": "waiting", "verification_state": "pending", "state": state}
         verified = parsed.get("verified") is True or str(parsed.get("verification_state", "")).casefold() == "verified"
@@ -300,9 +302,11 @@ def classify_tool_result(result: Any) -> dict[str, Any]:
         "could not", "no element matches", "nothing matches", "vision match failed",
         "telegram did not confirm",
     )):
-        from reyes_agent.failures import classify
+        from reyes_agent import failures
+        info = failures.explain(text_value)
         return {"outcome": "failed", "verification_state": "failed", "state": state,
-                "error_category": classify(text_value)}
+                "error_category": info["category"],
+                "retryable": info["retryable"], "recovery": info["recovery"]}
     if any(lowered.startswith(prefix) for prefix in (
         "queued", "pending", "waiting", "accepted for", "approval required",
     )):

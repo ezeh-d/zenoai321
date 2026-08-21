@@ -136,3 +136,15 @@ Net effect: tap "🔒 Tap to unlock actions" (or trigger any consequential
 command) → fingerprint if possible, else a reliable phrase prompt → session
 elevates → the laptop executes. No server/auth logic changed; `stepup/phrase`
 and the elevation model are untouched.
+
+## RECENT CLAUDE CHANGES — build-next stability layer (from Expansion Pack 3 #258)
+
+Building the optimized P0/P1 list one at a time, each self-contained + tested.
+
+**1. FailureClassifier hardened (`failures.py`).** Kept the existing
+`classify(message, status_code)` verbatim (still used by `tools/__init__.py`,
+policy, etc.). ADDED, backward-compatibly: `classify_exception(exc)` (type-first,
+message fallback), `RETRYABLE`/`TRANSIENT` sets, `RECOVERY` hints, `is_retryable`,
+`describe`, `explain`. Shared-file touch: `tools/__init__.py`
+`classify_tool_result` now ADDS `retryable`+`recovery` keys to failed results
+(via `failures.explain`); `error_category` value is unchanged. 46 tests green.
