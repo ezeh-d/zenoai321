@@ -231,6 +231,18 @@ _FAILURE_PATTERN = re.compile(
     re.IGNORECASE | re.MULTILINE)
 
 
+def _note_reputation(tool_name: str, ok: bool, started: float) -> None:
+    """Feed one remote tool outcome (with latency) into the reputation window,
+    so the router can prefer what has been working lately. Best-effort."""
+    try:
+        from reyes_agent import tool_reputation
+
+        tool_reputation.record(
+            tool_name, ok, latency_ms=(time.monotonic() - started) * 1000.0)
+    except Exception:  # noqa: BLE001 -- telemetry must never break a command
+        pass
+
+
 def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     from reyes_agent.tools import TOOLS, run_tool
 
@@ -241,6 +253,7 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
     if entry is None:
         return False, {"error": f"tool '{tool_name}' is not registered on this desktop"}
 
+    started = time.monotonic()
     try:
         builder = ACTION_ARGS.get(action)
         args = builder(payload) if builder else {}
@@ -248,6 +261,7 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
         # permission engine, capability profile, confirmation gate and audit.
         output = str(run_tool(tool_name, args))
     except Exception as exc:  # noqa: BLE001
+        _note_reputation(tool_name, False, started)
         return False, {"error": f"{type(exc).__name__}: {exc}"[:400]}
 
     from reyes_agent.tools import classify_tool_result
@@ -283,6 +297,7 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
               "verification_state": classification["verification_state"]}
     if failed:
         result["error"] = "The application action did not produce verified Windows evidence."
+    _note_reputation(tool_name, not failed, started)
     return (not failed), result
 
 

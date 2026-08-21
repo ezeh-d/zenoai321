@@ -157,3 +157,12 @@ OS-level check (process running via psutil / file on disk), else
 into `desktop_agent._run_tool`: an `open_app` that didn't self-verify is now
 corroborated by "is the process actually running?", upgrading a false failure
 to a verified success on real evidence only. 22 tests green.
+
+**3. ToolReputation (`tool_reputation.py`, NEW).** Bounded rolling window
+(WINDOW=100) of recent tool outcomes -> `reputation(tool)` = success_rate,
+Wilson-lower-bound `confidence` (sample-size aware: 2/2 < 190/200), median/p95
+latency, trailing-failure streak. `best_of([...])` for the router; in-memory,
+thread-safe, never raises. Wired via `desktop_agent._note_reputation` on every
+remote tool run (success/failure + latency). Codex: adopt for all tools by
+calling `tool_reputation.record(name, ok, latency_ms=…)` from `run_tool` if you
+want registry-wide coverage -- the API is stable. 18 tests green.
