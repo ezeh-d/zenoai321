@@ -263,6 +263,22 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
     # enough to tell the phone that the requested Windows state now exists.
     if action in {"open_app", "close_app"} and classification["outcome"] != "completed":
         failed = True
+        if action == "open_app":
+            # Corroborate independently before declaring failure: if the app's
+            # process is actually running now, that IS the postcondition, even
+            # when the tool returned only a model-friendly sentence. This only
+            # ever upgrades a would-be failure to success on real evidence.
+            try:
+                from reyes_agent import action_verifier
+
+                verdict = action_verifier.verify("open_app", args, output)
+                if verdict.verified:
+                    failed = False
+                    classification = {**classification,
+                                      "verification_state": "verified"}
+                    output = f"{output}  [verified: {verdict.evidence}]"
+            except Exception:  # noqa: BLE001 -- corroboration is best-effort
+                pass
     result = {"tool": tool_name, "detail": output[:4000],
               "verification_state": classification["verification_state"]}
     if failed:

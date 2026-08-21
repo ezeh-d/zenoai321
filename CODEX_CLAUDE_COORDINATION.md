@@ -148,3 +148,12 @@ message fallback), `RETRYABLE`/`TRANSIENT` sets, `RECOVERY` hints, `is_retryable
 `describe`, `explain`. Shared-file touch: `tools/__init__.py`
 `classify_tool_result` now ADDS `retryable`+`recovery` keys to failed results
 (via `failures.explain`); `error_category` value is unchanged. 46 tests green.
+
+**2. ActionVerifier (`action_verifier.py`, NEW).** One uniform verdict layer:
+`verify(action, args, result) -> Verdict{verified, verifiable, method, evidence}`.
+Evidence-first (honours a tool's own `ok`+`evidence`), then an independent
+OS-level check (process running via psutil / file on disk), else
+`verifiable=False` -- never a false pass. Extensible via `register()`. Wired
+into `desktop_agent._run_tool`: an `open_app` that didn't self-verify is now
+corroborated by "is the process actually running?", upgrading a false failure
+to a verified success on real evidence only. 22 tests green.
