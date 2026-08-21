@@ -117,3 +117,22 @@ client `unlockActions()` that tries the fingerprint, then falls back to the
 phrase. Your `live-desktop` REMOTE_CONTROL start now calls `unlockActions()` too,
 so remote-control elevation works over the tunnel. For a true fingerprint,
 configure a stable `ZENO_PUBLIC_DOMAIN` (real domain / named tunnel).
+
+## RECENT CLAUDE CHANGES — action-unlock actually works on the phone
+
+The step-up gate (previous section) was correct server-side but unusable from a
+real phone, so consequential actions ("open Slack", "open Chrome", "send a
+message") kept returning `needs_stepup` and looked like missing tools. Two
+client bugs in `static/app.html`, both fixed (Claude domain — phone UI):
+
+1. **`window.prompt()` phrase fallback** — blocked/ignored in mobile browsers
+   and every installed PWA, which is how the phone reaches ZENO. Replaced with
+   `askPhraseInline()`, a self-contained in-page overlay that always works.
+2. **Pill hidden without WebAuthn** — `unlockpill.hidden = !PublicKeyCredential`
+   stranded phrase-only phones (the tunnel case). Now shown when WebAuthn is
+   present OR an unlock phrase is configured (checked via `/auth/unlock/status`).
+
+Net effect: tap "🔒 Tap to unlock actions" (or trigger any consequential
+command) → fingerprint if possible, else a reliable phrase prompt → session
+elevates → the laptop executes. No server/auth logic changed; `stepup/phrase`
+and the elevation model are untouched.

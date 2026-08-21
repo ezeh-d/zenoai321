@@ -605,6 +605,41 @@ function updateUnlockPill(){
 }
 setInterval(updateUnlockPill, 15000);
 
+/* A reliable in-page phrase prompt. window.prompt() is blocked or silently
+   ignored in many mobile browsers and in every installed PWA -- which is exactly
+   how the phone reaches ZENO -- so the action-unlock phrase could never be
+   entered there, and "tap to unlock actions" looked broken. This overlay always
+   works. Resolves the typed phrase, or null if cancelled. */
+function askPhraseInline(message){
+  return new Promise(resolve=>{
+    const wrap=document.createElement("div");
+    wrap.style.cssText="position:fixed;inset:0;z-index:100;display:flex;align-items:center;"+
+      "justify-content:center;background:rgba(0,0,0,.55);padding:20px";
+    const card=document.createElement("div");
+    card.style.cssText="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);"+
+      "padding:18px;width:100%;max-width:340px;box-shadow:0 18px 50px rgba(0,0,0,.5)";
+    card.innerHTML=
+      '<div class="msg" style="font-size:.9rem;margin-bottom:10px;color:var(--ink)"></div>'+
+      '<input type="password" autocomplete="off" '+
+      'style="width:100%;padding:11px 13px;border-radius:12px;border:1px solid var(--line);'+
+      'background:var(--panel2);color:var(--ink);outline:none;min-height:var(--tap)">'+
+      '<div style="display:flex;gap:8px;margin-top:12px">'+
+      '<button type="button" data-x style="flex:1;min-height:var(--tap);border-radius:12px;'+
+      'border:1px solid var(--line);color:var(--dim);background:none">Cancel</button>'+
+      '<button type="button" data-ok style="flex:1;min-height:var(--tap);border-radius:12px;'+
+      'border:0;background:var(--accent);color:#06101f;font-weight:600">Unlock</button></div>';
+    card.querySelector(".msg").textContent=message;
+    const input=card.querySelector("input");
+    const done=v=>{ wrap.remove(); resolve(v); };
+    card.querySelector("[data-ok]").onclick=()=>done(input.value.trim()||null);
+    card.querySelector("[data-x]").onclick=()=>done(null);
+    wrap.addEventListener("click",e=>{ if(e.target===wrap) done(null); });
+    input.addEventListener("keydown",e=>{ if(e.key==="Enter") done(input.value.trim()||null); });
+    wrap.appendChild(card); document.body.appendChild(wrap);
+    setTimeout(()=>input.focus(),50);
+  });
+}
+
 /* Unlock desktop actions. Prefer a real fingerprint (WebAuthn); where the
    origin can't do WebAuthn -- an ephemeral tunnel URL has no stable RP id, which
    is the "origin not allowed" you hit -- fall back to the unlock phrase, which
@@ -614,7 +649,7 @@ async function unlockActions(){
     try { return await stepUp(); }
     catch(e){ /* WebAuthn unavailable here -- fall through to the phrase */ }
   }
-  const phrase = window.prompt("Unlock phrase to enable laptop actions:");
+  const phrase = await askPhraseInline("Unlock phrase to enable laptop actions:");
   if (!phrase) throw new Error("cancelled");
   const st = await call("/api/owner/auth/stepup/phrase",{method:"POST",body:{phrase}});
   S.elevatedUntil = Date.now() + ((st.seconds_left||0)*1000);
@@ -825,8 +860,16 @@ function vChat(m){
 
   const unlock = $("unlockpill");
   if (unlock){
-    unlock.hidden = !window.PublicKeyCredential;
     updateUnlockPill();
+    // Show the pill when actions can actually be unlocked HERE: a real
+    // fingerprint (WebAuthn), OR the owner's unlock phrase -- which works over
+    // any origin, the reliable path on an ephemeral tunnel where WebAuthn's RP
+    // id isn't stable. Hiding it on !WebAuthn stranded phrase-only phones with
+    // no way to authorize a laptop action.
+    const showPill = ok => { unlock.hidden = !(window.PublicKeyCredential || ok); };
+    showPill(false);
+    fetch(api("/api/owner/auth/unlock/status"), {credentials:"include"})
+      .then(r=>r.ok?r.json():null).then(d=>showPill(!!(d&&d.configured))).catch(()=>{});
     unlock.onclick = async () => {
       try { await unlockActions(); }
       catch(e){ S.chat.push({role:"sys", text:"Couldn't unlock: " + (e.message||"cancelled")}); drawLog(); }
