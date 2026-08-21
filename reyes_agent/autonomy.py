@@ -31,7 +31,8 @@ class AutonomyDecision:
 
 _READ_ONLY_PREFIXES = ("list_", "get_", "search_", "read_", "current_", "check_", "mcp_status")
 _READ_ONLY_EXACT = {"system_health", "permission_status", "capability_status", "take_screenshot",
-                    "browser_read", "browser_extract", "browser_screenshot", "coding_inspect", "mcp_read"}
+                    "browser_read", "browser_extract", "browser_screenshot", "coding_inspect", "mcp_read",
+                    "phone_device_status"}
 
 
 def classify_tool(tool_name: str, *, requires_confirmation: bool = False) -> AutonomyDecision:

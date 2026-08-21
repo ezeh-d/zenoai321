@@ -23,7 +23,8 @@ def preflight() -> dict[str, Any]:
 
     paths: dict[str, str] = {}
     for variable in ("ZENO_OWNER_AUTH_DB", "ZENO_DEVICE_LINK_DB",
-                     "ZENO_MEDIA_STORE_DB", "ZENO_WEB_PUSH_DB"):
+                     "ZENO_MEDIA_STORE_DB", "ZENO_ANDROID_PAIRING_DB",
+                     "ZENO_WEB_PUSH_DB"):
         value = os.environ.get(variable, "").strip()
         paths[variable] = value
         if production and not value:

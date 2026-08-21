@@ -221,8 +221,19 @@ def test_the_public_page_cannot_control_the_computer() -> None:
                       "run_tool", "subprocess", "eval("):
         assert forbidden not in page, f"the public page references {forbidden!r}"
 
-    config = (ROOT / "netlify.toml").read_text(encoding="utf-8")
-    assert "[functions]" not in config, "no server-side code should ship with this site"
+    # ZENO Anywhere now has one narrow Netlify rendezvous function. It stores
+    # the current short-lived tunnel URL; it is not a computer-control backend.
+    # Freeze that boundary instead of preserving the obsolete assumption that
+    # the deployment is entirely static.
+    functions = sorted((ROOT / "netlify" / "functions").glob("*.mjs"))
+    assert [item.name for item in functions] == ["endpoint.mjs"]
+    rendezvous = functions[0].read_text(encoding="utf-8")
+    for forbidden in ("/control-computer", "/run-command", "/shell", "/open-file",
+                      "run_tool", "subprocess", "child_process", "spawn(", "eval("):
+        assert forbidden not in rendezvous, \
+            f"the public rendezvous references {forbidden!r}"
+    assert "trycloudflare\\.com" in rendezvous
+    assert "ZENO_ANYWHERE_SECRET" in rendezvous
 
 
 def test_the_deployed_site_ships_a_restrictive_csp() -> None:

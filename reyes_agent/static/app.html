@@ -1186,7 +1186,7 @@ async function vDevices(m){
            <span class="v"><span class="tag ${d.state==="ONLINE"?"ok":"bad"}">${d.state}</span>
              <div class="muted">trust: ${esc(d.approval_state||"UNKNOWN")}</div>
              <div class="muted" style="margin-top:4px">${d.last_heartbeat?ago(d.last_heartbeat):"never seen"}</div>
-             ${d.approval_state==="PENDING"?`<button class="btn sm" style="margin-top:7px" data-ok="${esc(d.device_id)}">Approve</button>`:""}
+             ${d.approval_state==="PENDING"?`<button class="btn sm" style="margin-top:7px" data-ok="${esc(d.device_id)}" data-platform="${esc(d.platform||"")}">Approve</button>`:""}
              <button class="btn danger sm" style="margin-top:7px" data-rev="${esc(d.device_id)}">Revoke</button>
           </span>
         </div>`).join("") : `<div class="na">None yet.</div>`}
@@ -1196,6 +1196,11 @@ async function vDevices(m){
       <input id="dl" type="text" value="My Windows laptop">
       <button class="btn" id="dreg">Register device</button>
       <div id="dout" style="margin-top:12px">${deviceSetupMarkup(S.pendingDeviceSetup)}</div>
+    </div>
+    <div class="card"><h3>Pair Android overlay</h3>
+      <div class="muted">Creates a five-minute, one-use QR and six-digit backup code. The permanent phone credential is not inside the QR.</div>
+      <button class="btn" id="android-pair" style="margin-top:10px">Create Android pairing</button>
+      <div id="android-pair-result" style="margin-top:12px"></div>
     </div>`;
 
   m.querySelectorAll("[data-rev]").forEach(b => b.onclick = async () => {
@@ -1205,9 +1210,22 @@ async function vDevices(m){
   });
   m.querySelectorAll("[data-ok]").forEach(b => b.onclick = async () => {
     b.disabled = true;
-    try { await call("/api/owner/devices/approve", {method:"POST", body:{device_id:b.dataset.ok,scopes:["standard_device"]}}); await refreshStatus(); render(); }
+    const scopes=b.dataset.platform==="android"?["android_control"]:["standard_device"];
+    try { await call("/api/owner/devices/approve", {method:"POST", body:{device_id:b.dataset.ok,scopes}}); await refreshStatus(); render(); }
     catch(e){ b.disabled = false; alert(e.message); }
   });
+  $("android-pair").onclick=async()=>{
+    const button=$("android-pair"),out=$("android-pair-result");button.disabled=true;
+    out.innerHTML=`<div class="muted">Creating a temporary pairing…</div>`;
+    try{
+      const pair=await call("/api/owner/android/pairings",{method:"POST",body:{}});
+      const expires=new Date(pair.expires_at*1000).toLocaleTimeString();
+      out.innerHTML=`<div style="display:grid;grid-template-columns:minmax(120px,180px) 1fr;gap:14px;align-items:center">
+        <img src="${esc(pair.qr_png)}" alt="Temporary ZENO Android pairing QR" style="width:100%;border-radius:12px;background:white;padding:7px">
+        <div><div class="muted">On the same phone, enter:</div><div style="font:700 30px/1.3 ui-monospace,monospace;letter-spacing:5px;color:var(--gold)">${esc(pair.manual_code)}</div>
+        <div class="muted" style="word-break:break-all">Gateway: ${esc(pair.gateway)}</div><div class="muted">Expires ${esc(expires)}. One use only.</div></div></div>`;
+    }catch(e){out.innerHTML=`<div class="na">${esc(e.message)}</div>`;button.disabled=false;}
+  };
 
   $("dreg").onclick = async () => {
     const btn = $("dreg"); btn.disabled = true;

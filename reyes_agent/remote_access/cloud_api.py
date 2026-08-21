@@ -32,6 +32,7 @@ another device's queue.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -41,10 +42,12 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from urllib.parse import quote, urlsplit
 
 from reyes_agent.auth import get_owner_auth
-from reyes_agent.remote_access import (attachment_store, device_link, domains,
-                                       media_store, policy, realtime, web_push)
+from reyes_agent.remote_access import (android_pairing, attachment_store,
+                                       device_link, domains, media_store,
+                                       policy, realtime, web_push)
 
 router = APIRouter(prefix="/api/owner", tags=["owner"])
+logger = logging.getLogger(__name__)
 
 # Actions the desktop agent is willing to perform. The browser may name only
 # these. An action outside this set is refused before it reaches a queue --
@@ -58,6 +61,7 @@ REGISTERED_ACTIONS: dict[str, str] = {
     "conversation_snapshot": "READ_ONLY",
     "voice_turn": "READ_ONLY",
     "analyze_attachment": "READ_ONLY",
+    "android_action": "STANDARD_DEVICE",
     "open_app": "STANDARD_DEVICE",  # open a named application
     "close_app": "SENSITIVE_DEVICE",
     "run_automation": "SENSITIVE_DEVICE",
@@ -177,6 +181,49 @@ def auth_login(request: Request, payload: dict = Body(...)) -> JSONResponse:
         raise HTTPException(status_code=429 if result.retry_after else 401,
                             detail=result.as_dict())
     return _session_response(result, request)
+
+
+@router.post("/android/pairing/claim")
+def android_pairing_claim(request: Request,
+                          payload: dict = Body(...)) -> dict[str, Any]:
+    """Consume a temporary QR/manual credential and register one phone.
+
+    The returned permanent token is shown exactly once and the Android app
+    seals it with Android Keystore. The device remains PENDING until a trusted
+    owner session approves the android_control scope.
+    """
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    if (request.url.scheme != "https" and forwarded != "https" and
+            not domains.dev_mode()):
+        raise HTTPException(status_code=400, detail="Android pairing requires HTTPS.")
+    rate = policy.check_rate("pair", _client_identity(request))
+    if not rate.allowed:
+        raise HTTPException(status_code=429, detail=rate.as_dict())
+    try:
+        android_pairing.get_store().consume(str(payload.get("credential", "")))
+        registered = device_link.get_link().register(
+            label=str(payload.get("label", "Android phone"))[:80],
+            platform="android", approved=False, scopes=[],
+            protocol_version=str(payload.get("protocol_version", "1.0.0"))[:32])
+    except android_pairing.PairingError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        web_push.get_service().enqueue(
+            "New Android companion", "Open ZENO Devices to approve the phone.",
+            kind="security")
+    except Exception as exc:
+        # Pairing and one-time token delivery must not become unrecoverable
+        # merely because an optional notification provider is unavailable.
+        logger.warning("Android pairing notification unavailable: %s",
+                       type(exc).__name__)
+    return {
+        "ok": True,
+        "device_id": registered["device_id"],
+        "token": registered["token"],
+        "approval_state": registered["approval_state"],
+    }
 
 
 @router.post("/auth/refresh")
@@ -529,6 +576,28 @@ def register(app) -> None:
     def devices() -> dict[str, Any]:
         return {"devices": device_link.get_link().devices()}
 
+    @protected.post("/android/pairings")
+    def create_android_pairing(
+            request: Request,
+            token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+        info = get_owner_auth().session_info(token)
+        if not info or not info.get("trusted"):
+            raise HTTPException(status_code=403, detail="Trusted browser required.")
+        origin = str(request.headers.get("origin", "") or request.base_url).rstrip("/")
+        if not domains.is_allowed_origin(origin):
+            raise HTTPException(status_code=403, detail="Pairing origin is not allowed.")
+        try:
+            offer = android_pairing.get_store().create(
+                browser_device=str(info["device_id"]), gateway=origin)
+            # The QR already contains the one-time high-entropy token. Do not
+            # duplicate it as readable JSON fields in the browser response.
+            return {"ok": True, **{key: offer[key] for key in (
+                "id", "manual_code", "expires_at", "gateway", "qr_png")}}
+        except android_pairing.PairingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @protected.get("/browser-devices")
     def browser_devices() -> dict[str, Any]:
         return {"devices": get_owner_auth().browser_devices()}
@@ -575,9 +644,12 @@ def register(app) -> None:
     @protected.post("/devices/register")
     def register_device(payload: dict = Body(...)) -> dict[str, Any]:
         """Returns the device secret ONCE. It is never retrievable again."""
+        platform = str(payload.get("platform", "windows")).strip().casefold()
+        if platform not in {"windows", "android"}:
+            raise HTTPException(status_code=400, detail="Unsupported device platform.")
         return device_link.get_link().register(
             label=str(payload.get("label", "Windows"))[:80],
-            platform=str(payload.get("platform", "windows"))[:32])
+            platform=platform)
 
     @protected.post("/devices/revoke")
     def revoke_device(payload: dict = Body(...)) -> dict[str, Any]:
@@ -585,9 +657,12 @@ def register(app) -> None:
 
     @protected.post("/devices/approve")
     def approve_device(payload: dict = Body(...)) -> dict[str, Any]:
-        scopes = payload.get("scopes") if isinstance(payload.get("scopes"), list) else []
+        device_id = str(payload.get("device_id", ""))
+        state = device_link.get_link().device_state(device_id)
+        scopes = (["android_control"] if state.get("platform") == "android" else
+                  (payload.get("scopes") if isinstance(payload.get("scopes"), list) else []))
         return {"ok": device_link.get_link().approve_device(
-            str(payload.get("device_id", "")), scopes=scopes)}
+            device_id, scopes=scopes)}
 
     @protected.post("/devices/rename")
     def rename_device(payload: dict = Body(...)) -> dict[str, Any]:

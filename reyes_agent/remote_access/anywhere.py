@@ -258,8 +258,15 @@ def tunnel_connection_healthy(log_path: Path) -> bool:
         low = line.lower()
         if "registered tunnel connection" in low:
             last_up = i
+        # Cloudflared can log "Failed to initialize DNS local resolver: ...
+        # i/o timeout" *after* its QUIC edge connection is registered. That
+        # optional resolver failure does not take the tunnel down and must not
+        # override the later/real connection state.
+        dns_resolver_timeout = ("failed to initialize dns local resolver" in low and
+                                "i/o timeout" in low)
         if ("unregistered tunnel connection" in low or "lost connection with the edge" in low
-                or "connection terminated" in low or "i/o timeout" in low
+                or "connection terminated" in low
+                or ("i/o timeout" in low and not dns_resolver_timeout)
                 or "failed to serve" in low):
             last_down = i
     return last_up >= 0 and last_up >= last_down

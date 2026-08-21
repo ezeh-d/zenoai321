@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -77,10 +78,39 @@ ACTION_CATEGORIES = {
     "conversation_snapshot": "READ_ONLY",
     "voice_turn": "READ_ONLY",
     "analyze_attachment": "READ_ONLY",
+    "android_action": "STANDARD_DEVICE",
     "open_app": "STANDARD_DEVICE",
     "close_app": "SENSITIVE_DEVICE",
     "run_automation": "SENSITIVE_DEVICE",
 }
+
+ANDROID_OPERATIONS = frozenset({
+    "BACK", "HOME", "RECENTS", "NOTIFICATIONS", "QUICK_SETTINGS",
+    "SCROLL_UP", "SCROLL_DOWN", "OPEN_APP",
+})
+_ANDROID_PACKAGE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$")
+_ANDROID_FORBIDDEN_PACKAGES = frozenset({
+    "com.android.settings", "com.android.permissioncontroller",
+    "com.google.android.permissioncontroller", "com.android.packageinstaller",
+    "com.google.android.packageinstaller", "com.zeno.companion",
+})
+
+
+def validate_android_action(payload: dict[str, Any]) -> dict[str, str]:
+    """Return the canonical, deliberately tiny native phone action."""
+    if set(payload) - {"operation", "target", "summary"}:
+        raise ValueError("Android action contains unsupported fields.")
+    operation = str(payload.get("operation", "")).strip().upper()
+    target = str(payload.get("target", "")).strip()
+    if operation not in ANDROID_OPERATIONS:
+        raise ValueError("Unsupported Android action.")
+    if operation == "OPEN_APP":
+        if (not _ANDROID_PACKAGE.fullmatch(target) or
+                target.casefold() in _ANDROID_FORBIDDEN_PACKAGES):
+            raise ValueError("Android app target is invalid or security-sensitive.")
+    elif target:
+        raise ValueError("This Android action does not accept a target.")
+    return {"operation": operation, "target": target}
 
 APPROVAL_PENDING, APPROVAL_APPROVED, APPROVAL_DENIED = (
     "pending", "approved", "denied")
@@ -513,6 +543,16 @@ class DeviceLink:
         payload = payload or {}
         if not isinstance(payload, dict):
             raise TypeError("Command payload must be an object.")
+        if action == "android_action":
+            if str(device.get("platform", "")).casefold() != "android":
+                raise ValueError("Android actions require an Android target device.")
+            if "android_control" not in set(device.get("scopes") or []):
+                raise PermissionError("Android control scope is not approved for this device.")
+            canonical = validate_android_action(payload)
+            payload = {**canonical, "summary": self._clean(
+                payload.get("summary") or canonical["operation"], 120)}
+        elif str(device.get("platform", "")).casefold() == "android":
+            raise ValueError("The Android companion accepts only bounded Android actions.")
         payload_text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         if len(payload_text.encode("utf-8")) > 64 * 1024:
             raise ValueError("Command payload exceeds 64 KiB.")

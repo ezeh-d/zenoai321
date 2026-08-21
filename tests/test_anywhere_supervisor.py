@@ -85,6 +85,16 @@ def test_tunnel_is_unhealthy_when_the_log_last_shows_a_loss(tmp_path):
     assert anywhere.tunnel_connection_healthy(log) is False
 
 
+def test_nonfatal_local_dns_resolver_timeout_does_not_hide_registered_tunnel(tmp_path):
+    log = tmp_path / "cf.log"
+    log.write_text(
+        '{"level":"info","message":"Registered tunnel connection"}\n'
+        '{"level":"error","error":"lookup region1.v2.argotunnel.com: i/o timeout",'
+        '"message":"Failed to initialize DNS local resolver"}\n',
+        encoding="utf-8")
+    assert anywhere.tunnel_connection_healthy(log) is True
+
+
 def test_a_missing_cloudflared_log_is_unhealthy_not_a_crash(tmp_path):
     assert anywhere.tunnel_connection_healthy(tmp_path / "absent.log") is False
 

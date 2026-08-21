@@ -107,3 +107,10 @@ models/piper/*.wav
 
 # Local Netlify folder
 .netlify
+
+# Native Android Companion build/tooling output
+**/.gradle/
+**/local.properties
+**/build/
+*.apk
+*.aab

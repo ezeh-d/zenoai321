@@ -93,6 +93,7 @@ ZENO_WEB_PUSH_PUBLIC_KEY=
 ZENO_WEB_PUSH_PRIVATE_KEY=
 ZENO_WEB_PUSH_SUBJECT=
 ZENO_WEB_PUSH_ENCRYPTION_KEY=
+ZENO_ANDROID_PAIRING_DB=
 WEB_CONCURRENCY=1
 ```
 
@@ -163,6 +164,34 @@ Do not increase the worker/replica count while SQLite is authoritative.
 Horizontal scale still requires transactional PostgreSQL repositories,
 distributed rate limiting and shared pub/sub.
 
+## Native Android overlay companion
+
+The PWA remains the full ZENO Anywhere interface. The optional native project
+at `android/zeno-companion` adds the Android capability a PWA cannot provide:
+an owner-enabled `TYPE_APPLICATION_OVERLAY` mini-orb backed by a visible
+foreground-service notification. It does not expose the Windows gateway to the
+phone and does not add an inbound listener to the PC.
+
+Pairing is initiated by a trusted PWA session under **Devices → Pair Android
+overlay**. The QR and six-digit fallback are single-use, expire after five
+minutes and contain no permanent device credential. Android receives the
+permanent DeviceLink token only after atomic consumption of that offer and
+encrypts it using Android Keystore. The new device remains pending until the
+owner approves it in the PWA, with only the `android_control` scope.
+
+The explicitly enabled Accessibility service accepts only Back, Home, Recents,
+notification/quick-settings shade, scrolling a visible container, and opening
+a normal launchable app. Arbitrary taps, typing, gesture coordinates, sending,
+deleting, purchases, package installation, permission/settings changes, shell
+commands and credential entry are structurally rejected in the gateway, device
+queue and Android app. Agent-facing phone actions retain ZENO's confirmation
+boundary and success is reported only after the Android device returns evidence.
+
+Build and installation instructions are in `android/zeno-companion/README.md`.
+Android may hide overlays on security-sensitive screens, and games may prohibit
+overlays or Accessibility services. ZENO honors those controls and does not
+bypass them.
+
 ## Built and verified
 
 - scrypt owner password, rate limiting, lockout and nonce replay protection;
@@ -185,6 +214,8 @@ distributed rate limiting and shared pub/sub.
   providers, generic lock-screen-safe messages and dead-subscription cleanup;
 - real allow-listed graceful app closing and saved approved workflow replay;
 - exact-origin credentialed CORS, secure cookies and security headers.
+- opt-in native Android overlay with Keystore credentials, single-use pairing,
+  visible foreground-service disclosure and a tightly bounded action allowlist.
 
 ## Honest operating limits
 
@@ -198,6 +229,9 @@ distributed rate limiting and shared pub/sub.
 - A real production hostname, TLS, Render/cloud account, physical phone PWA
   install, microphone permission and passkey ceremony require the owner's
   actual domain/device/hosting credentials and cannot be simulated by tests.
+- Native overlay installation, Android permission ceremonies and behavior over
+  a particular game require physical-device acceptance. Secure/DRM/payment or
+  policy-restricted screens may suppress the overlay by design.
 - The scheduled quick-tunnel fallback is self-healing but not permanently
   address-stable. Netlify deployment and its environment secret require an
   authenticated owner Netlify session; source code cannot supply that access.

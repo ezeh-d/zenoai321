@@ -1608,3 +1608,45 @@ Android/Chrome background policy. Continuous camera/video understanding,
 generic audio/video file analysis and physical-phone camera/passkey acceptance
 are not claimed by this increment; authenticated SSE/Web Push and the explicit
 camera/document path are the implemented, tested surface.
+
+---
+
+## ZENO Native Android Overlay Companion — IMPLEMENTED WITH OS SAFETY LIMITS (2026-08-21)
+
+ZENO Anywhere now has one optional native Android companion layered on the
+existing PWA and DeviceLink authority. The PWA remains the complete phone UI;
+the native application supplies only the system overlay and the small set of
+basic phone controls a browser cannot provide. Its draggable mini-orb uses an
+owner-granted `TYPE_APPLICATION_OVERLAY`, a visible foreground-service
+notification, stored/clamped position and a single low-frequency health and
+command loop. It does not animate continuously, steal focus or create a second
+dashboard.
+
+Pairing is initiated only from a trusted PWA browser. The QR carries an HTTPS
+gateway origin and short-lived high-entropy credential; a six-digit manual
+fallback is also available. Offers expire in five minutes, only hashes are
+stored, one new offer invalidates its predecessor, consumption is atomic and
+the permanent device credential is returned once and encrypted with Android
+Keystore. Android devices remain pending until owner approval and receive only
+the `android_control` DeviceLink scope.
+
+The action surface is deliberately exact: Back, Home, Recents, notifications,
+quick settings, scroll up/down and open a normal launchable app. Arbitrary taps,
+typing, coordinates, gestures, purchases, sends, deletion, settings/permission
+changes, installers, shell commands and credentials are rejected independently
+by the cloud/device schema and the native app. Agent tools require confirmation;
+successful execution is reported only after real device evidence returns.
+
+**Verification:** 26 Python pairing/policy/API/DeviceLink tests cover single-use
+and expiry behavior, scope and platform isolation, disallowed action families,
+real claim/acknowledge/complete evidence and owner approval. Three native JUnit
+tests exercise the duplicate on-device allowlist. The Kotlin project targets
+API 35 and its Gradle 8.9 test/build produced a valid v2-signed debug APK. The
+complete maintained ZENO suite passed 1,577/1,577. Physical-phone install,
+pairing, overlay permission and per-game acceptance remain owner/device tests.
+
+**Intentional limits:** Android, Family Link and individual apps remain the
+permission authority. Lock, permission, payment, DRM and other secure screens
+may suppress overlays; some games prohibit overlays or Accessibility services.
+ZENO does not bypass those controls and does not claim autonomous gameplay or
+unrestricted phone control.

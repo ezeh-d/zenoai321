@@ -22,6 +22,8 @@ services:
         value: /var/lib/zeno/devices.sqlite
       - key: ZENO_MEDIA_STORE_DB
         value: /var/lib/zeno/media.sqlite
+      - key: ZENO_ANDROID_PAIRING_DB
+        value: /var/lib/zeno/android-pairing.sqlite
       - key: ZENO_WEB_PUSH_DB
         value: /var/lib/zeno/push.sqlite
       - key: ZENO_PUBLIC_DOMAIN

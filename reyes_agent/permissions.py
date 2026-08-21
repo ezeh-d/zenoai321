@@ -143,6 +143,7 @@ TOOL_CAPABILITY: dict[str, str] = {
     "skill_run": "plugin_exec",
     "device_observe": "vision",
     "device_execute": "desktop_automation",
+    "phone_action": "desktop_automation",
     "episodic_search": "filesystem_read",
     "read_document_structured": "filesystem_read",
     "knowledge_graph_query": "filesystem_read",

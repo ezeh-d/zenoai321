@@ -8,3 +8,4 @@ python-multipart>=0.0.9
 webauthn>=3.0
 cryptography>=47.0
 pywebpush>=2.0
+qrcode[pil]>=8.2

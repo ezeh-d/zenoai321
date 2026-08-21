@@ -183,6 +183,7 @@ TOOL_GROUPS: dict[str, str] = {
     "coding_inspect": "coding", "coding_execute": "coding",
     "mcp_status": "mcp", "mcp_discover": "mcp", "mcp_read": "mcp", "mcp_action": "mcp",
     "device_status": "devices", "device_observe": "devices", "device_execute": "devices",
+    "phone_device_status": "devices", "phone_action": "devices",
     # Sent to the model EVERY turn unless listed here. The project already
     # measured this: ~5.4s per turn at 93 tools versus ~1.5s at 5. These four
     # are setup and recovery -- reached by name when needed, never mid-
@@ -621,7 +622,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import anime_tools, animation_tools, awareness_tools, creative_market_tools, blender, browser, build, calendar, campaign_tools, career_tools, coding_system, social_tools, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, language_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, opportunity_tools, paid_work_tools, agent_identity, evidence_tools, mode_tools, messaging_tools, security_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import android_tools, anime_tools, animation_tools, awareness_tools, creative_market_tools, blender, browser, build, calendar, campaign_tools, career_tools, coding_system, social_tools, companion_tools, council_tools, design, devices, email_tools, intelligence_tools, investing, knowledge_tools, language_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, opportunity_tools, paid_work_tools, agent_identity, evidence_tools, mode_tools, messaging_tools, security_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so
