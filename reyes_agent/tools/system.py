@@ -47,6 +47,14 @@ _CLOSE_APP_PROCESSES: dict[str, frozenset[str]] = {
     "telegram": frozenset({"telegram.exe"}),
     "whatsapp": frozenset({"whatsapp.exe"}),
 }
+# Launch verification may safely recognise Explorer even though close_app
+# must never be allowed to close the Windows shell.  Keep the two policies
+# separate so adding launch evidence cannot widen destructive control.
+_OPEN_APP_PROCESSES: dict[str, frozenset[str]] = {
+    **_CLOSE_APP_PROCESSES,
+    "explorer": frozenset({"explorer.exe"}),
+    "file explorer": frozenset({"explorer.exe"}),
+}
 _PROTECTED_CLOSE_NAMES = frozenset({
     "zeno", "zeno.exe", "reyes", "reyes.exe", "python", "python.exe",
     "pythonw", "pythonw.exe", "webview", "webview2", "msedgewebview2",
@@ -89,6 +97,12 @@ def _visible_windows() -> list[tuple[int, int, str]]:
 def _verify_app_open(expected: str, before_pids: set[int], *, timeout_s: float = 6.0) -> str:
     target = Path(str(expected)).stem.casefold().replace(".exe", "").strip()
     compact = "".join(ch for ch in target if ch.isalnum())
+    known_processes = {
+        name.casefold()
+        for alias, names in _OPEN_APP_PROCESSES.items()
+        if alias == target
+        for name in names
+    }
     deadline = time.monotonic() + max(0.2, timeout_s)
     while time.monotonic() < deadline:
         processes: dict[int, str] = {}
@@ -96,20 +110,22 @@ def _verify_app_open(expected: str, before_pids: set[int], *, timeout_s: float =
             try:
                 name = str(process.info.get("name") or "")
                 processes[int(process.info["pid"])] = name
-                process_compact = "".join(ch for ch in Path(name).stem.casefold() if ch.isalnum())
-                if compact and (process_compact == compact or (
-                    len(compact) >= 5 and compact in process_compact
-                )):
-                    return f"process {name} (PID {process.info['pid']}) exists"
             except (psutil.Error, OSError, ValueError):
                 continue
-        for _hwnd, pid, title in _visible_windows():
+        for hwnd, pid, title in _visible_windows():
             title_compact = "".join(ch for ch in title.casefold() if ch.isalnum())
-            if (compact and len(compact) >= 4 and compact in title_compact) or (
-                pid not in before_pids and pid in processes and compact
-                and compact in "".join(ch for ch in Path(processes[pid]).stem.casefold() if ch.isalnum())
-            ):
-                return f"visible window '{title[:100]}' (PID {pid}) exists"
+            process_name = processes.get(pid, "")
+            process_compact = "".join(
+                ch for ch in Path(process_name).stem.casefold() if ch.isalnum())
+            exact_known_process = process_name.casefold() in known_processes
+            title_matches = compact and len(compact) >= 4 and compact in title_compact
+            new_matching_process = (
+                pid not in before_pids and compact and
+                (process_compact == compact or
+                 (len(compact) >= 5 and compact in process_compact)))
+            if exact_known_process or title_matches or new_matching_process:
+                return (f"visible window '{title[:100]}' (HWND {hwnd}, PID {pid}) "
+                        f"owned by {process_name or 'a matching app'} exists")
         time.sleep(0.1)
     return ""
 
@@ -316,7 +332,8 @@ def open_app(name_or_path: str) -> str:
         evidence = _verify_app_open(name_or_path, before_pids)
         if evidence:
             return f"Opened '{name_or_path}'; postcondition verified: {evidence}."
-        return f"Launch request for '{name_or_path}' returned, but ZENO could not verify a matching process or window."
+        return (f"Failed: the launch request for '{name_or_path}' returned, but ZENO "
+                "could not verify a matching visible Windows window.")
     except OSError:
         pass
 
@@ -331,7 +348,8 @@ def open_app(name_or_path: str) -> str:
         evidence = _verify_app_open(display, before_pids)
         if evidence:
             return f"Opened '{display}'; postcondition verified: {evidence}."
-        return f"Launch request for '{display}' returned, but ZENO could not verify a matching process or window."
+        return (f"Failed: the launch request for '{display}' returned, but ZENO "
+                "could not verify a matching visible Windows window.")
     except OSError as exc:
         return f"Found '{display}' but couldn't launch it: {exc}"
 

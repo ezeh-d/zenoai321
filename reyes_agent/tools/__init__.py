@@ -492,6 +492,25 @@ def _autonomy_allows(name: str) -> bool:
     return permissions.check(name) == permissions.ENABLED
 
 
+def _canonical_tool_input(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Repair a tiny set of safe provider argument aliases.
+
+    Providers are expected to follow the published JSON schema, but an actual
+    ZENO Anywhere incident showed four consecutive ``open_app`` calls using
+    ``name``, ``app_name``, ``app`` and ``target`` instead of the registered
+    ``name_or_path`` field.  Each call therefore returned without launching
+    anything.  Accept exactly one string alias and no additional fields; all
+    other malformed input still reaches the normal fail-closed executor.
+    """
+    if name != "open_app" or "name_or_path" in tool_input or len(tool_input) != 1:
+        return tool_input
+    alias = next(iter(tool_input), "")
+    value = tool_input.get(alias)
+    if alias in {"name", "app_name", "app", "target"} and isinstance(value, str):
+        return {"name_or_path": value}
+    return tool_input
+
+
 def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     """The gated entry point the agent core calls for every tool request.
 
@@ -503,6 +522,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
     tool = TOOLS.get(name)
     if tool is None:
         return f"Error: no tool named '{name}' is registered."
+    tool_input = _canonical_tool_input(name, tool_input)
 
     # The model only sees a scoped tool list, but model output is untrusted.
     # Enforce the active specialist/worker profile again at the execution

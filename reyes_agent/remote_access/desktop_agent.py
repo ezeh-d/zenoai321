@@ -123,7 +123,7 @@ _DEFAULT_REMOTE_APPS = {
     "calculator": "calculator", "calc": "calculator",
     "chrome": "chrome", "google chrome": "chrome",
     "visual studio code": "Visual Studio Code", "vs code": "Visual Studio Code",
-    "vscode": "Visual Studio Code", "notepad": "notepad",
+    "vscode": "Visual Studio Code", "notepad": "notepad", "note pad": "notepad",
     "file explorer": "explorer", "explorer": "explorer",
 }
 
@@ -167,6 +167,40 @@ def _args_close_app(p: dict[str, Any]) -> dict[str, Any]:
     if requested not in _REMOTE_CLOSE_APPS:
         raise ValueError("application is not in the fixed remote close allow-list")
     return {"name": requested}
+
+
+_DIRECT_APP_REQUEST = re.compile(
+    r"^\s*(?:zeno[\s,:-]+)?(?:please\s+)?"
+    r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?"
+    r"(?:open(?:\s+up)?|launch|start)\s+(?:the\s+)?(?P<app>.+?)"
+    r"(?:\s+(?:app|application))?"
+    r"(?:\s+(?:on|in)\s+(?:(?:the|my)\s+)?"
+    r"(?:system|computer|pc|desktop|laptop))?"
+    r"(?:\s+for\s+me)?[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _direct_remote_app_request(text: str) -> dict[str, str] | None:
+    """Recognise one narrow, allow-listed phone app-launch command.
+
+    A remote owner saying ``open Notepad`` should not need a model round just
+    to select the already-registered ``open_app`` tool.  More importantly, a
+    model must not be allowed to guess several invalid argument names and
+    then claim the app opened.  This parser accepts only an explicit launch
+    imperative whose entire target resolves through the same remote app
+    allow-list; paths, commands and compound requests fall through safely.
+    """
+    match = _DIRECT_APP_REQUEST.fullmatch(" ".join(str(text or "").split()))
+    if match is None:
+        return None
+    requested = " ".join(match.group("app").split()).casefold()
+    selected = _remote_apps().get(requested)
+    if selected is None:
+        return None
+    # Feed the canonical value back through _args_open_app.  The network still
+    # never supplies a raw tool argument dictionary.
+    return {"name": selected}
 
 
 ACTION_ARGS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -224,8 +258,16 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
     if waiting:
         return False, {"tool": tool_name, "detail": output[:4000],
                        "error": "Tool is still waiting for local confirmation; it did not run."}
-    return (not failed), {"tool": tool_name, "detail": output[:4000],
-                          "verification_state": classification["verification_state"]}
+    # Effectful app operations have a real postcondition contract.  A normal
+    # Python return, process spawn request, or model-friendly sentence is not
+    # enough to tell the phone that the requested Windows state now exists.
+    if action in {"open_app", "close_app"} and classification["outcome"] != "completed":
+        failed = True
+    result = {"tool": tool_name, "detail": output[:4000],
+              "verification_state": classification["verification_state"]}
+    if failed:
+        result["error"] = "The application action did not produce verified Windows evidence."
+    return (not failed), result
 
 
 def _run_remotely_approved_tool(action: str, payload: dict[str, Any], *,
@@ -291,6 +333,33 @@ def _exec_ask(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     if not question:
         return False, {"error": "no question supplied"}
     try:
+        direct_app = _direct_remote_app_request(question)
+        if direct_app is not None:
+            # The gateway already classified the original natural-language
+            # request and applied trusted-owner step-up.  Keep the existing
+            # tool permission gate here as defence in depth, but bypass the
+            # LLM: app launch is deterministic and must return real evidence.
+            if payload.get("_owner_elevated"):
+                from reyes_agent import confirmation
+
+                with confirmation.owner_auto_approve("trusted-owner-phone"):
+                    ok, result = _run_tool("open_app", direct_app)
+            else:
+                ok, result = _run_tool("open_app", direct_app)
+            if not ok:
+                return False, {**result, "intent": "open_app",
+                               "local_fast_path": True}
+            label = str(direct_app["name"])
+            return True, {
+                "answer": f"{label.title()} is open. I verified its Windows window.",
+                "tool_calls": [{"name": "open_app",
+                                "input": _args_open_app(direct_app)}],
+                "tool_result": result.get("detail", ""),
+                "verification_state": "verified",
+                "intent": "open_app",
+                "local_fast_path": True,
+            }
+
         from reyes_agent import agent_presence, web
 
         # Presentation/session commands (for example "call STARK" or
