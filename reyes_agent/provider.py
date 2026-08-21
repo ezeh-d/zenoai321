@@ -538,6 +538,45 @@ _RUNNERS = {
 _PRODUCTION_RUNNERS = dict(_RUNNERS)
 
 
+def warm() -> dict[str, bool]:
+    """Pre-import the provider SDK and build the configured clients up front.
+
+    The OpenAI SDK is imported lazily on the first turn (see ``_openai_module``)
+    and reading the whole package off disk costs seconds. That import used to
+    happen INSIDE the first conversation turn, which holds the global turn lock
+    -- so every other turn and HTTP request queued behind a one-off disk read,
+    and the server looked frozen for its first ~20-40s of real use. Doing it
+    here, once, on a background thread that never touches the turn lock, removes
+    that stall.
+
+    Network-free: it constructs clients but sends no request, so it cannot fail
+    on a flaky connection and cannot be mistaken for provider health. A missing
+    key simply skips that provider."""
+    warmed: dict[str, bool] = {}
+    # One import backs openai, xai, gemini and ollama; it is the expensive step.
+    try:
+        _openai_module()
+        warmed["openai_sdk"] = True
+    except Exception:  # noqa: BLE001 -- warming must never raise into boot
+        warmed["openai_sdk"] = False
+    for name, getter in (
+        ("gemini", _get_gemini_client), ("xai", _get_xai_client),
+        ("openai", _get_openai_client), ("ollama", _get_ollama_client),
+    ):
+        try:
+            getter()
+            warmed[name] = True
+        except Exception:  # noqa: BLE001 -- unconfigured provider, skip quietly
+            warmed[name] = False
+    try:
+        if config.ANTHROPIC_API_KEY:
+            _get_anthropic_client()
+            warmed["anthropic"] = True
+    except Exception:  # noqa: BLE001
+        warmed["anthropic"] = False
+    return warmed
+
+
 def run_turn(
     history: list[dict],
     system: str = config.SYSTEM_PROMPT,

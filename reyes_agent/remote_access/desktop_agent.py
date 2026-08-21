@@ -46,10 +46,17 @@ log = logging.getLogger(__name__)
 
 # Backoff: fast enough to feel live, slow enough not to hammer a gateway that
 # is down. Jitter stops every device retrying in lockstep after an outage.
-POLL_IDLE_S = 3.0
+# The idle poll is what a just-queued command waits for before it is claimed;
+# claims are cheap loopback calls, so keep it short for a live phone->desktop
+# feel (worst-case claim wait ~= this value).
+POLL_IDLE_S = 1.0
 BACKOFF_START_S = 2.0
 BACKOFF_MAX_S = 60.0
 HEARTBEAT_EVERY_S = 20.0
+# While a slow interactive command runs, the connector re-checks completion on
+# this cadence and, each time work is still running, sends a BUSY heartbeat so
+# the gateway does not mark the device idle mid-turn.
+BUSY_HEARTBEAT_EVERY_S = 10.0
 VOICE_MEDIA_READ_PATH = "/api/owner/device/media/read"
 VOICE_MEDIA_WRITE_PATH = "/api/owner/device/media/write"
 ATTACHMENT_READ_PATH = "/api/owner/device/attachment/read"
@@ -630,25 +637,54 @@ class DesktopAgent:
         return {"device_id": self.config.device_id, "token": self.config.token}
 
     def _execute_with_heartbeat(self, action: str, operation: Callable[[], Any]) -> Any:
-        """Run slow finite work on the bounded pool while this connector stays alive."""
-        from reyes_agent.worker_pool import PRIORITY_BRAIN, PRIORITY_VOICE, get_worker_pool
+        """Run an interactive command on a DEDICATED thread -- never the shared
+        worker pool -- so a phone command starts at once instead of queueing
+        behind background brain work for one of the pool's few slots.
 
+        That queue-wait was the entire reason a phone->desktop turn took 20-30s
+        while the identical turn over /api/chat returned in ~2s: the turn itself
+        is fast, but on the pool it waited for a free worker. A pool slot can be
+        held by work that never touches the turn's global lock (a provider warm-
+        up, a mission, a maintenance job), so the turn could not even begin.
+        Off the pool it needs only that lock, which is usually free.
+
+        Keeping the enclosing turn off the pool also hands every pool slot to its
+        own delegate fan-out (agent.py submits delegates to the pool) instead of
+        self-starving one slot. The connector stays alive by sending BUSY
+        heartbeats while the work runs; only one command is ever in flight, so a
+        thread per command is bounded."""
         timeout = 160.0 if action in {"ask", "voice_turn", "analyze_attachment"} else 90.0
-        handle = get_worker_pool().submit(
-            operation, name=f"remote:{action}",
-            priority=PRIORITY_VOICE if action == "voice_turn" else PRIORITY_BRAIN,
-            timeout=timeout, retries=0)
-        while not handle.wait(10.0):
+        outcome: dict[str, Any] = {}
+        done = threading.Event()
+
+        def _runner() -> None:
+            try:
+                outcome["value"] = operation()
+            except Exception as exc:  # noqa: BLE001 -- re-raised to the caller below
+                outcome["error"] = exc
+            finally:
+                done.set()
+
+        worker = threading.Thread(target=_runner, name=f"zeno-remote-{action}",
+                                  daemon=True)
+        worker.start()
+        deadline = time.monotonic() + timeout
+        while not done.wait(BUSY_HEARTBEAT_EVERY_S):
             if self._stop.is_set():
-                handle.cancel()
+                # A Python thread cannot be force-killed; it is a daemon and dies
+                # with the process. Fail the command rather than hang the loop.
                 raise RuntimeError("desktop connector is shutting down")
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"remote '{action}' exceeded {int(timeout)}s")
             try:
                 self._post("/api/owner/device/heartbeat",
                            {**self._auth(), "state": "BUSY",
                             "detail": action[:80]}, timeout=8.0)
             except Exception as exc:  # noqa: BLE001 -- work result remains authoritative
                 log.warning("busy heartbeat failed for %s: %s", action, type(exc).__name__)
-        return handle.result()
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
 
     # ---- loop -----------------------------------------------------------
     def start(self) -> None:

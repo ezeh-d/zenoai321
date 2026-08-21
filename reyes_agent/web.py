@@ -296,6 +296,36 @@ def _boot_background_services() -> None:
 
         _try("voice-realtime-cache", _queue_ack_warm)
 
+    # Warm the brain path once, off the interface-critical route, so the FIRST
+    # phone->desktop turn after a restart is as quick as later ones. A cold
+    # server pays ~15-25s to import the agent/tool stack, build the provider
+    # client and finish the first model handshake; a single throwaway turn on a
+    # PRIVATE history pays that cost up front and never touches the real
+    # conversation. It runs on a dedicated daemon thread, never the worker pool
+    # -- the same reason interactive remote commands avoid it (a boot-time pool
+    # slot must stay free for real work).
+    if os.environ.get("ZENO_BRAIN_PREWARM", "true").strip().casefold() not in {"0", "false", "no", "off"}:
+        def _warm_brain() -> None:
+            try:
+                time.sleep(4.0)   # let interface-critical boot settle first
+                # 1) Deterministically pre-import the provider SDK and build the
+                #    configured clients (network-free). This alone removes the
+                #    freeze where the first real turn stalls on a cold
+                #    `import openai` WHILE holding the turn lock, queueing every
+                #    other turn and request behind a one-off disk read.
+                from reyes_agent import provider
+                provider.warm()
+                # 2) Then run one throwaway turn on a PRIVATE history to warm the
+                #    network path, tool registry and capability router so the
+                #    first real phone->desktop turn is as quick as later ones.
+                from reyes_agent.agent import run_agent
+                run_agent([{"role": "user", "content": "hi"}])
+            except Exception:      # noqa: BLE001 -- best-effort; never affects boot
+                pass
+        _try("brain-prewarm",
+             lambda: threading.Thread(target=_warm_brain,
+                                      name="zeno-brain-prewarm", daemon=True).start())
+
     with _boot_lock:
         _boot_state["background_services"] = started
     _complete_boot_stage("services", "services_ready")

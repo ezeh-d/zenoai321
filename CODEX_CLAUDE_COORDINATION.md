@@ -66,3 +66,24 @@ Claude from here to avoid two hands on the same wheel.
 Neither session runs `git reset --hard`, `git clean -fd`, forced checkout, or
 forced push. Uncommitted work in `presentation/*.json` belongs to the other
 session and is left untouched.
+
+## RECENT CLAUDE CHANGES — phone→desktop latency (fast & stable)
+
+Fixing slow/unstable phone-chat desktop automation. Root causes and fixes:
+
+1. **Executor no longer uses the shared worker pool.** `desktop_agent.py`
+   `_execute_with_heartbeat` ran interactive commands on the bounded worker
+   pool, so a phone command queued behind background brain work for one of the
+   ~4 slots (20–30s, intermittent). It now runs on a dedicated per-command
+   thread (heartbeat + timeout preserved). Also `POLL_IDLE_S 3→1`.
+2. **`provider.warm()` (NEW, additive).** The lazy `import openai` (~11s on this
+   box) fired inside the FIRST turn *while holding the turn lock*, freezing the
+   server on first use. `provider.warm()` pre-imports the SDK + builds the
+   configured clients (network-free) up front. Codex: this only ADDS a function;
+   `run_turn`/runners/retry are untouched.
+3. **`web.py` startup warm-up (additive block).** A dedicated daemon thread
+   calls `provider.warm()` then one throwaway `run_agent("hi")` on a private
+   history to warm the network/tool path. Gated by `ZENO_BRAIN_PREWARM`.
+
+Result: phone `ask` commands median ~2.2s (was 17–30s). Residual spikes are
+hosted-model latency variance, not the queue.

@@ -144,29 +144,26 @@ def test_production_preflight_rejects_multiple_sqlite_workers(monkeypatch, tmp_p
 
 
 def test_slow_remote_work_keeps_desktop_heartbeat_alive(monkeypatch):
-    waits = iter([False, True])
+    # A slow interactive command runs on a DEDICATED thread now -- never the
+    # shared worker pool -- so it starts at once instead of queueing behind
+    # background brain work. While it runs the connector must keep sending BUSY
+    # heartbeats. Speed the cadence up so the test needn't wait real seconds.
+    import time
 
-    class Handle:
-        def wait(self, _timeout):
-            return next(waits)
+    monkeypatch.setattr(
+        "reyes_agent.remote_access.desktop_agent.BUSY_HEARTBEAT_EVERY_S", 0.05)
 
-        def result(self):
-            return (True, {"answer": "done"})
+    def slow_operation():
+        time.sleep(0.2)
+        return (True, {"answer": "done"})
 
-        def cancel(self):
-            return True
-
-    class Pool:
-        @staticmethod
-        def submit(*_args, **_kwargs):
-            return Handle()
-
-    monkeypatch.setattr("reyes_agent.worker_pool.get_worker_pool", lambda: Pool())
     agent = DesktopAgent(AgentConfig("https://gateway.example", "device_1", "token_1"))
     heartbeats = []
     monkeypatch.setattr(agent, "_post", lambda path, body, timeout=0:
                         heartbeats.append((path, body, timeout)) or {"ok": True})
-    assert agent._execute_with_heartbeat("ask", lambda: None)[0] is True
+    ok, result = agent._execute_with_heartbeat("ask", slow_operation)
+    assert ok is True
+    assert result == {"answer": "done"}
     assert heartbeats and heartbeats[0][0].endswith("/heartbeat")
     assert heartbeats[0][1]["state"] == "BUSY"
 
