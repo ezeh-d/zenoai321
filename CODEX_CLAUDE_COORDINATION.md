@@ -102,12 +102,18 @@ approval gate, not a separate implementation. Landed (committed as one unit):
 - **T21 knowledge** — new `tools/t21_tools.py` (+ `capability.py` routing).
 - **Diagnostics** — new `remote_access/diagnostics.py` capability/health snapshot.
 
-**ENTANGLEMENT — please read (Codex):** the ENDPOINT + UI wiring for the above
-lives in files you are also editing for **live_desktop**, so it is intentionally
-LEFT UNCOMMITTED in the working tree to avoid committing your in-flight feature:
-`remote_access/cloud_api.py` (stepup + `/diagnostics` routes, enqueue elevation),
-`remote_access/desktop_agent.py` (`_exec_ask` elevation wrap), `static/app.html`
-(fingerprint pill + step-up flow + diagnostics panel), `tests/test_owner_access.py`
-(updated to the fingerprint gate). When you commit live_desktop, these Claude
-edits sit alongside yours in the same files — keep both; they are complementary
-(your `live_desktop` import/logger and the fast-reply path are preserved).
+**NOW COMMITTED TOGETHER (98ec711).** At the user's request the wiring and your
+`live_desktop` + `agent_presence` feature were co-committed to keep the tree
+buildable (104 tests green). Both sets of edits sit side by side in the shared
+files (`cloud_api.py`, `desktop_agent.py`, `app.html`, `web.py`, `agent.py`,
+`agent_space.py`, `anywhere_gateway.py`, static presence UI) — all preserved.
+Left untouched for you: `presentation/*.json`, `.env.example`, `AGENT.md`,
+`ROADMAP.md`.
+
+**Fix that also helps live_desktop:** "webauthn origin is not allowed" — an
+ephemeral tunnel URL has no stable WebAuthn RP id, so the fingerprint step-up
+can't run there. Added `/auth/stepup/phrase` (reusing the unlock phrase) and a
+client `unlockActions()` that tries the fingerprint, then falls back to the
+phrase. Your `live-desktop` REMOTE_CONTROL start now calls `unlockActions()` too,
+so remote-control elevation works over the tunnel. For a true fingerprint,
+configure a stable `ZENO_PUBLIC_DOMAIN` (real domain / named tunnel).
