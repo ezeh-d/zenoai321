@@ -87,3 +87,27 @@ Fixing slow/unstable phone-chat desktop automation. Root causes and fixes:
 
 Result: phone `ask` commands median ~2.2s (was 17–30s). Residual spikes are
 hosted-model latency variance, not the queue.
+
+## RECENT CLAUDE CHANGES — unified phone+laptop tool access
+
+Phone and laptop already share ONE brain and tool registry; the gap was the
+approval gate, not a separate implementation. Landed (committed as one unit):
+
+- **Fingerprint auto-approve** — `confirmation.owner_auto_approve` (context-var,
+  audited) + a denylist (`remote_auto_run_allowed`) so a WebAuthn-elevated
+  trusted-owner turn runs ordinary tools directly, but never arbitrary-exec /
+  irreversible / public / security tools. `tools.run_tool` honours it.
+- **Session elevation** — `owner.py` `passkey_stepup_options` /
+  `finish_passkey_stepup` / `session_elevated` (10-min, in-memory).
+- **T21 knowledge** — new `tools/t21_tools.py` (+ `capability.py` routing).
+- **Diagnostics** — new `remote_access/diagnostics.py` capability/health snapshot.
+
+**ENTANGLEMENT — please read (Codex):** the ENDPOINT + UI wiring for the above
+lives in files you are also editing for **live_desktop**, so it is intentionally
+LEFT UNCOMMITTED in the working tree to avoid committing your in-flight feature:
+`remote_access/cloud_api.py` (stepup + `/diagnostics` routes, enqueue elevation),
+`remote_access/desktop_agent.py` (`_exec_ask` elevation wrap), `static/app.html`
+(fingerprint pill + step-up flow + diagnostics panel), `tests/test_owner_access.py`
+(updated to the fingerprint gate). When you commit live_desktop, these Claude
+edits sit alongside yours in the same files — keep both; they are complementary
+(your `live_desktop` import/logger and the fast-reply path are preserved).
