@@ -166,3 +166,11 @@ thread-safe, never raises. Wired via `desktop_agent._note_reputation` on every
 remote tool run (success/failure + latency). Codex: adopt for all tools by
 calling `tool_reputation.record(name, ok, latency_ms=…)` from `run_tool` if you
 want registry-wide coverage -- the API is stable. 18 tests green.
+
+**4. FeatureFlagService (`feature_flags.py`, NEW).** The canary gate for
+adopting new adapters safely (#48-#49). Resolution: runtime/persisted override >
+`ZENO_FF_<NAME>` env > registered default (experimental flags default OFF).
+Deterministic `in_rollout(name, key)` (stable hash slice), atomic JSON persistence
+in `%LOCALAPPDATA%/ZENO/feature_flags.json`, `register()` for adapter-owned
+flags, thread-safe, never raises. Standalone -- consumed on demand (item 5 gates
+on it). 13 tests green.
