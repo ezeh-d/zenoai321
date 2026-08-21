@@ -43,7 +43,7 @@ from urllib.parse import quote, urlsplit
 
 from reyes_agent.auth import get_owner_auth
 from reyes_agent.remote_access import (android_pairing, attachment_store,
-                                       device_link, domains, media_store,
+                                       device_link, domains, live_desktop, media_store,
                                        policy, realtime, web_push)
 
 router = APIRouter(prefix="/api/owner", tags=["owner"])
@@ -328,6 +328,70 @@ def passkey_login_complete(request: Request, payload: dict = Body(...)) -> JSONR
     return _session_response(result, request)
 
 
+# --- fingerprint step-up: unlock desktop actions on THIS phone --------------
+# A consequential action does not walk the owner back to the PC to approve it.
+# On a signed-in, trusted phone the owner scans a fingerprint (a WebAuthn
+# assertion, exactly like passkey login) and this session is elevated for a
+# short window, during which the executor runs consequential tools directly.
+@router.post("/auth/stepup/options")
+def stepup_options(request: Request,
+                   _token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+    rate = policy.check_rate("login", _client_identity(request))
+    if not rate.allowed:
+        raise HTTPException(status_code=429, detail=rate.as_dict())
+    _origin, rp_id = _webauthn_context(request)
+    try:
+        return get_owner_auth().passkey_stepup_options(rp_id=rp_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/auth/stepup/complete")
+def stepup_complete(request: Request, payload: dict = Body(...),
+                    token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+    rate = policy.check_rate("login", _client_identity(request))
+    if not rate.allowed:
+        raise HTTPException(status_code=429, detail=rate.as_dict())
+    origin, rp_id = _webauthn_context(request)
+    ok, reason = get_owner_auth().finish_passkey_stepup(
+        token,
+        payload.get("credential") if isinstance(payload.get("credential"), dict) else {},
+        challenge=str(payload.get("challenge", "")), origin=origin, rp_id=rp_id)
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason or "Fingerprint step-up failed.")
+    return {"ok": True, **get_owner_auth().elevation_status(token)}
+
+
+@router.get("/auth/stepup/status")
+def stepup_status(_request: Request,
+                  token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+    return get_owner_auth().elevation_status(token)
+
+
+@router.post("/auth/stepup/phrase")
+def stepup_phrase(request: Request, payload: dict = Body(...),
+                  token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+    """Unlock actions with the owner's unlock phrase -- the step-up's fallback
+    where WebAuthn can't run (an ephemeral tunnel origin has no stable RP ID).
+    The phone's own device lock still gates entry; this is the app-level secret,
+    rate-limited and lockout-protected exactly like the browser-approval phrase."""
+    from reyes_agent.auth import unlock
+
+    rate = policy.check_rate("login", _client_identity(request))
+    if not rate.allowed:
+        raise HTTPException(status_code=429, detail=rate.as_dict())
+    phrases = unlock.get_unlock()
+    if not phrases.configured():
+        raise HTTPException(status_code=409,
+                            detail="No unlock phrase is set. Set one, or register a passkey.")
+    ok, reason = phrases.verify(str(payload.get("phrase", "")),
+                                identity=_client_identity(request))
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason or "Incorrect unlock phrase.")
+    get_owner_auth().elevate(token)
+    return {"ok": True, **get_owner_auth().elevation_status(token)}
+
+
 # --- devices ------------------------------------------------------------
 def _device(device_id: str, token: str) -> str:
     if not device_link.get_link().authenticate(device_id, token):
@@ -510,6 +574,17 @@ def register(app) -> None:
         return {"devices": link.devices(), "queue": link.stats(),
                 "auth": get_owner_auth().status(), "at": time.time()}
 
+    @protected.get("/diagnostics")
+    def owner_diagnostics(token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
+        """One honest health snapshot of the shared brain, memory, knowledge,
+        tools and the laptop node -- same for phone and laptop. Also reports
+        this session's fingerprint action-unlock state so the UI can show it."""
+        from reyes_agent.remote_access import diagnostics
+
+        report = diagnostics.snapshot()
+        report["elevation"] = get_owner_auth().elevation_status(token)
+        return report
+
     @protected.get("/events")
     def owner_events(token: str = Depends(require_trusted_owner)) -> StreamingResponse:
         """Authenticated, bounded SSE invalidation feed for the owner PWA.
@@ -569,7 +644,9 @@ def register(app) -> None:
     def revoke(payload: dict = Body(...)) -> dict[str, Any]:
         auth = get_owner_auth()
         if payload.get("all"):
-            return {"ok": True, "revoked": auth.revoke_all()}
+            revoked = auth.revoke_all()
+            ended = live_desktop.get_live_desktop().end_all("owner sessions revoked")
+            return {"ok": True, "revoked": revoked, "live_sessions_ended": ended}
         return {"ok": auth.revoke(str(payload.get("id", "")))}
 
     @protected.get("/devices")
@@ -653,7 +730,11 @@ def register(app) -> None:
 
     @protected.post("/devices/revoke")
     def revoke_device(payload: dict = Body(...)) -> dict[str, Any]:
-        return {"ok": device_link.get_link().revoke_device(str(payload.get("device_id", "")))}
+        device_id = str(payload.get("device_id", ""))
+        ok = device_link.get_link().revoke_device(device_id)
+        ended = (live_desktop.get_live_desktop().end_all(
+            "Windows device revoked", target_device=device_id) if ok else 0)
+        return {"ok": ok, "live_sessions_ended": ended}
 
     @protected.post("/devices/approve")
     def approve_device(payload: dict = Body(...)) -> dict[str, Any]:
@@ -675,7 +756,8 @@ def register(app) -> None:
             str(payload.get("device_id", "")))}
 
     @protected.post("/command")
-    def enqueue_command(request: Request, payload: dict = Body(...)) -> dict[str, Any]:
+    def enqueue_command(request: Request, payload: dict = Body(...),
+                        token: str = Depends(require_trusted_owner)) -> dict[str, Any]:
         """Queue one command for a device. Nothing executes in this process."""
         action = str(payload.get("action", "")).strip()
         if action not in REGISTERED_ACTIONS:
@@ -701,16 +783,35 @@ def register(app) -> None:
             return {"ok": False, "refused": True, "reason": decision.reason,
                     "category": decision.category}
 
+        # Fingerprint model: a CONSEQUENTIAL action needs this phone session
+        # elevated -- the owner scanned a fingerprint recently. If elevated, the
+        # executor runs the tool directly (the fingerprint IS the approval); if
+        # not, tell the phone to scan, never a walk to the PC. Conversation and
+        # reads never require elevation.
+        elevated = get_owner_auth().session_elevated(token)
+        consequential = (decision.needs_local_approval or
+                         REGISTERED_ACTIONS[action] in {"STANDARD_DEVICE", "SENSITIVE_DEVICE"})
+        if consequential and not elevated:
+            return {"ok": False, "needs_stepup": True, "category": decision.category,
+                    "reason": "Scan your fingerprint to authorize this action."}
+
+        extra = dict(payload.get("payload") if isinstance(payload.get("payload"), dict) else {})
+        if elevated:
+            # Lets the turn auto-approve consequential tools (send a message,
+            # etc.). Set server-side only, only for an elevated trusted session.
+            extra["_owner_elevated"] = True
+
         command = link.enqueue(
-            device_id, action,
-            payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
+            device_id, action, extra,
             category=REGISTERED_ACTIONS[action],
             idempotency_key=str(payload.get("idempotency_key", "")),
             requesting_device="owner-web",
-            requires_approval=(decision.needs_local_approval or
-                               REGISTERED_ACTIONS[action] == "SENSITIVE_DEVICE"),
+            # The fingerprint replaced the PC-approval step, so nothing here
+            # still needs a walk to the desktop panel.
+            requires_approval=False,
             expires_in_s=float(payload.get("expires_in_s", 900) or 900))
         body = command.as_dict()
+        body["elevated"] = elevated
         # The owner must be able to tell "waiting for a laptop that is asleep"
         # apart from "sent". Saying "done" here would be the exact lie the
         # brief forbids.
@@ -895,13 +996,20 @@ def register(app) -> None:
     def remote_control(payload: dict = Body(...)) -> dict[str, Any]:
         if "enabled" not in payload:
             raise HTTPException(status_code=400, detail="enabled is required")
-        return device_link.get_link().set_remote_control(
-            bool(payload.get("enabled")), requesting_device="owner-web")
+        enabled = bool(payload.get("enabled"))
+        result = device_link.get_link().set_remote_control(
+            enabled, requesting_device="owner-web")
+        if not enabled:
+            result["live_sessions_ended"] = live_desktop.get_live_desktop().end_all(
+                "remote control disabled", modes={"REMOTE_CONTROL"})
+        return result
 
     @protected.post("/kill-switch")
     def kill_switch() -> dict[str, Any]:
         link = device_link.get_link()
         result = link.set_remote_control(False, requesting_device="owner-web")
+        result["live_sessions_ended"] = live_desktop.get_live_desktop().end_all(
+            "remote kill switch activated")
         result["sessions_revoked"] = get_owner_auth().revoke_all(reason="remote_kill_switch")
         return result
 

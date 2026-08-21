@@ -377,18 +377,17 @@ def test_a_financial_request_is_refused_remotely(client):
 
 
 def test_queued_is_not_reported_as_done(client):
-    """The owner must be able to tell "waiting" from "finished"."""
+    """A consequential action never comes back 'done' without a fingerprint."""
     session = _login(client)
     registered = _register_and_approve(client, session, "L")
     body = client.post("/api/owner/command", headers=_headers(session), json={
         "action": "open_app", "device_id": registered["device_id"],
         "text": "open chrome", "payload": {"name": "chrome"}}).json()
-    # Opening an application is a DEVICE-category action, so it waits for an
-    # explicit owner decision first. Whatever else happens, the one thing it
-    # must never say is that it is finished.
-    assert body["status"] == "PENDING_APPROVAL"
-    assert body["status"] != "DONE"
-    assert body["device_state"] == "OFFLINE"
+    # Opening an application is a consequential action, so on a session that has
+    # not been fingerprint-elevated it must ask for a fingerprint -- and above
+    # all it must never claim it is finished.
+    assert body.get("needs_stepup") is True
+    assert body.get("status") != "DONE"
 
 
 def test_a_device_cannot_claim_with_a_bad_token(client):
@@ -400,29 +399,31 @@ def test_a_device_cannot_claim_with_a_bad_token(client):
 
 
 def test_end_to_end_open_chrome(client):
-    """The deliverable, exercised as one flow."""
+    """The deliverable, exercised as one flow -- now gated by a fingerprint."""
     session = _login(client)
     registered = _register_and_approve(client, session, "Laptop")
     device, token = registered["device_id"], registered["token"]
 
     client.post("/api/owner/device/heartbeat", json={"device_id": device, "token": token})
 
-    queued = client.post("/api/owner/command", headers=_headers(session), json={
+    # Step 1: without a fingerprint, a consequential action asks for one and
+    # does NOT queue.
+    first = client.post("/api/owner/command", headers=_headers(session), json={
         "action": "open_app", "device_id": device, "text": "open chrome",
         "payload": {"name": "chrome"}, "idempotency_key": "e2e-1"}).json()
-    # Step 1: it needs the owner's approval before it can go anywhere.
-    assert queued["status"] == "PENDING_APPROVAL"
+    assert first.get("needs_stepup") is True
 
-    pending = client.get("/api/owner/approvals?state=pending",
-                         headers=_headers(session)).json()["approvals"]
-    assert pending, "the command did not raise an approval request"
-    approval_id = pending[0]["id"]
+    # Step 2: the owner scans a fingerprint. A verified WebAuthn assertion
+    # elevates the session; simulate that result directly here.
+    stoken = client.cookies.get("zeno_session")
+    owner_auth.get_owner_auth()._elevations[stoken] = time.time() + 600
 
-    # Step 2: the owner approves, and only now can a device claim it.
-    client.post(f"/api/owner/approvals/{approval_id}/decision",
-                json={"decision": "approve"}, headers=_headers(session))
-    assert client.get(f"/api/owner/command/{queued['id']}",
-                      headers=_headers(session)).json()["status"] != "PENDING_APPROVAL"
+    # Step 3: now it queues, and the connected device can claim it.
+    queued = client.post("/api/owner/command", headers=_headers(session), json={
+        "action": "open_app", "device_id": device, "text": "open chrome",
+        "payload": {"name": "chrome"}, "idempotency_key": "e2e-2"}).json()
+    assert queued.get("elevated") is True
+    assert queued["status"] != "PENDING_APPROVAL"
 
     claimed = client.post("/api/owner/device/claim",
                           json={"device_id": device, "token": token}).json()
@@ -675,40 +676,96 @@ def test_development_mode_allows_a_cleartext_cookie_for_local_work(monkeypatch):
 
 
 def test_a_device_command_cannot_run_without_owner_approval(client):
-    """The approval gate is the point -- a queued command must not execute
-    just because a device is connected and polling."""
+    """The fingerprint gate is the point -- a consequential command must not
+    execute just because a device is connected and polling."""
     session = _login(client)
     registered = _register_and_approve(client, session, "Laptop")
     device, token = registered["device_id"], registered["token"]
     client.post("/api/owner/device/heartbeat", json={"device_id": device, "token": token})
 
-    queued = client.post("/api/owner/command", headers=_headers(session), json={
+    body = client.post("/api/owner/command", headers=_headers(session), json={
         "action": "open_app", "device_id": device, "text": "open chrome",
         "payload": {"name": "chrome"}}).json()
-    assert queued["status"] == "PENDING_APPROVAL"
+    # Not fingerprint-elevated: it is refused up front and never queued.
+    assert body.get("needs_stepup") is True
 
-    # The device polls, and gets nothing.
+    # The device polls, and gets nothing -- nothing was ever enqueued.
     claimed = client.post("/api/owner/device/claim",
                           json={"device_id": device, "token": token}).json()
     assert claimed["commands"] == []
 
 
 def test_a_denied_command_never_reaches_the_device(client):
+    """A command the SAME policy the desktop uses refuses is refused up front
+    and never reaches the device -- and a fingerprint cannot lift that. Remote
+    access adds a gate; it never removes one."""
     session = _login(client)
     registered = _register_and_approve(client, session, "Laptop")
     device, token = registered["device_id"], registered["token"]
     client.post("/api/owner/device/heartbeat", json={"device_id": device, "token": token})
 
-    queued = client.post("/api/owner/command", headers=_headers(session), json={
-        "action": "open_app", "device_id": device, "text": "open chrome",
-        "payload": {"name": "chrome"}}).json()
-    approval_id = client.get("/api/owner/approvals?state=pending",
-                             headers=_headers(session)).json()["approvals"][0]["id"]
-    client.post(f"/api/owner/approvals/{approval_id}/decision",
-                json={"decision": "deny"}, headers=_headers(session))
+    body = client.post("/api/owner/command", headers=_headers(session), json={
+        "action": "run_automation", "device_id": device,
+        "text": "disable antivirus"}).json()
+    assert body.get("refused") is True
 
-    final = client.get(f"/api/owner/command/{queued['id']}",
-                       headers=_headers(session)).json()
-    assert final["status"] not in {"QUEUED", "WAITING_FOR_DEVICE", "IN_FLIGHT", "DONE"}
+    # Even elevated, a policy-refused command stays refused: a fingerprint
+    # authorises the OWNER's actions, it does not switch off the safety policy.
+    stoken = client.cookies.get("zeno_session")
+    owner_auth.get_owner_auth()._elevations[stoken] = time.time() + 600
+    body2 = client.post("/api/owner/command", headers=_headers(session), json={
+        "action": "run_automation", "device_id": device,
+        "text": "disable antivirus"}).json()
+    assert body2.get("refused") is True
+
+    # Nothing reached the device either time.
     assert client.post("/api/owner/device/claim",
                        json={"device_id": device, "token": token}).json()["commands"] == []
+
+
+def test_diagnostics_reports_shared_capabilities(client):
+    """The phone and laptop share one brain, so the owner can see every
+    capability's real state from either -- and this session's unlock state."""
+    session = _login(client)
+    body = client.get("/api/owner/diagnostics", headers=_headers(session)).json()
+    caps = body["capabilities"]
+    # Conversation is a CORE capability, never a device plugin.
+    assert caps["conversation"]["status"] == "CONNECTED"
+    # Every advertised capability reports one of the defined states, never blank.
+    allowed = {"AVAILABLE", "CONNECTED", "DEGRADED", "UNAVAILABLE",
+               "AUTH_REQUIRED", "DEVICE_OFFLINE", "ERROR"}
+    for name, cap in caps.items():
+        assert cap["status"] in allowed, (name, cap)
+    # The fingerprint action-unlock state is reported for the UI.
+    assert body["elevation"]["elevated"] is False
+    # Node capabilities distinguish who can physically execute a desktop action.
+    assert body["nodes"]["laptop"]["desktop.open_app"] is True
+    assert body["nodes"]["phone"]["desktop.execute"] is False
+
+
+def test_diagnostics_requires_a_trusted_owner(client):
+    """An anonymous caller cannot read the capability map."""
+    assert client.get("/api/owner/diagnostics").status_code == 401
+
+
+def test_unlock_phrase_elevates_a_session_when_webauthn_cannot(client, tmp_path):
+    """On an ephemeral tunnel WebAuthn's origin/RP id can't be stable, so the
+    unlock phrase is the working action-unlock. Right phrase elevates; wrong
+    phrase does not."""
+    from reyes_agent.auth import unlock
+
+    phrases = unlock.reset_for_tests(tmp_path / "unlock.sqlite")
+    assert phrases.set_phrase("open sesame please")[0]
+    session = _login(client)
+    stoken = client.cookies.get("zeno_session")
+    assert owner_auth.get_owner_auth().session_elevated(stoken) is False
+
+    bad = client.post("/api/owner/auth/stepup/phrase", headers=_headers(session),
+                      json={"phrase": "not the phrase at all"})
+    assert bad.status_code == 403
+    assert owner_auth.get_owner_auth().session_elevated(stoken) is False
+
+    good = client.post("/api/owner/auth/stepup/phrase", headers=_headers(session),
+                       json={"phrase": "open sesame please"}).json()
+    assert good["ok"] is True and good["elevated"] is True
+    assert owner_auth.get_owner_auth().session_elevated(stoken) is True

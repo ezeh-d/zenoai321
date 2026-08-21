@@ -291,7 +291,16 @@ def _exec_ask(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     if not question:
         return False, {"error": "no question supplied"}
     try:
-        from reyes_agent import web
+        from reyes_agent import agent_presence, web
+
+        # Presentation/session commands (for example "call STARK" or
+        # "STARK, standby") use the same local fast path as the desktop.
+        # This keeps phone and laptop presence on one manager and avoids a
+        # provider round merely to mutate visible conversation participants.
+        presence_reply = agent_presence.handle_command(question)
+        if presence_reply is not None:
+            return True, {"answer": presence_reply, "tool_calls": [],
+                          "local_fast_path": True, "intent": "agent_presence"}
 
         class _RemoteContext:
             @staticmethod
@@ -302,7 +311,17 @@ def _exec_ask(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
             def progress(_stage: str) -> None:
                 return None
 
-        result = web._conversation_turn(_RemoteContext(), question)  # noqa: SLF001
+        # When the phone session was fingerprint-elevated, the owner already
+        # approved consequential tools for this turn (the fingerprint IS the
+        # approval), so run them directly instead of queuing for the PC panel.
+        # The high-risk floor in tools.run_tool still holds.
+        if payload.get("_owner_elevated"):
+            from reyes_agent import confirmation
+
+            with confirmation.owner_auto_approve("trusted-owner-phone"):
+                result = web._conversation_turn(_RemoteContext(), question)  # noqa: SLF001
+        else:
+            result = web._conversation_turn(_RemoteContext(), question)  # noqa: SLF001
         return True, {"answer": str(result.get("reply", ""))[:8000],
                       "tool_calls": result.get("tool_calls", [])[:20]}
     except Exception as exc:  # noqa: BLE001

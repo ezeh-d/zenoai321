@@ -831,10 +831,18 @@ class OwnerAuthService:
             conn.execute(
                 "UPDATE credentials SET sign_count=?,last_used=? WHERE credential_id=?",
                 (verified.new_sign_count, time.time(), credential_id))
-        with self._lock:
-            self._elevations[token] = time.time() + ELEVATION_TTL_S
+        self.elevate(token)
         self._audit("stepup_ok")
         return True, ""
+
+    def elevate(self, token: str) -> None:
+        """Grant this session the fingerprint/phrase action-unlock window. Both
+        the WebAuthn step-up and the unlock-phrase fallback funnel through here,
+        so 'is this session elevated?' has exactly one source of truth."""
+        if not token:
+            return
+        with self._lock:
+            self._elevations[token] = time.time() + ELEVATION_TTL_S
 
     def session_elevated(self, token: str) -> bool:
         """True while this session's fingerprint action-unlock is still valid."""

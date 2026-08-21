@@ -102,6 +102,13 @@ header #signout{white-space:nowrap}
   background:var(--panel2);border:1px solid var(--line);border-radius:13px;outline:none
 }
 .composer textarea:focus{border-color:var(--accent)}
+.unlockrow{display:flex;justify-content:center;padding:2px 0 0}
+.unlockpill{
+  font-size:12px;padding:5px 12px;border-radius:999px;cursor:pointer;
+  background:var(--panel2);border:1px solid var(--line);color:var(--muted);
+}
+.unlockpill.on{color:var(--accent);border-color:var(--accent)}
+.unlockpill[hidden]{display:none}
 .icon{
   width:var(--tap);height:var(--tap);border-radius:13px;background:var(--panel2);
   border:1px solid var(--line);display:grid;place-items:center;flex:none
@@ -142,6 +149,29 @@ label{display:block;font-size:11.5px;color:var(--faint);margin:11px 0 5px;letter
 .tag.warn{color:var(--warn);border-color:rgba(245,181,68,.4)}
 .disabled-note{font-size:11.5px;color:var(--warn);margin-top:7px;line-height:1.45}
 .preview{width:100%;max-height:280px;object-fit:contain;border-radius:12px;border:1px solid var(--line);background:#05070b;margin-top:10px}
+
+/* ---------- live desktop ---------- */
+.live-stage{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:14px;
+  background:#020409;border:1px solid var(--line);touch-action:none;display:grid;place-items:center}
+.live-stage video{width:100%;height:100%;object-fit:contain;transform-origin:center center;will-change:transform}
+.live-placeholder{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--faint);font-size:13px}
+.live-hud{position:absolute;inset:8px 8px auto 8px;display:flex;gap:6px;align-items:center;pointer-events:none;z-index:4}
+.live-hud .tag{background:rgba(7,9,15,.82);backdrop-filter:blur(4px)}
+.live-agents{position:absolute;left:8px;right:8px;bottom:8px;display:flex;gap:6px;align-items:flex-end;
+  overflow-x:auto;pointer-events:none;z-index:4;scrollbar-width:none}
+.live-agent{--agent:#719bff;min-width:64px;max-width:92px;padding:6px 7px;border:1px solid color-mix(in srgb,var(--agent) 55%,transparent);
+  border-radius:11px;background:rgba(7,9,15,.84);box-shadow:0 0 13px color-mix(in srgb,var(--agent) 23%,transparent);text-align:center}
+.live-agent i{display:block;width:25px;height:25px;margin:auto;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,var(--agent) 38%,#111 100%)}
+.live-agent.speaking i,.live-agent.thinking i,.live-agent.working i{animation:breathe 1s ease-in-out infinite}
+.live-agent b{display:block;margin-top:3px;font-size:8px;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-agent small{display:block;color:var(--faint);font-size:7px;text-transform:uppercase}
+.live-toolbar{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:8px}
+.live-toolbar .btn{margin:0;padding:8px 4px;min-height:38px;font-size:12px}
+.live-controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}.live-controls .btn{margin-top:8px}
+.live-keyboard{display:flex;gap:5px;overflow-x:auto;margin-top:8px;padding-bottom:2px}.live-keyboard .btn{width:auto;min-width:44px;margin:0;padding:7px 10px}
+.live-keyboard .btn.held{color:#fff;border-color:var(--accent);background:rgba(77,163,255,.22)}
+.live-composer{display:flex;gap:7px;margin-top:9px}.live-composer input{flex:1}.live-composer .btn{width:auto;margin:0;padding:8px 14px}
+@media (orientation:landscape) and (max-height:520px){.live-stage{aspect-ratio:auto;height:calc(100dvh - 205px);min-height:220px}}
 
 /* One lightweight companion orb inside the PWA. A web page cannot draw over
    other Android apps; this remains visible only while ZENO's PWA is visible. */
@@ -234,6 +264,7 @@ label{display:block;font-size:11.5px;color:var(--faint);margin:11px 0 5px;letter
     <button data-tab="tasks"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>Tasks</button>
     <button data-tab="memory"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14l-4-3-4 3-4-3-4 3z"/></svg>Memory</button>
     <button data-tab="voice"><svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/></svg>Voice</button>
+    <button data-tab="desktop"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>PC</button>
     <button data-tab="share"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 15l-5-5L5 20"/></svg>Share</button>
     <button data-tab="devices"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>Devices</button>
     <button data-tab="approvals"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><circle cx="12" cy="12" r="9"/></svg>Approvals</button>
@@ -280,6 +311,13 @@ const S = {
   events: null, commandWaiters: new Map(), voiceState: "IDLE",
   recorder: null, voiceTimer: null, voiceStream: null,
   shareFile: null, sharePurpose: "file", shareUrl: "", location: null,
+  desktopSession: null, desktopPc: null, desktopStream: null,
+  desktopChannel: null, desktopStatsTimer: null, desktopSignalLoop: 0,
+  desktopReconnects: 0, desktopManualClose: false, desktopCaps: null,
+  desktopFps: 0, desktopQuality: "BALANCED", desktopZoom: 1,
+  desktopPanX: 0, desktopPanY: 0,
+  desktopModifiers: new Set(),
+  agentPresence: [],
 };
 localStorage.setItem("zeno_browser_device", S.browserDevice);
 
@@ -381,6 +419,7 @@ async function tryRefresh(){
 const $ = id => document.getElementById(id);
 
 function showLogin(msg){
+  void stopLiveDesktop(false);
   clearAuth();
   if (S.poll) { clearInterval(S.poll); S.poll = null; }
   closeRealtime();
@@ -422,6 +461,8 @@ function openRealtime(){
         clearTimeout(openRealtime.refreshTimer);
         openRealtime.refreshTimer=setTimeout(()=>refreshStatus(),250);
       }
+      if(String(item.type||"").startsWith("agent.")) void refreshPhonePresence();
+      if(String(item.type||"").startsWith("live_desktop.")) void refreshLiveDesktopState();
     };
     events.onerror=()=>{}; // EventSource performs its own bounded reconnect.
     S.events=events;
@@ -538,6 +579,48 @@ $("passkeylogin").onclick=async()=>{
     persist(result); result.trusted?showApp():showPending();
   }catch(e){err.textContent=e.message||"Passkey sign-in failed.";}
 };
+
+/* Fingerprint step-up: unlocks desktop actions on THIS phone for a short window
+   (a WebAuthn assertion, exactly like passkey sign-in). Returns the elevation
+   status. Throws if the browser can't, no passkey is registered, or the owner
+   cancels the prompt. */
+async function stepUp(){
+  if(!window.PublicKeyCredential) throw new Error("This browser can't scan a fingerprint.");
+  const options=await call("/api/owner/auth/stepup/options",{method:"POST",body:{}});
+  const challenge=options.challenge;
+  const credential=await navigator.credentials.get({publicKey:decodeCredentialOptions(options)});
+  const st=await call("/api/owner/auth/stepup/complete",{method:"POST",body:{
+    challenge,credential:credentialPayload(credential)}});
+  S.elevatedUntil=Date.now()+((st.seconds_left||0)*1000);
+  updateUnlockPill();
+  return st;
+}
+
+/* Reflect the fingerprint action-unlock state in the composer pill, if present. */
+function updateUnlockPill(){
+  const pill=$("unlockpill"); if(!pill) return;
+  const left=Math.max(0,Math.round(((S.elevatedUntil||0)-Date.now())/1000));
+  if(left>0){ pill.textContent=`🔓 Actions unlocked · ${Math.ceil(left/60)}m`; pill.classList.add("on"); }
+  else { pill.textContent="🔒 Tap to unlock actions"; pill.classList.remove("on"); }
+}
+setInterval(updateUnlockPill, 15000);
+
+/* Unlock desktop actions. Prefer a real fingerprint (WebAuthn); where the
+   origin can't do WebAuthn -- an ephemeral tunnel URL has no stable RP id, which
+   is the "origin not allowed" you hit -- fall back to the unlock phrase, which
+   works over any origin. The phone's own lock still gates the app either way. */
+async function unlockActions(){
+  if (window.PublicKeyCredential){
+    try { return await stepUp(); }
+    catch(e){ /* WebAuthn unavailable here -- fall through to the phrase */ }
+  }
+  const phrase = window.prompt("Unlock phrase to enable laptop actions:");
+  if (!phrase) throw new Error("cancelled");
+  const st = await call("/api/owner/auth/stepup/phrase",{method:"POST",body:{phrase}});
+  S.elevatedUntil = Date.now() + ((st.seconds_left||0)*1000);
+  updateUnlockPill();
+  return st;
+}
 
 $("dologin").onclick = async () => {
   const btn = $("dologin"), err = $("loginerr");
@@ -672,7 +755,7 @@ function ago(ts){
 function render(){
   const m = $("main");
   ({home:vHome, chat:vChat, agents:vAgents, tasks:vTasks,
-    memory:vMemory, voice:vVoice, share:vShare, devices:vDevices, approvals:vApprovals,
+    memory:vMemory, voice:vVoice, desktop:vDesktop, share:vShare, devices:vDevices, approvals:vApprovals,
     activity:vActivity, notifications:vNotifications, health:vHealth,
     settings:vSettings}[S.tab] || vHome)(m);
 }
@@ -723,6 +806,7 @@ function vHome(m){
 /* ---------------- chat ---------------- */
 function vChat(m){
   m.innerHTML = `<div id="log"></div>
+    <div class="unlockrow"><button class="unlockpill" id="unlockpill">🔒 Tap to unlock actions</button></div>
     <div class="composer">
       <button class="icon" id="mic" title="Microphone"><svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg></button>
       <textarea id="ta" rows="1" placeholder="Ask ZENO…"></textarea>
@@ -738,6 +822,16 @@ function vChat(m){
     if (e.key === "Enter" && !e.shiftKey && window.innerWidth > 720){ e.preventDefault(); send(); }
   });
   $("send").onclick = send;
+
+  const unlock = $("unlockpill");
+  if (unlock){
+    unlock.hidden = !window.PublicKeyCredential;
+    updateUnlockPill();
+    unlock.onclick = async () => {
+      try { await unlockActions(); }
+      catch(e){ S.chat.push({role:"sys", text:"Couldn't unlock: " + (e.message||"cancelled")}); drawLog(); }
+    };
+  }
 
   const mic = $("mic");
   const voiceReady=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder);
@@ -768,17 +862,8 @@ async function send(){
     if (!S.device){
       S.chat.push({role:"sys", text:"No device is registered, so there is nothing to run this on. Register your laptop on the Devices tab."});
     } else {
-      const cmd = await call("/api/owner/command", {method:"POST", body:{
-        action:"ask", device_id:S.device, text,
-        payload:{text}, idempotency_key: (crypto.randomUUID?crypto.randomUUID():String(Date.now()))
-      }});
-      if (cmd.refused){
-        S.chat.push({role:"sys", text:"Refused: " + cmd.reason});
-      } else {
-        S.chat.push({role:"sys", text: cmd.note || "Queued."}); drawLog();
-        const done = await waitFor(cmd.id);
-        S.chat.push(done);
-      }
+      const answer=await sendTextCommand(text, note=>{S.chat.push({role:"sys",text:note});drawLog();});
+      if(answer)S.chat.push({role:"ze",text:answer});
     }
   } catch(e){
     S.chat.push({role:"sys", text: e.message === "network"
@@ -786,6 +871,28 @@ async function send(){
   } finally {
     S.busy = false; document.querySelectorAll(".orb").forEach(o=>o.classList.remove("busy"));updateMiniState();drawLog();
   }
+}
+
+async function sendTextCommand(text,onProgress=null){
+  if(!S.device)throw new Error("No connected Windows device.");
+  const body={action:"ask",device_id:S.device,text,payload:{text},
+    idempotency_key:(crypto.randomUUID?crypto.randomUUID():String(Date.now()))};
+  let cmd=await call("/api/owner/command",{method:"POST",body});
+  if(cmd.needs_stepup){
+    if(onProgress)onProgress("🔒 Unlock to authorize that action.");
+    await unlockActions();
+    body.idempotency_key=(crypto.randomUUID?crypto.randomUUID():String(Date.now()));
+    cmd=await call("/api/owner/command",{method:"POST",body});
+  }
+  if(cmd.refused)throw new Error("Refused: "+(cmd.reason||"request blocked"));
+  if(cmd.needs_stepup)throw new Error("Actions weren't unlocked.");
+  if(cmd.elevated)updateUnlockPill();
+  if(onProgress)onProgress(cmd.note||"Queued.");
+  const record=await waitCommandRecord(cmd.id,120000);
+  if(!record)throw new Error("Still running — check Tasks.");
+  const result=record.result||{};
+  if(record.status!=="DONE")throw new Error(`${record.status}: ${result.error||result.detail||"no result reported"}`);
+  return String(result.answer||result.detail||(Object.keys(result).length?JSON.stringify(result,null,2):"Completed."));
 }
 
 /* Poll until the command reaches a terminal state. Reports the REAL outcome:
@@ -838,8 +945,49 @@ async function runAction(action, payload, empty){
   } catch(e){ body.innerHTML = `<div class="na">${esc(e.message)}</div>`; }
 }
 
-const vAgents = m => actionView(m, {title:"Agent roster", action:"agent_status",
-  note:"Live from your laptop. ZENO's agents run on the desktop."});
+async function refreshPhonePresence(){
+  if(!S.device)return;
+  try{
+    const projection=await call("/api/owner/agent-presence?device_id="+encodeURIComponent(S.device));
+    S.agentPresence=Array.isArray(projection.active_agents)?projection.active_agents:[];
+    if(S.tab==="agents"||S.tab==="desktop"){
+      renderPhoneAgents($(S.tab==="desktop"?"live-agents":"phone-agent-grid"));
+    }
+  }catch{/* Preserve the last current projection during a transient reconnect. */}
+}
+
+function agentChip(agent){
+  const state=String(agent.state||"listening").toLowerCase();
+  return `<div class="live-agent ${esc(state)}" style="--agent:${esc(agent.color||"#719bff")}">
+    <i></i><b>${esc(agent.name||agent.id)}</b><small>${esc(state)}</small></div>`;
+}
+
+function renderPhoneAgents(target){
+  if(!target)return;
+  const active=S.agentPresence||[];
+  target.innerHTML=`<div class="live-agent" style="--agent:#719bff"><i></i><b>ZENO</b><small>${S.busy?"working":"ready"}</small></div>`+
+    active.map(agentChip).join("");
+}
+
+function vAgents(m){
+  m.innerHTML=`<div class="card"><h3>Conversation participants</h3>
+    <div id="phone-agent-grid" style="display:flex;gap:8px;overflow-x:auto;padding:6px 0"></div>
+    <div class="disabled-note">Only explicitly summoned or genuinely working agents appear. This is the same presence projected on the laptop and Mini Orb.</div>
+    <label for="agent-command">Call or dismiss an agent naturally</label>
+    <input id="agent-command" type="text" placeholder="Call STARK and KATE">
+    <button class="btn" id="agent-command-send">Send to ZENO</button>
+    <div id="agent-command-result" class="muted" style="margin-top:8px"></div></div>`;
+  renderPhoneAgents($("phone-agent-grid"));
+  void refreshPhonePresence();
+  $("agent-command-send").onclick=async()=>{
+    const input=$("agent-command"),out=$("agent-command-result"),text=input.value.trim();
+    if(!text)return;
+    out.textContent="Updating the shared agent session…";
+    try{out.textContent=await sendTextCommand(text);input.value="";await refreshPhonePresence();}
+    catch(e){out.textContent=e.message;}
+  };
+  $("agent-command").addEventListener("keydown",e=>{if(e.key==="Enter")$("agent-command-send").click();});
+}
 const vTasks  = m => actionView(m, {title:"Active tasks", action:"task_status",
   note:"Live task state from the Windows task engine."});
 const vMemory = m => {
@@ -855,6 +1003,181 @@ const vMemory = m => {
   };
   $("mq").addEventListener("keydown", e => { if (e.key === "Enter") $("mgo").click(); });
 };
+
+/* ---------------- live desktop ---------------- */
+function vDesktop(m){
+  const active=!!(S.desktopSession&&S.desktopPc);
+  m.innerHTML=`<div class="card"><h3>Live Desktop</h3>
+    <div class="row"><span class="k">Laptop</span><span class="tag ${S.device?"ok":"bad"}">${S.device?"CONNECTED":"OFFLINE"}</span></div>
+    <div class="live-stage" id="live-stage">
+      <video id="live-video" playsinline autoplay></video>
+      <div class="live-placeholder" id="live-placeholder">${active?"Connecting encrypted WebRTC video…":"Tap View My PC to start a short-lived encrypted session."}</div>
+      <div class="live-hud"><span class="tag" id="live-state">${esc(S.desktopSession?.state||"OFF")}</span><span class="tag" id="live-fps">${Math.round(S.desktopFps||0)} FPS</span><span class="tag" id="live-quality">${esc(S.desktopQuality)}</span></div>
+      <div class="live-agents" id="live-agents"></div>
+    </div>
+    <div class="live-toolbar">
+      <button class="btn ghost" id="live-mic" title="Talk to ZENO">🎙</button>
+      <button class="btn ghost" id="live-keyboard" title="Type on the PC">⌨</button>
+      <button class="btn ghost" id="live-mouse" title="Touch controls">🖱</button>
+      <button class="btn ghost" id="live-full" title="Full screen">⛶</button>
+      <button class="btn ghost" id="live-audio" title="Computer audio" disabled>🔇</button>
+      <button class="btn danger" id="live-stop" title="End session" ${active?"":"disabled"}>■</button>
+    </div>
+    <div id="live-setup" class="${active?"hide":""}">
+      <label for="live-monitor">Display</label><select id="live-monitor" style="width:100%;min-height:44px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:9px"><option>Loading displays…</option></select>
+      <label for="live-mode">Mode</label><select id="live-mode" style="width:100%;min-height:44px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:9px"><option value="VIEW_ONLY">View only</option><option value="ZENO_CONTROL">ZENO control (watch automation)</option><option value="REMOTE_CONTROL">Remote control</option></select>
+      <label for="live-quality-select">Quality</label><select id="live-quality-select" style="width:100%;min-height:44px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:9px"><option>LOW</option><option selected>BALANCED</option><option>HIGH</option></select>
+      <label><input type="checkbox" id="live-cursor" checked> Show cursor</label>
+      <label><input type="checkbox" id="live-pc-audio" disabled> Stream PC audio (not available on this node)</label>
+      <button class="btn" id="live-start" ${S.device?"":"disabled"}>View My PC</button>
+      <div class="disabled-note" id="live-note">View-only is the default. Manual input additionally requires fingerprint step-up, ZENO's remote kill switch, and the laptop's local control switch.</div>
+    </div>
+    <div id="live-input" class="${active&&S.desktopSession?.mode==="REMOTE_CONTROL"?"":"hide"}">
+      <div class="live-keyboard"><button class="btn ghost" data-live-key="tab">Tab</button><button class="btn ghost" data-live-key="esc">Esc</button><button class="btn ghost" data-live-key="enter">Enter</button><button class="btn ghost" data-live-key="backspace">⌫</button><button class="btn ghost" data-live-key="left">←</button><button class="btn ghost" data-live-key="up">↑</button><button class="btn ghost" data-live-key="down">↓</button><button class="btn ghost" data-live-key="right">→</button><button class="btn ghost" data-live-key="ctrl">Ctrl</button><button class="btn ghost" data-live-key="alt">Alt</button><button class="btn ghost" data-live-key="shift">Shift</button></div>
+      <div class="live-composer"><input id="live-type" type="text" maxlength="128" placeholder="Type on Windows"><button class="btn" id="live-type-send">Type</button></div>
+    </div>
+    <div class="live-composer"><input id="live-ask" type="text" placeholder="Ask ZENO while watching…"><button class="btn" id="live-ask-send">Send</button></div>
+    <div id="live-result" class="muted" style="margin-top:7px"></div>
+  </div>`;
+  renderPhoneAgents($("live-agents"));void refreshPhonePresence();
+  if(S.desktopStream){const video=$("live-video");video.srcObject=S.desktopStream;void video.play().catch(()=>{});$("live-placeholder").classList.add("hide");}
+  $("live-start")?.addEventListener("click",startLiveDesktop);
+  $("live-stop").onclick=()=>stopLiveDesktop(true);
+  $("live-full").onclick=()=>$("live-stage").requestFullscreen?.().catch(()=>{});
+  $("live-mic").onclick=()=>toggleVoiceCapture({chat:true});
+  $("live-keyboard").onclick=()=>$("live-type")?.focus();
+  $("live-mouse").onclick=()=>{$("live-result").textContent=S.desktopSession?.mode==="REMOTE_CONTROL"?"Touch input is active: tap, double tap, long press or drag.":"This session is view-only; touches only pan and zoom.";};
+  $("live-ask-send").onclick=async()=>{const input=$("live-ask"),out=$("live-result"),text=input.value.trim();if(!text)return;input.value="";out.textContent="ZENO is working…";try{out.textContent=await sendTextCommand(text);}catch(e){out.textContent=e.message;}};
+  $("live-ask").addEventListener("keydown",e=>{if(e.key==="Enter")$("live-ask-send").click();});
+  $("live-type-send")?.addEventListener("click",()=>{const input=$("live-type");if(input.value){sendLiveInput({type:"text",text:input.value});input.value="";}});
+  document.querySelectorAll("[data-live-key]").forEach(button=>button.onclick=()=>{const key=button.dataset.liveKey;if(["ctrl","alt","shift"].includes(key)){const held=S.desktopModifiers.has(key);sendLiveInput({type:"key",action:held?"up":"down",key});if(held)S.desktopModifiers.delete(key);else S.desktopModifiers.add(key);button.classList.toggle("held",!held);}else sendLiveInput({type:"key",action:"press",key});});
+  attachLiveGestures();
+  if(!active)void loadLiveCapabilities();
+}
+
+async function loadLiveCapabilities(){
+  const select=$("live-monitor"),note=$("live-note"),start=$("live-start");if(!select||!S.device)return;
+  try{
+    const data=await call("/api/owner/live-desktop/capabilities?device_id="+encodeURIComponent(S.device));
+    S.desktopCaps=data;
+    const caps=data.capabilities||{},monitors=caps.monitors||[];
+    select.innerHTML=monitors.map(item=>`<option value="${esc(item.id)}">${esc(item.label)} · ${item.width}×${item.height}${item.primary?" · primary":""}</option>`).join("")||"<option>No display available</option>";
+    start.disabled=!caps.available;
+    const audio=$("live-pc-audio");audio.disabled=!caps.audio_available;
+    note.textContent=!caps.available?(caps.detail||"Windows live desktop is unavailable."):(data.ice_state==="TURN_READY"?"TURN relay ready for internet connections.":"Direct/STUN peer path only. Some mobile networks need a configured TURN relay.");
+  }catch(e){note.textContent=e.message;start.disabled=true;}
+}
+
+function waitIceComplete(pc,timeout=8000){
+  if(pc.iceGatheringState==="complete")return Promise.resolve();
+  return new Promise(resolve=>{const done=()=>{if(pc.iceGatheringState==="complete"){pc.removeEventListener("icegatheringstatechange",done);resolve();}};pc.addEventListener("icegatheringstatechange",done);setTimeout(()=>{pc.removeEventListener("icegatheringstatechange",done);resolve();},timeout);});
+}
+
+async function startLiveDesktop(){
+  if(S.desktopPc||!S.device)return;
+  const button=$("live-start"),note=$("live-note");button.disabled=true;S.desktopManualClose=false;let session=null;
+  try{
+    const mode=$("live-mode").value;
+    if(mode==="REMOTE_CONTROL"&&Date.now()>(S.elevatedUntil||0))await unlockActions();
+    session=await call("/api/owner/live-desktop/sessions",{method:"POST",body:{
+      device_id:S.device,mode,monitor:$("live-monitor").value,
+      quality:$("live-quality-select").value,show_cursor:$("live-cursor").checked,
+      stream_audio:$("live-pc-audio").checked}});
+    const pc=new RTCPeerConnection({iceServers:session.ice_servers||[]});
+    S.desktopSession=session;S.desktopPc=pc;S.desktopQuality=session.quality;S.desktopSignalLoop++;
+    const loopId=S.desktopSignalLoop;
+    pc.addTransceiver("video",{direction:"recvonly"});
+    if(session.stream_audio)pc.addTransceiver("audio",{direction:"recvonly"});
+    S.desktopChannel=pc.createDataChannel(mode==="REMOTE_CONTROL"?"zeno-control":"zeno-session",{ordered:false,maxRetransmits:1});
+    pc.ontrack=event=>{
+      const stream=event.streams?.[0]||new MediaStream([event.track]);
+      if(event.track.kind==="video"){
+        S.desktopStream=stream;const video=$("live-video");if(video){video.srcObject=stream;void video.play().catch(()=>{});}$("live-placeholder")?.classList.add("hide");
+      }
+    };
+    pc.onconnectionstatechange=()=>{
+      const state=String(pc.connectionState||"").toUpperCase();
+      if(S.desktopSession)S.desktopSession.state=state;
+      updateLiveHud();
+      if(state==="CONNECTED"){S.desktopReconnects=0;startLiveStats();}
+      if(["FAILED","DISCONNECTED"].includes(state)&&!S.desktopManualClose&&S.desktopReconnects<3){
+        const delay=Math.min(8000,1000*2**S.desktopReconnects++);const config={mode:session.mode,monitor:session.monitor,quality:session.quality};
+        setTimeout(async()=>{if(S.desktopPc===pc){await stopLiveDesktop(false);if(S.tab==="desktop"){render();$("live-mode").value=config.mode;$("live-quality-select").value=config.quality;setTimeout(()=>$("live-start")?.click(),80);}}},delay);
+      }
+    };
+    const offer=await pc.createOffer();await pc.setLocalDescription(offer);await waitIceComplete(pc);
+    await call(`/api/owner/live-desktop/sessions/${encodeURIComponent(session.id)}/signals`,{method:"POST",body:{type:"offer",sdp:pc.localDescription.sdp}});
+    signalLoop(session.id,pc,loopId);
+    render();
+  }catch(e){const pc=S.desktopPc;S.desktopSession=null;S.desktopPc=null;S.desktopChannel=null;S.desktopStream=null;if(pc)try{pc.close();}catch{}if(session?.id)try{await call(`/api/owner/live-desktop/sessions/${encodeURIComponent(session.id)}/end`,{method:"POST",body:{reason:"phone setup failed"}});}catch{}button.disabled=false;note.textContent=e.message;}
+}
+
+async function signalLoop(sessionId,pc,loopId){
+  let after=0;
+  while(S.desktopPc===pc&&S.desktopSignalLoop===loopId){
+    try{
+      const result=await call(`/api/owner/live-desktop/sessions/${encodeURIComponent(sessionId)}/signals?after=${after}&wait_s=20`);
+      if(!result.active)break;
+      for(const signal of result.signals||[]){
+        after=Math.max(after,Number(signal.sequence)||0);
+        if(signal.type==="answer"&&!pc.currentRemoteDescription)await pc.setRemoteDescription({type:"answer",sdp:signal.sdp});
+        else if(signal.type==="candidate")await pc.addIceCandidate({candidate:signal.candidate,sdpMid:signal.sdpMid,sdpMLineIndex:signal.sdpMLineIndex});
+      }
+    }catch(e){if(S.desktopPc!==pc)return;await new Promise(resolve=>setTimeout(resolve,1200));}
+  }
+  if(S.desktopPc===pc&&!S.desktopManualClose)await stopLiveDesktop(false);
+}
+
+function startLiveStats(){
+  clearInterval(S.desktopStatsTimer);let lastFrames=0,lastAt=performance.now();
+  S.desktopStatsTimer=setInterval(async()=>{
+    const pc=S.desktopPc;if(!pc)return;
+    try{
+      const stats=await pc.getStats();let frames=lastFrames,loss=0,received=0,rtt=0;
+      stats.forEach(report=>{if(report.type==="inbound-rtp"&&report.kind==="video"){frames=report.framesDecoded||frames;loss=report.packetsLost||0;received=report.packetsReceived||0;}if(report.type==="candidate-pair"&&report.state==="succeeded")rtt=Math.max(rtt,(report.currentRoundTripTime||0)*1000);});
+      const now=performance.now();S.desktopFps=Math.max(0,(frames-lastFrames)*1000/Math.max(1,now-lastAt));lastFrames=frames;lastAt=now;updateLiveHud();
+      if(S.desktopChannel?.readyState==="open")S.desktopChannel.send(JSON.stringify({type:"quality",loss:Math.max(0,loss)/Math.max(1,received+Math.max(0,loss)),rtt_ms:rtt}));
+    }catch{}
+  },2000);
+}
+
+function updateLiveHud(){
+  if($("live-state"))$("live-state").textContent=String(S.desktopSession?.state||"OFF").toUpperCase();
+  if($("live-fps"))$("live-fps").textContent=Math.round(S.desktopFps||0)+" FPS";
+  if($("live-quality"))$("live-quality").textContent=S.desktopQuality;
+}
+
+async function refreshLiveDesktopState(){
+  if(!S.desktopSession)return;
+  try{const state=await call(`/api/owner/live-desktop/sessions/${encodeURIComponent(S.desktopSession.id)}`);Object.assign(S.desktopSession,state);S.desktopFps=state.fps||S.desktopFps;S.desktopQuality=state.measured_quality||state.quality||S.desktopQuality;updateLiveHud();if(!state.active)await stopLiveDesktop(false);}catch{}
+}
+
+async function stopLiveDesktop(notify=true){
+  S.desktopManualClose=!!notify;S.desktopSignalLoop++;clearInterval(S.desktopStatsTimer);S.desktopStatsTimer=null;
+  for(const key of S.desktopModifiers)sendLiveInput({type:"key",action:"up",key});S.desktopModifiers.clear();
+  const session=S.desktopSession,pc=S.desktopPc;S.desktopPc=null;S.desktopSession=null;S.desktopChannel=null;S.desktopStream=null;S.desktopFps=0;S.desktopZoom=1;S.desktopPanX=0;S.desktopPanY=0;
+  if(pc)try{pc.close();}catch{}
+  if(notify&&session&&S.signedIn)try{await call(`/api/owner/live-desktop/sessions/${encodeURIComponent(session.id)}/end`,{method:"POST",body:{reason:"owner ended from phone"}});}catch{}
+  if(S.tab==="desktop")render();
+}
+
+function sendLiveInput(event){
+  if(S.desktopSession?.mode!=="REMOTE_CONTROL"||S.desktopChannel?.readyState!=="open")return false;
+  try{S.desktopChannel.send(JSON.stringify(event));return true;}catch{return false;}
+}
+
+function attachLiveGestures(){
+  const stage=$("live-stage"),video=$("live-video");if(!stage||!video)return;
+  const points=new Map();let gesture=null,lastTap=0,tapTimer=null,pinchDistance=0,multiTouch=false;
+  const transform=()=>{const limitX=stage.clientWidth*Math.max(0,S.desktopZoom-1)/2,limitY=stage.clientHeight*Math.max(0,S.desktopZoom-1)/2;S.desktopPanX=Math.max(-limitX,Math.min(limitX,S.desktopPanX));S.desktopPanY=Math.max(-limitY,Math.min(limitY,S.desktopPanY));video.style.transform=`translate(${S.desktopPanX}px,${S.desktopPanY}px) scale(${S.desktopZoom})`;};
+  const normalized=e=>{const r=video.getBoundingClientRect();return{x:Math.max(0,Math.min(1,(e.clientX-r.left)/Math.max(1,r.width))),y:Math.max(0,Math.min(1,(e.clientY-r.top)/Math.max(1,r.height)))};};
+  stage.onpointerdown=e=>{stage.setPointerCapture(e.pointerId);points.set(e.pointerId,{x:e.clientX,y:e.clientY});const p=normalized(e);gesture={id:e.pointerId,x:e.clientX,y:e.clientY,p,panX:S.desktopPanX,panY:S.desktopPanY,at:Date.now(),drag:false,long:false,timer:setTimeout(()=>{if(gesture&&!gesture.drag&&points.size===1){gesture.long=true;sendLiveInput({type:"pointer",action:"right",...gesture.p});}},620)};if(points.size===2){multiTouch=true;clearTimeout(gesture.timer);const a=[...points.values()];pinchDistance=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);}};
+  stage.onpointermove=e=>{if(!points.has(e.pointerId))return;points.set(e.pointerId,{x:e.clientX,y:e.clientY});if(points.size===2){const a=[...points.values()],distance=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);if(pinchDistance){S.desktopZoom=Math.max(1,Math.min(3,S.desktopZoom*(distance/pinchDistance)));transform();}pinchDistance=distance;return;}if(multiTouch||!gesture||gesture.id!==e.pointerId)return;const moved=Math.hypot(e.clientX-gesture.x,e.clientY-gesture.y);if(moved>8&&!gesture.drag){gesture.drag=true;clearTimeout(gesture.timer);if(S.desktopSession?.mode==="REMOTE_CONTROL")sendLiveInput({type:"pointer",action:"down",...gesture.p});}if(gesture.drag){if(S.desktopSession?.mode==="REMOTE_CONTROL")sendLiveInput({type:"pointer",action:"move",...normalized(e)});else{S.desktopPanX=gesture.panX+(e.clientX-gesture.x);S.desktopPanY=gesture.panY+(e.clientY-gesture.y);transform();}}};
+  stage.onpointerup=e=>{const point=points.get(e.pointerId),wasMulti=multiTouch;points.delete(e.pointerId);if(wasMulti){if(point){const dy=e.clientY-point.y;if(Math.abs(dy)>28)sendLiveInput({type:"scroll",dy:Math.round(-dy/24)});}if(!points.size)multiTouch=false;return;}if(!gesture||gesture.id!==e.pointerId)return;clearTimeout(gesture.timer);const p=normalized(e);if(gesture.drag){if(S.desktopSession?.mode==="REMOTE_CONTROL")sendLiveInput({type:"pointer",action:"up",...p});}else if(!gesture.long){const now=Date.now();if(now-lastTap<330){clearTimeout(tapTimer);tapTimer=null;lastTap=0;sendLiveInput({type:"pointer",action:"double",...p});}else{lastTap=now;tapTimer=setTimeout(()=>{sendLiveInput({type:"pointer",action:"click",...p});tapTimer=null;lastTap=0;},330);}}gesture=null;};
+  stage.onpointercancel=()=>{if(gesture){clearTimeout(gesture.timer);if(gesture.drag)sendLiveInput({type:"pointer",action:"up",...gesture.p});}gesture=null;multiTouch=false;points.clear();};
+}
+
+window.addEventListener("beforeunload",()=>{void stopLiveDesktop(false);});
 
 /* ---------------- voice / approvals / activity / health ---------------- */
 function vVoice(m){
@@ -1162,7 +1485,8 @@ setx ZENO_DEVICE_TOKEN "${esc(r.token)}"</pre>
 
 async function vHealth(m){
   const started=performance.now();
-  m.innerHTML=`<div class="card"><h3>System health</h3><div id="healthbody"><div class="muted">Measuring...</div></div></div>`;
+  m.innerHTML=`<div class="card"><h3>System health</h3><div id="healthbody"><div class="muted">Measuring...</div></div></div>
+    <div class="card"><h3>Capabilities</h3><div class="muted" style="margin:-4px 0 8px">Same brain, memory and tools on phone and laptop.</div><div id="capbody"><div class="muted">Checking every tool…</div></div></div>`;
   try {
     const d=await call("/api/owner/status"), latency=Math.round(performance.now()-started);
     const devices=d.devices||[], q=d.queue||{};
@@ -1173,6 +1497,19 @@ async function vHealth(m){
       <div class="row"><span class="k">Remote control</span><span class="tag ${q.remote_control_enabled?"ok":"bad"}">${q.remote_control_enabled?"ENABLED":"DISABLED"}</span></div>
       <div class="row"><span class="k">Queue depth</span><span class="v">${q.queue_depth||0}</span></div>`;
   } catch(e){ $("healthbody").innerHTML=`<div class="na">${esc(e.message)}</div>`; }
+  try {
+    const diag=await call("/api/owner/diagnostics"), caps=diag.capabilities||{};
+    const cls=s=>(["CONNECTED","AVAILABLE"].includes(s)?"ok":(["UNAVAILABLE","ERROR"].includes(s)?"bad":""));
+    const label={CONNECTED:"CONNECTED",AVAILABLE:"CONNECTED",DEGRADED:"DEGRADED",UNAVAILABLE:"OFFLINE",AUTH_REQUIRED:"NEEDS SETUP",DEVICE_OFFLINE:"LAPTOP OFFLINE",ERROR:"ERROR"};
+    const nice={brain:"ZENO Brain",conversation:"Conversation",memory:"Memory",t21_knowledge:"T21 Knowledge",laptop:"Laptop",desktop_control:"Desktop Control",browser:"Browser",agents:"Agents",slack:"Slack",telegram:"Telegram",voice:"Voice",tools:"Tools"};
+    const rows=Object.keys(nice).filter(k=>caps[k]).map(k=>{
+      const c=caps[k];
+      return `<div class="row" title="${esc(c.detail||"")}"><span class="k">${nice[k]}</span><span class="tag ${cls(c.status)}">${label[c.status]||c.status}</span></div>`;
+    }).join("");
+    const el=diag.elevation||{};
+    const elrow=`<div class="row"><span class="k">Actions unlocked</span><span class="tag ${el.elevated?"ok":""}">${el.elevated?("YES · "+Math.ceil((el.seconds_left||0)/60)+"m left"):"locked · fingerprint to unlock"}</span></div>`;
+    $("capbody").innerHTML=rows+elrow;
+  } catch(e){ $("capbody").innerHTML=`<div class="na">${esc(e.message)}</div>`; }
 }
 
 /* ---------------- devices ---------------- */

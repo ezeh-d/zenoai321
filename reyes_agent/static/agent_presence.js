@@ -26,7 +26,7 @@ export const AGENT_IDENTITIES = {
   jarvis:      { name: "JARVIS", color: "#52e7ff", role: "Systems Integration" },
 };
 
-const VISUAL_STATES = new Set(["waiting", "thinking", "working", "speaking", "success", "error"]);
+const VISUAL_STATES = new Set(["idle", "listening", "waiting", "thinking", "working", "speaking", "success", "error", "standby"]);
 const TERMINAL_STATES = new Set(["success", "error"]);
 const FALLBACK_COLOURS = ["#38bdf8", "#c084fc", "#fb7185", "#fbbf24", "#34d399", "#60a5fa"];
 let presenceStylesInjected = false;
@@ -153,7 +153,7 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
     if (entry) return entry;
     const card = createFace(id, identityFor(id, payload), { size: mode === "mini" ? 46 : 84 });
     card.classList.add("agent-presence-card");
-    entry = { id, card, state: "waiting", taskIds: new Set(), dismissTimer: null };
+    entry = { id, card, state: "waiting", persistent: !!payload.persistent, taskIds: new Set(), dismissTimer: null };
     entries.set(id, entry);
     place(entry);
     reflowMini();
@@ -192,6 +192,13 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
     if (taskId) entry.taskIds.delete(String(taskId));
     if (entry.taskIds.size) return;
     setVisualState(entry.id, TERMINAL_STATES.has(state) ? state : "success", emotion);
+    if (entry.persistent) {
+      entry.dismissTimer = setTimeout(() => {
+        entry.dismissTimer = null;
+        if (entry.persistent && !entry.taskIds.size) setVisualState(entry.id, "listening", "curious");
+      }, Math.max(0, terminalMs));
+      return;
+    }
     dismiss(entry.id);
   }
 
@@ -201,6 +208,24 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
     const agentId = normalAgent(payload.agent);
     if (!agentId) return false;
     const taskId = payload.task_id ? String(payload.task_id) : "";
+    if (type === "agent.joined") {
+      const entry = ensure(agentId, {...payload, persistent:true}); if (!entry) return false;
+      entry.persistent = true;
+      return setVisualState(agentId, payload.visual_state || "listening", payload.emotion || payload.expression);
+    }
+    if (type === "agent.state_changed" || type === "agent.expression_changed") {
+      const entry = ensure(agentId, payload); if (!entry) return false;
+      if (payload.persistent === true) entry.persistent = true;
+      return setVisualState(agentId, payload.visual_state || payload.state || entry.state,
+                            payload.emotion || payload.expression);
+    }
+    if (type === "agent.standby" || type === "agent.removed") {
+      const entry = entries.get(agentId); if (!entry) return true;
+      entry.persistent = false;
+      setVisualState(agentId, "standby", payload.emotion || payload.expression);
+      dismiss(agentId);
+      return true;
+    }
     if (type === "agent.activated") return setVisualState(agentId, "waiting", payload.emotion);
     if (type === "agent.handoff") {
       const entry = ensure(payload.to || agentId, payload); if (!entry) return false;
@@ -232,8 +257,14 @@ export function createAgentPresence({ container, mode = "dashboard", councilCont
     return false;
   }
 
-  function bootstrap(agentIds) {
-    for (const agentId of Array.isArray(agentIds) ? agentIds : []) setVisualState(agentId, "working");
+  function bootstrap(agentIds, persistentIds = []) {
+    const persistent = new Set(Array.isArray(persistentIds) ? persistentIds.map(normalAgent) : []);
+    for (const agentId of Array.isArray(agentIds) ? agentIds : []) {
+      const id = normalAgent(agentId); if (!id) continue;
+      const entry = ensure(id, { persistent: persistent.has(id) });
+      if (entry && persistent.has(id)) entry.persistent = true;
+      setVisualState(id, persistent.has(id) ? "listening" : "working");
+    }
   }
 
   function reparent() { for (const entry of entries.values()) place(entry); reflowMini(); }

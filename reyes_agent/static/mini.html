@@ -5,7 +5,8 @@
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#dcecff;font:11px system-ui,sans-serif;cursor:grab;user-select:none}
   body.dragging{cursor:grabbing} #orb-simple{width:130px!important;height:130px!important} #orb-canvas{position:fixed;inset:0;width:100%;height:100%}
   #music-card{display:none;position:fixed;left:8px;right:8px;bottom:6px;z-index:4;align-items:center;gap:5px;padding:4px 6px;border-radius:8px;background:rgba(5,12,26,.86);border:1px solid rgba(98,200,255,.45);font-size:9px;pointer-events:none}#music-card.show{display:flex}#music-art{width:20px;height:20px;border-radius:4px;object-fit:cover;display:none}
-</style></head><body><canvas id="orb-canvas"></canvas><div id="music-card"><img id="music-art" alt=""><span id="music-text"></span></div>
+  #live-view-badge{display:none;position:fixed;left:50%;top:5px;transform:translateX(-50%);z-index:9;padding:3px 8px;border-radius:999px;background:rgba(45,7,15,.92);border:1px solid rgba(255,95,109,.75);color:#ffd6dd;font:700 7px system-ui;letter-spacing:.08em;white-space:nowrap;pointer-events:none}#live-view-badge.show{display:block}
+</style></head><body><canvas id="orb-canvas"></canvas><div id="live-view-badge">PHONE LIVE VIEW</div><div id="music-card"><img id="music-art" alt=""><span id="music-text"></span></div>
 <script type="module">
 import { initOrb } from '/static/orb.js?v=8';
 import * as voiceVAD from '/static/vad.js?v=2';
@@ -30,6 +31,7 @@ function openDashboard(){
 }
 async function refresh(){
   try{const data=await(await fetch('/api/mini-status')).json(),task=data.task||{},progress=task.progress||{},workflow=data.workflow||{},mode=workflow.mode||'NORMAL';
+    setMiniLiveView(!!data.live_desktop?.active,data.live_desktop?.mode||'');
     const elapsed=task.run_ms?` · ${Math.floor(task.run_ms/1000)}s`:'';
     const agent=data.agents&&data.agents[0]?` · ${data.agents[0]}`:'';
     const text=task.name?`${task.name} · ${progress.stage||'working'}${elapsed}${agent}`:'ZENO · idle';
@@ -49,13 +51,14 @@ async function refresh(){
     else orb.setState('idle');
     // The endpoint is only a late-connection bootstrap. Live transitions
     // below are driven by the Event Bus, not a polling animation.
-    agentPresence.bootstrap(data.agents);
+    agentPresence.bootstrap(data.agents,data.summoned_agents);
   }catch(_e){/* Preserve the last honest state during a transient local request failure. */}
 }
 refresh();setInterval(()=>{if(!document.hidden)refresh();},2000);
 // A compact SSE subscription gives the Mini Orb the exact same real agent
 // lifecycle as the dashboard. It is one dormant socket, not a polling loop.
 let agentEventSource=null;
+function setMiniLiveView(active,mode=''){const badge=document.getElementById('live-view-badge');if(!badge)return;badge.textContent=mode==='REMOTE_CONTROL'?'PHONE CONTROL ACTIVE':'PHONE LIVE VIEW';badge.classList.toggle('show',!!active);document.body.style.outline=active?'1px solid rgba(255,95,109,.72)':'none';}
 if(window.EventSource){
   agentEventSource=new EventSource('/api/events/stream');
   agentEventSource.onmessage=(event)=>{try{
@@ -64,6 +67,8 @@ if(window.EventSource){
     if(update.type==='performance.features_changed')applyMiniEyeSettings(update.payload||{});
     if(update.type==='audio.recognized')showRecognizedAudio(update.payload||{});
     if(update.type==='wake.detected')void playCachedWakeAck(update);
+    if(update.type==='live_desktop.started'||update.type==='live_desktop.connecting')setMiniLiveView(true,update.payload?.mode||'');
+    if(update.type==='live_desktop.ended')setMiniLiveView(false);
     // The dashboard's native close/minimize event is the handoff point for
     // the single microphone stream.  Delay only the reacquire, so the hidden
     // dashboard has time to release its track first; this never shows a new

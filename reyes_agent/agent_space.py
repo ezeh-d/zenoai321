@@ -34,6 +34,8 @@ _VISIBLE_EVENTS = {
     "agent.handoff", "agent.message", "agent.task_queued", "agent.task_started",
     "agent.task_finished", "agent.worker_started", "agent.worker_finished",
     "agent.speaking", "agent.voice_stopped", "agent.restarting", "agent.restarted",
+    "agent.joined", "agent.state_changed", "agent.expression_changed",
+    "agent.standby", "agent.removed",
 }
 _SAFE_PAYLOAD = {
     "agent", "parent", "worker", "from", "to", "task_id", "task", "role",
@@ -140,13 +142,15 @@ def _pending_approvals() -> list[dict[str, Any]]:
 
 def snapshot(*, event_limit: int = 60, phone: bool = False) -> dict[str, Any]:
     """Return one truthful bounded view over the existing runtime."""
-    from reyes_agent import agent_runtime, agent_teams
+    from reyes_agent import agent_presence, agent_runtime, agent_teams
     from reyes_agent.tools.subagents import _SPECIALISTS
 
     runtime = agent_runtime.health()
     teams = agent_teams.describe()
     voices = _voice_map()
     runtime_by_id = {row["agent"]: row for row in runtime.get("agents", [])}
+    explicit_presence = agent_presence.get_agent_presence().snapshot()
+    explicit_by_id = {row["agent"]: row for row in explicit_presence["active_agents"]}
     agents: list[dict[str, Any]] = []
     active: list[str] = []
     for agent_id, role in agent_runtime.AGENT_ROLES.items():
@@ -166,18 +170,30 @@ def snapshot(*, event_limit: int = 60, phone: bool = False) -> dict[str, Any]:
             display_state = "DEGRADED"
         if observed.get("state") == agent_runtime.WORKING:
             active.append(agent_id)
+        explicit = explicit_by_id.get(agent_id)
+        if explicit and agent_id not in active:
+            active.append(agent_id)
+        runtime_working = observed.get("state") == agent_runtime.WORKING
+        projected_state = ("WORKING" if runtime_working else
+                           str(explicit.get("state", "listening")).upper()
+                           if explicit else display_state)
         team = teams.get("parents", {}).get(agent_id, {"workers": [], "count": 0})
         spec = _SPECIALISTS.get(agent_id) or {}
         identity = _identity(agent_id)
         row = {
             "id": agent_id, **identity, "role": role,
             "description": _safe_text(spec.get("description", ""), 260),
-            "state": display_state, "state_reason": _safe_text(reason, 160),
+            "state": projected_state,
+            "state_reason": (_safe_text(reason, 160) if runtime_working else
+                             "explicitly summoned into the current conversation"
+                             if explicit else _safe_text(reason, 160)),
             "runtime_state": observed.get("state", "standby"),
             "alive": bool(observed.get("alive")), "healthy": bool(observed.get("healthy", True)),
             "speaking": False, "routed": agent_id in active,
             "active_task_count": int(bool(observed.get("current_task"))) + int(observed.get("queue_depth", 0) or 0),
-            "current_task": _safe_text(observed.get("current_task", "")),
+            "current_task": _safe_text((observed.get("current_task", "") if runtime_working else "")
+                                       or (explicit or {}).get("current_task")
+                                       or observed.get("current_task", "")),
             "last_task": _safe_text(observed.get("last_task", "")),
             "queue_depth": observed.get("queue_depth", 0),
             "heartbeat_age_s": observed.get("heartbeat_age_s"),
@@ -226,11 +242,12 @@ def snapshot(*, event_limit: int = 60, phone: bool = False) -> dict[str, Any]:
                    "state": "ROUTING" if active else "READY",
                    "policy_controller": True, "final_synthesizer": True},
         "owner": "divine", "agents": agents, "active_agents": active,
-        "active_specialist": active[0] if active else "",
+        "active_specialist": explicit_presence.get("last_addressed") or (active[0] if active else ""),
         "council": {"active": len(active) > 1, "participants": participants,
                     "current_speaker": next(iter(speaking), ""),
                     "final_authority": "zeno"},
         "events": events, "approvals": approvals,
+        "presence": explicit_presence,
         "summary": {"registered": len(agents), "alive": runtime.get("agents_alive", 0),
                     "active": len(active), "queued": runtime.get("queued_tasks", 0),
                     "workers": teams.get("total_workers", 0), "pending_approvals": len(approvals)},

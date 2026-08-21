@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from reyes_agent import config
 from reyes_agent.auth import get_owner_auth
 from reyes_agent.remote_access import (cloud_api, deployment, device_link,
-                                       domains, web_push)
+                                       domains, live_desktop_api, web_push)
 
 GATEWAY_VERSION = "1.0.0"
 DEVICE_PROTOCOL_VERSION = "1.0.0"
@@ -160,6 +160,7 @@ def create_app(*, enabled: bool | None = None) -> FastAPI:
         return FileResponse(static / "app" / f"icon-{size}.png", media_type="image/png")
 
     cloud_api.register(application)
+    live_desktop_api.register(application)
     return application
 
 

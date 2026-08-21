@@ -311,6 +311,24 @@ def run_agent(
                 "Never say you work alone or have no agents.")
     except Exception:  # noqa: BLE001
         pass
+    try:
+        from reyes_agent.agent_presence import get_agent_presence
+        from reyes_agent.agent_runtime import AGENT_ROLES
+
+        presence = get_agent_presence().snapshot()
+        active = [str(row.get("agent", "")) for row in presence.get("active_agents", [])
+                  if row.get("active") and row.get("agent") in AGENT_ROLES]
+        addressed = str(presence.get("last_addressed") or "")
+        if active:
+            labels = ", ".join(f"{name.upper()} ({AGENT_ROLES[name]})" for name in active)
+            system += (
+                "\n\nCURRENT CONVERSATION PARTICIPANTS: " + labels + ". "
+                "They were explicitly summoned by the owner; this does not mean they are already doing work. "
+                + (f"The most recently addressed specialist is {addressed.upper()}. " if addressed in active else "")
+                + "If the owner's follow-up is clearly within that specialist's role, delegate it there; "
+                  "do not force unrelated requests onto a summoned agent.")
+    except Exception:  # noqa: BLE001 -- visual presence must never block a turn
+        pass
     if spoken:
         # Speech is slower than reading. A three-sentence answer takes about
         # twelve seconds to say, and the owner stands there for all of it --

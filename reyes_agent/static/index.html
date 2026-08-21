@@ -114,6 +114,13 @@
     border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px;
   }
   #stage-label.show { opacity: 0.85; }
+  #live-desktop-indicator { display:none; position:fixed; top:14px; left:50%; transform:translateX(-50%);
+    z-index:20; align-items:center; gap:9px; padding:8px 12px; border-radius:999px;
+    background:rgba(39,8,16,.94); border:1px solid rgba(255,95,109,.7); color:#ffd7dc;
+    box-shadow:0 0 22px rgba(255,95,109,.24); font:700 10px system-ui; letter-spacing:.08em; }
+  #live-desktop-indicator.show { display:flex; }
+  #live-desktop-indicator button { border:1px solid rgba(255,255,255,.25); border-radius:999px;
+    background:transparent; color:inherit; font:700 9px system-ui; padding:3px 8px; cursor:pointer; }
   #transcript { display: none; } /* legacy scrollback -- kept for bookkeeping only, never shown */
   .msg { display: none !important; }
   .tool-chip {
@@ -1060,6 +1067,7 @@ body.focus #agent-team-overview { opacity: 0; }
   <div id="activity-ticker"></div>
   <div id="recognition-card"><img id="recognition-artwork" alt="Recognized music artwork"><span id="recognition-text"></span></div>
   <div id="stage-label"></div>
+  <div id="live-desktop-indicator"><span id="live-desktop-indicator-text">ZENO PHONE CONNECTED · LIVE VIEW ACTIVE</span><button id="live-desktop-local-stop" type="button">STOP</button></div>
 
   <main>
     <div class="spacer"></div>
@@ -1189,7 +1197,7 @@ const agentRing = (() => {
     id = ensureAgentIdentity(id);
     if (!id || dots[id]) return;
     const a = AGENTS[id];
-    state[id] = { active: false, activeCount: 0, task: '', lastResult: '', uses: 0, visualState: 'waiting', removeTimer: null };
+    state[id] = { active: false, activeCount: 0, persistent: false, task: '', lastResult: '', uses: 0, visualState: 'waiting', removeTimer: null };
     const dot = document.createElement('div');
     dot.className = 'agent-dot';
     dot.style.setProperty('--dot-color', a.color);
@@ -1233,12 +1241,13 @@ const agentRing = (() => {
       : '';
   }
 
-  function activate(id, task, visualState = 'thinking') {
+  function activate(id, task, visualState = 'thinking', persistent = false) {
     ensureVisual(id);
     if (!state[id]) return;
     if (state[id].removeTimer) { clearTimeout(state[id].removeTimer); state[id].removeTimer = null; }
     if (!state[id].active) state[id].activeCount++;
     state[id].active = true;
+    if (persistent) state[id].persistent = true;
     state[id].task = task;
     state[id].visualState = visualState;
     state[id].uses++;
@@ -1263,9 +1272,19 @@ const agentRing = (() => {
       dots[id].classList.remove('waiting', 'thinking', 'working', 'speaking');
       dots[id].classList.add('active', visualState);
       beams[id].setAttribute('stroke-opacity', '0');
-      // Keep a real success/error acknowledgement briefly, then release the
-      // node and SVG beam. Inactive specialists never remain in the DOM.
+      // Explicitly summoned conversation participants remain visible after a
+      // task acknowledgement. Ordinary delegated agents still release their
+      // visual resources as before.
       state[id].removeTimer = setTimeout(() => {
+        if (state[id]) state[id].removeTimer = null;
+        if (state[id]?.persistent) {
+          state[id].active = true;
+          state[id].visualState = 'waiting';
+          dots[id]?.classList.remove('success', 'error');
+          dots[id]?.classList.add('active', 'waiting');
+          updateOverview(); updateOrbit();
+          return;
+        }
         dots[id]?.remove(); beams[id]?.remove();
         delete dots[id]; delete beams[id]; delete state[id]; delete pos[id];
         updateOverview(); updateOrbit();
@@ -1311,6 +1330,16 @@ const agentRing = (() => {
     const id = p.agent;
     if (!ensureAgentIdentity(id, p.role || 'Specialist')) return;
     const type = update.type || '';
+    if (type === 'agent.joined') return activate(id, '', p.visual_state || 'waiting', true);
+    if (type === 'agent.state_changed' || type === 'agent.expression_changed') {
+      return activate(id, p.task || '', p.visual_state || p.state || 'waiting', p.persistent === true);
+    }
+    if (type === 'agent.standby' || type === 'agent.removed') {
+      if (!state[id]) return;
+      state[id].persistent = false;
+      state[id].activeCount = Math.max(1, state[id].activeCount);
+      return deactivate(id, '', 'success');
+    }
     if (type === 'agent.task_finished') return deactivate(id, '', p.visual_state || (p.ok === false ? 'error' : 'success'));
     if (type === 'agent.task_queued') return activate(id, p.task || '', 'waiting');
     if (type === 'agent.task_started' || type === 'agent.thinking' || type === 'agent.working') {
@@ -5222,6 +5251,21 @@ function showRecognizedAudio(payload) {
   clearTimeout(recognitionHideTimer);
   recognitionHideTimer = setTimeout(() => card.classList.remove('show'), 15000);
 }
+function setLiveDesktopIndicator(active, mode = '') {
+  const indicator = document.getElementById('live-desktop-indicator');
+  const label = document.getElementById('live-desktop-indicator-text');
+  if (!indicator || !label) return;
+  indicator.classList.toggle('show', !!active);
+  label.textContent = mode === 'REMOTE_CONTROL'
+    ? 'ZENO PHONE CONNECTED · REMOTE CONTROL ACTIVE'
+    : 'ZENO PHONE CONNECTED · LIVE VIEW ACTIVE';
+}
+document.getElementById('live-desktop-local-stop')?.addEventListener('click', async () => {
+  try { await fetch('/api/live-desktop/end', { method: 'POST' }); } catch (_e) {}
+  setLiveDesktopIndicator(false);
+});
+fetch('/api/live-desktop/status').then(response => response.ok ? response.json() : null)
+  .then(status => { if (status) setLiveDesktopIndicator(status.active, status.mode); }).catch(() => {});
 // Event Bus is the source of truth for state transitions.  The persistent
 // dashboard fetches initial state once, then refreshes only affected areas.
 if (window.EventSource) {
@@ -5267,6 +5311,10 @@ if (window.EventSource) {
     if (type === 'awareness.settings_changed' && document.getElementById('settings-panel').classList.contains('open')) loadAwarenessSettings();
     if (type === 'visual.analysis_started') orb.setState('processing');
     if (type === 'visual.analysis_finished' && !turnActive) updateIdleListenState();
+    if (type === 'live_desktop.started' || type === 'live_desktop.connecting') {
+      setLiveDesktopIndicator(true, update.payload?.mode || 'VIEW_ONLY');
+    }
+    if (type === 'live_desktop.ended') setLiveDesktopIndicator(false);
     // Heartbeats are useful to the backend's health monitor, but do not
     // represent new UI state. Notifications are the only notice trigger.
     if (type.startsWith('notification.')) refreshNotices();

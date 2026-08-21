@@ -76,6 +76,9 @@ try:
     from reyes_agent.remote_access import cloud_api as _cloud_api
 
     _cloud_api.register(app)
+    from reyes_agent.remote_access import live_desktop_api as _live_desktop_api
+
+    _live_desktop_api.register(app)
 except Exception as _remote_exc:  # noqa: BLE001 -- must never block ZENO booting
     # Swallowing this silently means ZENO can boot with NO owner API and no
     # remote surface while looking perfectly healthy. Booting anyway is still
@@ -381,6 +384,18 @@ async def _on_startup() -> None:
         start=_desktop_agent.start_from_environment,
         stop=_desktop_agent.stop_current,
     )
+    # The live-desktop node shares only the connector's outbound gateway
+    # credentials. It owns no command executor and captures nothing until an
+    # authenticated short-lived WebRTC session is claimed. Its second idle
+    # thread is the event-driven agent-presence bridge used by the phone.
+    from reyes_agent.remote_access import live_desktop_node as _live_desktop_node
+    live_desktop_enabled = _live_desktop_node.configured()
+    kernel.register_service(
+        "zeno-live-desktop-node",
+        stage=STAGE_CORE if live_desktop_enabled else STAGE_LAZY,
+        start=_live_desktop_node.start_from_environment,
+        stop=_live_desktop_node.stop_current,
+    )
     # The connector has no credentials in this process. It starts only when
     # the owner supplied a named-tunnel configuration, and remains bounded
     # under the kernel's lifecycle/shutdown authority.
@@ -420,6 +435,8 @@ async def _on_startup() -> None:
     kernel.start_service("core-services", delay=2.5)
     if anywhere_connector_enabled:
         kernel.start_service("zeno-anywhere-connector", delay=3.0)
+    if live_desktop_enabled:
+        kernel.start_service("zeno-live-desktop-node", delay=3.1)
     if tunnel_enabled:
         kernel.start_service("phone-cloudflare-tunnel", delay=3.2)
     import asyncio
@@ -1211,10 +1228,13 @@ def _fast_local_reply(message: str):
     try:
         import re
 
-        from reyes_agent import agent_runtime, notification_bus
+        from reyes_agent import agent_presence, agent_runtime, notification_bus
         from reyes_agent.voice.latency_governor import FastReply, reply_for
 
         normalized = " ".join(re.sub(r"[^a-z0-9_ ]+", " ", str(message).casefold()).split())
+        presence_reply = agent_presence.handle_command(message)
+        if presence_reply is not None:
+            return FastReply(presence_reply, "agent_presence")
         mode, focus = "", ""
         if normalized in {"show me the agent space", "show agent space", "open agent space",
                           "show all your agents", "show me all your agents"}:
@@ -2268,18 +2288,48 @@ def mini_status() -> dict[str, Any]:
         except Exception:  # noqa: BLE001 -- companion status is best effort
             pass
     try:
+        from reyes_agent.agent_presence import get_agent_presence
+
+        summoned_agents = get_agent_presence().active_ids()
+        agents = list(dict.fromkeys(agents + summoned_agents))
+    except Exception:  # noqa: BLE001 -- presence must not break Mini status
+        summoned_agents = []
+    try:
         from reyes_agent.workflow_engine import get_workflow_engine
 
         workflow = get_workflow_engine().status()
     except Exception:  # noqa: BLE001 -- Mini Orb status remains best effort
         workflow = {"mode": "NORMAL"}
+    try:
+        from reyes_agent.remote_access import live_desktop_node
+        live_desktop = live_desktop_node.status()
+    except Exception:
+        live_desktop = {"active": False, "session_id": "", "mode": ""}
     return {
         "task": task,
         "queue_depth": workers.get("queue_depth", 0),
         "active_count": len(active),
         "agents": agents,
+        "summoned_agents": summoned_agents,
         "workflow": workflow,
+        "live_desktop": live_desktop,
     }
+
+
+@app.get("/api/live-desktop/status")
+def local_live_desktop_status() -> dict[str, Any]:
+    """Loopback-only status for the visible laptop privacy indicator."""
+    from reyes_agent.remote_access import live_desktop_node
+
+    return live_desktop_node.status()
+
+
+@app.post("/api/live-desktop/end")
+def local_live_desktop_end() -> dict[str, bool]:
+    """Laptop-side emergency stop; the remote boundary never exposes it."""
+    from reyes_agent.remote_access import live_desktop_node
+
+    return {"ok": live_desktop_node.terminate_current()}
 
 
 @app.get("/api/workflows")
