@@ -4,6 +4,24 @@ Single source of truth for what we're building and why. Written from the
 Tier 0 interview on 2026-07-22. Update this file if any answer below changes
 — it's what any future session should read first.
 
+## Engineering checkpoint — 2026-08-21
+
+ZENO Anywhere Live Desktop reuses the existing trusted-owner session,
+DeviceLink, outbound Windows connector, Kernel and Event Bus. Its cloud edge
+is signalling-only and its screen media is an ephemeral WebRTC DTLS-SRTP peer.
+Manual input additionally requires recent owner step-up, the global kill
+switch and the local Windows control flag; never weaken one gate because
+another is present. The current gateway is single-instance and its live
+session authority is intentionally in memory. Internet reliability requires
+configured TURN, and PC audio must remain unavailable until a real WASAPI
+loopback track is measured.
+
+`agent_presence.py` owns only explicitly summoned conversation participants.
+It must never start specialist workers or replace `agent_runtime`; real work
+and speech state still come from the existing runtime, Event Bus and Voice
+Manager. Desktop, Mini Orb, Situation Room and phone are projections of that
+same authority, not independent agent sessions.
+
 ## Identity
 
 - **Name:** REYES

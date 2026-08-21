@@ -6,8 +6,64 @@ Status vocabulary, used strictly:
 - **PARTIAL** — a real, working subset exists; the gap is named explicitly.
 - **NOT BUILT** — no code. Not stubbed, not faked, not simulated.
 
-Last updated: 2026-08-17. See `AGENT.md` for the dated engineering log
+Last updated: 2026-08-21. See `AGENT.md` for the dated engineering log
 behind each entry.
+
+## 2026-08-21 ZENO Anywhere Live Desktop + shared agent presence
+
+**PHONE LIVE DESKTOP — PARTIAL (real WebRTC implementation; external relay and
+physical-phone proof remain).** The trusted owner PWA now has a `View My PC`
+surface with monitor selection, portrait/landscape sizing, fullscreen,
+pinch/zoom/pan, real receiver FPS/quality diagnostics, bounded reconnect,
+view-only, ZENO-control and manual remote-control modes. Windows publishes its
+real displays through one lazy Kernel-managed outbound node and creates one
+screen track only after an authenticated session is requested. The gateway is
+signalling authority only: it stores no screen frames, limits sessions and
+signals, binds each peer to the trusted browser and paired Windows device, and
+expires it after ten minutes by default. The media path is WebRTC DTLS-SRTP;
+there is no HTTP screenshot polling, RDP/VNC listener or inbound desktop port.
+
+Manual input is protected by three independent gates: recent fingerprint/
+passkey step-up, the existing global remote-control kill switch, and
+`ZENO_LIVE_DESKTOP_CONTROL_ENABLED` on the Windows node. Its data channel has a
+fixed bounded mouse/key/text schema and no shell, path, clipboard or file
+primitive. Revoking the device, revoking all owner sessions, disabling remote
+control, pressing the kill switch or using the laptop/phone STOP control ends
+matching live peers. Held modifiers and mouse buttons are released on every
+input-worker exit. The dashboard and Mini Orb show a local privacy indicator.
+
+The real Windows capture path was exercised at 960x540 YUV420P and a full
+loopback WebRTC offer/answer delivered an actual desktop video frame. A warm
+18-frame LOW sample delivered 8.9 FPS on the currently loaded machine; LOW is
+capped at 12 FPS and actual values are reported honestly. The current external
+limits keep this PARTIAL: restrictive carrier/NAT paths need an operator TURN
+service in `ZENO_WEBRTC_ICE_SERVERS_JSON`, no physical phone/carrier run was
+available in this pass, and PC loopback audio remains explicitly unavailable
+until a measured WASAPI track exists. ZENO voice/push-to-talk remains separate
+and functional. See `docs/ZENO_ANYWHERE_LIVE_DESKTOP.md`.
+
+**DYNAMIC SUB-AGENT PRESENCE — DONE.** `AgentPresenceManager` is the one
+bounded conversation-participant authority. Natural commands summon or
+dismiss agents by name/role, Council mode selects a compact real subset, ZENO
+standby remains distinct, and a visual summon never creates a worker. The
+desktop, Mini Orb, Situation Room and phone render that shared state alongside
+real Agent Runtime/Event Bus task and speech state. A summoned specialist is
+also added as bounded planning context, so a clearly related follow-up can be
+delegated to the last addressed agent without forcing unrelated work. Hidden
+faces pause animation; only three compact participants animate around the
+210px Mini Orb and larger Council presence stays in the Council/Situation
+Room. Phone reconnect restores the current bounded projection rather than
+building a second agent session.
+
+Focused validation at this checkpoint: new live-desktop/presence security,
+expiry, cross-device denial, kill-switch, input-schema, natural-command,
+Event Bus, gateway and real media tests pass 10/10; the focused combined
+Anywhere/auth/realtime set passes 93/93. The real media test passed three
+consecutive stress repeats after a bounded WebRTC shutdown fix. Python and
+JavaScript syntax checks pass, and the phone surface rendered at 390x844 with
+0 px horizontal overflow. The final maintained repository run passes
+**1,596/1,596** in 531.38 seconds with only four pre-existing FastAPI lifespan
+deprecation warnings.
 
 ## 2026-08-17 JARVIS/ULTRON full-system reconciliation — VERIFIED WITH EXTERNAL LIMITS
 
