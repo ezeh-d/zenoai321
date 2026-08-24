@@ -198,3 +198,15 @@ curated order), a no-op until data exists, gated by `enable_reputation_routing`
 (default ON), and it degrades to the original order on any error -- routing never
 breaks on telemetry. Codex: this is the only touch to `routing/`; it's additive
 and flag-reversible. 20 tests green.
+
+## RECENT CLAUDE CHANGES — Pack 4 stability layer (Elite P0)
+
+Same gated pattern as Pack 3: self-contained + tested, composing with #1-#5.
+
+**A. CircuitBreaker (`circuit_breaker.py`, NEW).** Fast reflex the slow
+reputation average can't be: a burst of failures trips a tool OPEN (calls
+refused), a cooldown then allows one HALF_OPEN probe, success closes it / failure
+re-opens (pack4 #82/#84/#125). Injectable clock, thread-safe, never raises.
+Wired: `desktop_agent._note_reputation` now also feeds the breaker; the router's
+`_rank_by_reputation` sinks OPEN tools to the bottom (soft quarantine). 25 tests
+green across breaker+routing+executors.

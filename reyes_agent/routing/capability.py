@@ -373,14 +373,19 @@ def _rank_by_reputation(tools: tuple[str, ...]) -> tuple[str, ...]:
     if len(tools) < 2:
         return tools
     try:
-        from reyes_agent import feature_flags, tool_reputation
+        from reyes_agent import circuit_breaker, feature_flags, tool_reputation
 
         if not feature_flags.is_enabled("enable_reputation_routing"):
             return tools
         rep = tool_reputation.get_reputation()
+        breaker = circuit_breaker.get_breaker()
         indexed = list(enumerate(tools))
-        # Stable sort: primary key confidence desc, secondary original position.
-        indexed.sort(key=lambda item: (-rep.reputation(item[1])["confidence"], item[0]))
+        # Stable sort: a tripped breaker sinks to the bottom (soft quarantine),
+        # then best reputation first, then the curated original order.
+        indexed.sort(key=lambda item: (
+            breaker.is_open(item[1]),
+            -rep.reputation(item[1])["confidence"],
+            item[0]))
         return tuple(name for _, name in indexed)
     except Exception:  # noqa: BLE001 -- routing must never break on telemetry
         return tools

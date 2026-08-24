@@ -232,13 +232,16 @@ _FAILURE_PATTERN = re.compile(
 
 
 def _note_reputation(tool_name: str, ok: bool, started: float) -> None:
-    """Feed one remote tool outcome (with latency) into the reputation window,
-    so the router can prefer what has been working lately. Best-effort."""
+    """Feed one remote tool outcome into the reputation window (so the router can
+    prefer what has been working lately) and the circuit breaker (so a sudden
+    burst of failures trips it OPEN and it is skipped until it recovers).
+    Best-effort."""
     try:
-        from reyes_agent import tool_reputation
+        from reyes_agent import circuit_breaker, tool_reputation
 
         tool_reputation.record(
             tool_name, ok, latency_ms=(time.monotonic() - started) * 1000.0)
+        circuit_breaker.record(tool_name, ok)
     except Exception:  # noqa: BLE001 -- telemetry must never break a command
         pass
 
