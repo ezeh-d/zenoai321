@@ -842,3 +842,7 @@ from reyes_agent.tools import news_tools as _news_tools  # noqa: E402,F401
 
 # ZENO Sports Intelligence: evidence-based match prediction (Elo + Poisson).
 from reyes_agent.tools import sports_tools as _sports_tools  # noqa: E402,F401
+
+
+# ZENO Career Intelligence: analysis (scoring/ATS/scam) over the paid_work engine.
+from reyes_agent.tools import career_intelligence_tools as _career_intel  # noqa: E402,F401

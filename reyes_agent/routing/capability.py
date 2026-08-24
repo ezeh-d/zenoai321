@@ -99,7 +99,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                  "backtest_strategy", "create_campaign", "campaign_status"),
     "career": ("career_profile_status", "career_profile_read",
                "career_profile_update", "career_profile_fill_field",
-               "career_platform_plan",
+               "career_platform_plan", "analyze_opportunity", "scam_check",
                "browser_open", "browser_read"),
     "paid_work": ("paid_work_status", "paid_work_scout",
                   "paid_work_ingest_opportunity", "paid_work_opportunities",
@@ -131,6 +131,8 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
     # Evidence-based forecasting + REAL fixtures/scores/standings + sports news.
     "sports": ("predict_match", "live_sports", "football_matches", "football_table",
                "live_news"),
+    "extensions": ("extension_inspect", "extension_status", "extension_update_check",
+                   "extension_approve", "extension_rollback", "extension_remove"),
 }
 
 # What each capability may cost, so a bug cannot quietly reintroduce a
@@ -142,12 +144,18 @@ BUDGETS: dict[str, int] = {
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 10, "missions": 8,
     "social": 15, "diagnostics": 12, "presentation": 8, "workflow": 6, "voice": 6,
-    "security": 7, "language": 6, "anime": 8, "sports": 4,
+    "security": 7, "language": 6, "anime": 8, "sports": 4, "extensions": 6,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow
 # beats broad. These match GRAMMAR, not bare nouns -- see the module note.
 _INTENT: tuple[tuple[str, str], ...] = (
+    ("extensions",
+     r"(?:https?://github\.com/\S+[^.,!?\s]|\b(?:pip|npm|mcp|plugin|skill):[\w@./-]+\b)[^.?!]{0,80}"
+     r"\b(?:add|install|integrate|inspect|check|use|upgrade)\b|"
+     r"\b(?:add|install|integrate|inspect|check|use|upgrade)\b[^.?!]{0,100}"
+     r"\b(?:github|repository|repo|package|mcp server|plugin|extension|skill)\b|"
+     r"\bextension (?:status|health|rollback|remove|disable|update)\b"),
     # Destructive: an imperative aimed at a target. A question about deletion
     # is not a request to delete, and must not be given the tool.
     ("files_destructive",
