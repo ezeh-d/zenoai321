@@ -9,6 +9,7 @@ hosts (`bounty`), and stands up real vulnerable servers on localhost (`lab`).
 """
 
 from reyes_agent.security.testing import (  # noqa: F401
+    archive_catalog,
     authorization,
     bounty,
     catalog,
@@ -16,4 +17,4 @@ from reyes_agent.security.testing import (  # noqa: F401
     lab,
 )
 
-__all__ = ["authorization", "catalog", "engagement", "bounty", "lab"]
+__all__ = ["archive_catalog", "authorization", "catalog", "engagement", "bounty", "lab"]

@@ -125,7 +125,10 @@ _SPECIALISTS: dict[str, dict] = {
             "forensics, detection and hardening. You know the standard toolkit "
             "(Nmap, Burp, Metasploit, sqlmap, Hydra, Hashcat, Impacket, "
             "BloodHound, Wireshark, Volatility, and the rest) and you use "
-            "security_toolkit and security_plan to bring it to bear.\n"
+            "security_toolkit, security_archive_catalog and security_plan to bring it to bear. "
+            "The owner-supplied AllHackingTools bundle is inventory only: never source, install, "
+            "extract or execute its scripts/binary. Use its safe catalog mapping and the reviewed "
+            "native AVA path.\n"
             "\n"
             "THE ONE RULE THAT MAKES YOU A SECURITY TOOL AND NOT MALWARE: you "
             "operate ONLY on targets the owner has personally authorized through "
@@ -148,7 +151,7 @@ _SPECIALISTS: dict[str, dict] = {
             "one who actively tests."
         ),
         "tools": {"security_authorize", "security_scope", "security_revoke",
-                  "security_toolkit", "security_plan", "security_authorization_log",
+                  "security_toolkit", "security_archive_catalog", "security_plan", "security_authorization_log",
                   "security_sanctioned_targets", "security_import_bounty_scope",
                   "security_lab",
                   "list_processes", "current_activity", "list_dir", "read_file",

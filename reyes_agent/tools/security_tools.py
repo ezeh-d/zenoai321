@@ -115,6 +115,29 @@ def security_toolkit(query: str, side: str = "both") -> str:
 
 
 @register(
+    name="security_archive_catalog",
+    description=(
+        "Inspect the owner-supplied AllHackingTools archive through AVA's safe "
+        "catalog. Every upstream reference is classified as defensive, authorized-"
+        "testing, blocked, or quarantined. The archive is never extracted, installed "
+        "or executed. Use for 'show the AllHackingTools catalog', 'which archive "
+        "tools are safe', or 'why is this hacking tool blocked'."),
+    input_schema={"type": "object", "properties": {
+        "query": {"type": "string", "description": "Tool, category or path text."},
+        "state": {"type": "string", "enum": ["DEFENSIVE_REFERENCE", "AUTHORIZED_TESTING", "BLOCKED", "QUARANTINED_INSTALLER", "DOCUMENTATION"]},
+        "limit": {"type": "integer", "description": "Maximum rows, capped at 200."},
+        "include_files": {"type": "boolean", "description": "Also show bounded archive-file entries."},
+    }},
+)
+def security_archive_catalog(query: str = "", state: str = "", limit: int = 50,
+                             include_files: bool = False) -> str:
+    from reyes_agent.security.testing import archive_catalog
+
+    return json.dumps(archive_catalog.query(query, state=state, limit=limit,
+                                            include_entries=include_files))
+
+
+@register(
     name="security_plan",
     description=(
         "Plan a security assessment of an AUTHORIZED target -- the phases, the "

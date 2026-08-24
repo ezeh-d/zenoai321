@@ -45,6 +45,31 @@ third-party credentials, physical-phone/carrier acceptance, spoof-resistant
 hardware authentication and 8/24-hour release observation are deployment or
 operational gates; they are not replaced with fake code or unsafe behaviour.
 
+## 2026-08-24 AVA owner-supplied security archive integration
+
+**DONE WITH NON-NEGOTIABLE HARM PREVENTION.** The owner's
+`AllHackingTools-main.zip` is integrated through AVA as a lazy, read-only,
+integrity-hashed catalog—not imported as trusted application code. The current
+archive SHA-256 is
+`7adec5ea1e7448add6c7954446a53786b6234335a99962a00820b5c9058c5a60`.
+AVA inventories all 289 archive entries and all 78 upstream tool references:
+9 defensive/diagnostic references, 33 target-scoped authorized-testing
+references and 36 blocked harmful references. The 224 executable/installer or
+unreviewed file entries, including the embedded `ngrok` binary, remain
+quarantined; 65 documentation/assets remain visible.
+
+`security_archive_catalog` exposes bounded search, state filters, native-tool
+matches, archive integrity and reasons. Legitimate active-testing candidates
+still require `security_authorize` scope and route to AVA's reviewed native
+planning/confirmation/timeout/evidence path. The archive is never extracted,
+sourced, installed or executed by ZENO. Phishing, credential theft, spam/SMS
+bombing, camera/location capture, RAT/web-shell tooling, DDoS, destructive
+malware and indiscriminate targeting stay blocked even if a target is in scope.
+Focused archive plus AVA security validation passes 53/53; the broader AVA,
+agent-team, routing, security-policy, catalog, reputation and universal-tool
+integration set passes 160/160. See
+`docs/AVA_ALL_HACKING_TOOLS.md`.
+
 ## 2026-08-24 core intelligence, stability and capability control plane
 
 **DONE WITH EXTERNAL ACCEPTANCE LIMITS.** ZENO now has one joined operational
