@@ -467,6 +467,11 @@ class DeviceLink:
         if changed:
             self._activity("device_revoked", target_device=device_id,
                            execution_result="revoked")
+            try:
+                from reyes_agent.unified_session import get_session_state
+                get_session_state().disconnect_device(device_id, source="device_link")
+            except Exception:
+                pass
         return bool(changed)
 
     # ---- heartbeat ------------------------------------------------------
@@ -479,6 +484,17 @@ class DeviceLink:
                 "UPDATE devices SET last_heartbeat=?, state=?, detail=? "
                 "WHERE device_id=? AND revoked=0 AND approval_state=?",
                 (time.time(), state, detail[:200], device_id, APPROVED_DEVICE)).rowcount
+        if changed:
+            try:
+                from reyes_agent.unified_session import get_session_state
+                session = get_session_state()
+                if state == OFFLINE:
+                    session.disconnect_device(device_id, source="device_link")
+                else:
+                    session.connect_device(device_id, make_active=state == BUSY,
+                                           source="device_link")
+            except Exception:
+                pass
         return bool(changed)
 
     def device_state(self, device_id: str) -> dict[str, Any]:

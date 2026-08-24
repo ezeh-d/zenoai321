@@ -1049,6 +1049,55 @@ def central_health() -> dict[str, Any]:
     return system_health.snapshot()
 
 
+class EmergencyControlRequest(BaseModel):
+    command: str
+
+
+@app.get("/api/control-plane/session")
+def control_plane_session(request: Request) -> dict[str, Any]:
+    """Local desktop projection of the shared session authority."""
+    _loopback(request)
+    from reyes_agent.unified_session import get_session_state
+    return get_session_state().snapshot()
+
+
+@app.get("/api/control-plane/capabilities")
+def control_plane_capabilities(request: Request) -> dict[str, Any]:
+    _loopback(request)
+    from reyes_agent.capability_truth import get_truth, seed_baseline, seed_tool_registry
+    seed_baseline()
+    seed_tool_registry()
+    return {"capabilities": get_truth().dashboard(), "dependencies": get_truth().dependencies()}
+
+
+@app.get("/api/control-plane/doctor")
+def control_plane_doctor(request: Request, capability: str = "") -> dict[str, Any]:
+    _loopback(request)
+    from reyes_agent.doctor import get_doctor
+    return get_doctor().diagnose(capability)
+
+
+@app.get("/api/control-plane/mission-control")
+def control_plane_mission_control(request: Request) -> dict[str, Any]:
+    _loopback(request)
+    from reyes_agent.mission_control import get_mission_control
+    return get_mission_control().snapshot()
+
+
+@app.get("/api/control-plane/quality")
+def control_plane_quality(request: Request) -> dict[str, Any]:
+    _loopback(request)
+    from reyes_agent.quality_score import get_quality_score
+    return get_quality_score().score()
+
+
+@app.post("/api/control-plane/emergency")
+def control_plane_emergency(req: EmergencyControlRequest, request: Request) -> dict[str, Any]:
+    _loopback(request)
+    from reyes_agent.emergency_control import execute
+    return execute(req.command)
+
+
 @app.get("/api/phase3/status")
 def phase3_status() -> dict[str, Any]:
     """Real feature/availability state; starts no optional service."""

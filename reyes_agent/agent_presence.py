@@ -99,6 +99,13 @@ class AgentPresenceManager:
                 "expression": "acknowledging", "emotion": "curious",
                 "persistent": True, "requested_by": source,
             })
+        if joined:
+            try:
+                from reyes_agent.unified_session import get_session_state
+                get_session_state().update(source="agent_presence", notify=False,
+                                           active_agents=self.active_ids())
+            except Exception:
+                pass
         return {"joined": joined, "already_active": already,
                 "active_agents": self.active_ids()}
 
@@ -125,6 +132,13 @@ class AgentPresenceManager:
                 "expression": "neutral", "requested_by": source,
             })
             self._publish("agent.removed", {"agent": agent, "requested_by": source})
+        if removed:
+            try:
+                from reyes_agent.unified_session import get_session_state
+                get_session_state().update(source="agent_presence", notify=False,
+                                           active_agents=self.active_ids())
+            except Exception:
+                pass
         return {"removed": removed, "active_agents": self.active_ids()}
 
     def standby_all(self, *, source: str = "owner") -> dict[str, Any]:

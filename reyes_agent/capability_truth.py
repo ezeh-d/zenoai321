@@ -15,6 +15,18 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+DEFINED = "DEFINED"
+INSTALLED = "INSTALLED"
+AVAILABLE = "AVAILABLE"
+AUTH_REQUIRED = "AUTH_REQUIRED"
+DEVICE_REQUIRED = "DEVICE_REQUIRED"
+DEVICE_OFFLINE = "DEVICE_OFFLINE"
+DEGRADED = "DEGRADED"
+BROKEN = "BROKEN"
+DISABLED = "DISABLED"
+UNSUPPORTED = "UNSUPPORTED"
+TESTING = "TESTING"
+
 # Weights for the production-readiness score (pack5 #251). They sum to 1.0.
 _WEIGHTS = {
     "implemented": 0.25,
@@ -29,6 +41,7 @@ _WEIGHTS = {
 @dataclass
 class CapabilityFacts:
     name: str
+    installed: bool = False
     implemented: bool = False
     tested: bool = False          # a smoke test actually passed
     has_fallback: bool = False
@@ -36,6 +49,20 @@ class CapabilityFacts:
     documented: bool = False
     available: bool = True        # present on THIS device/node
     owner: str = ""               # responsible component (pack5 #136)
+    description: str = ""
+    provider: str = ""
+    version: str = ""
+    device_requirements: tuple[str, ...] = ()
+    network_required: bool = False
+    authentication_required: bool = False
+    authenticated: bool = True
+    permissions: tuple[str, ...] = ()
+    fallbacks: tuple[str, ...] = ()
+    verification_method: str = ""
+    enabled: bool = True
+    broken: bool = False
+    dependencies: tuple[str, ...] = ()
+    last_health_check: float = 0.0
 
 
 class CapabilityTruth:
@@ -51,12 +78,24 @@ class CapabilityTruth:
             return
         with self._lock:
             current = self._facts.get(key) or CapabilityFacts(key)
-            for field_name in ("implemented", "tested", "has_fallback",
-                               "observable", "documented", "available"):
+            for field_name in ("installed", "implemented", "tested", "has_fallback",
+                               "observable", "documented", "available", "broken"):
                 if field_name in facts:
                     setattr(current, field_name, bool(facts[field_name]))
             if "owner" in facts:
                 current.owner = str(facts["owner"])
+            for field_name in ("description", "provider", "version", "verification_method"):
+                if field_name in facts:
+                    setattr(current, field_name, str(facts[field_name]))
+            for field_name in ("device_requirements", "permissions", "fallbacks", "dependencies"):
+                if field_name in facts:
+                    value = facts[field_name] or ()
+                    setattr(current, field_name, tuple(str(item) for item in value))
+            for field_name in ("network_required", "authentication_required", "authenticated", "enabled"):
+                if field_name in facts:
+                    setattr(current, field_name, bool(facts[field_name]))
+            if "last_health_check" in facts:
+                current.last_health_check = float(facts["last_health_check"] or 0.0)
             self._facts[key] = current
 
     def mark_tested(self, name: str, passed: bool) -> None:
@@ -105,10 +144,17 @@ class CapabilityTruth:
         facts = facts or CapabilityFacts(key)
         healthy, health_detail = self._healthy(key)
         active = facts.implemented and facts.tested   # the no-fake rule
+        status = self._status(facts, advertised, healthy)
+        try:
+            from reyes_agent.tool_reputation import get_reputation
+            reputation = get_reputation().reputation(key)
+        except Exception:  # noqa: BLE001
+            reputation = {"success_rate": None, "p50_latency_ms": None}
         return {
             "name": key,
             "advertised": advertised,
             "implemented": facts.implemented,
+            "installed": facts.installed,
             "tested": facts.tested,
             "healthy": healthy,
             "available": facts.available,
@@ -116,7 +162,61 @@ class CapabilityTruth:
             "lifecycle": self._lifecycle(key),
             "owner": facts.owner,
             "health_detail": health_detail,
+            "status": status,
+            "description": facts.description,
+            "provider": facts.provider,
+            "version": facts.version,
+            "device_requirements": list(facts.device_requirements),
+            "network_required": facts.network_required,
+            "authentication_required": facts.authentication_required,
+            "permissions": list(facts.permissions),
+            "fallbacks": list(facts.fallbacks),
+            "verification_method": facts.verification_method,
+            "dependencies": list(facts.dependencies),
+            "last_health_check": facts.last_health_check,
+            "success_rate": reputation.get("success_rate"),
+            "latency_ms": reputation.get("median_latency_ms"),
         }
+
+    @staticmethod
+    def _status(facts: CapabilityFacts, advertised: bool, healthy: bool) -> str:
+        if not advertised:
+            return UNSUPPORTED
+        if not facts.enabled:
+            return DISABLED
+        if facts.broken:
+            return BROKEN
+        if not facts.implemented:
+            return INSTALLED if facts.installed else DEFINED
+        if facts.authentication_required and not facts.authenticated:
+            return AUTH_REQUIRED
+        if facts.device_requirements and not facts.available:
+            return DEVICE_OFFLINE
+        if not facts.available:
+            return DEVICE_REQUIRED
+        if not healthy:
+            return DEGRADED
+        if not facts.tested:
+            return TESTING
+        return AVAILABLE
+
+    def diagnose(self, name: str) -> dict[str, Any]:
+        result = self.truth(name)
+        dependencies = [self.truth(dep) for dep in result.get("dependencies", [])]
+        result["dependency_health"] = dependencies
+        blocked = next((dep for dep in dependencies
+                        if dep["status"] not in {AVAILABLE, INSTALLED, TESTING}), None)
+        if blocked is not None:
+            result["root_cause"] = {"dependency": blocked["name"], "status": blocked["status"]}
+        elif result["status"] != AVAILABLE:
+            result["root_cause"] = {"capability": result["name"], "status": result["status"]}
+        else:
+            result["root_cause"] = None
+        return result
+
+    def dependencies(self) -> dict[str, list[str]]:
+        with self._lock:
+            return {name: list(facts.dependencies) for name, facts in self._facts.items()}
 
     def production_readiness(self, name: str) -> dict[str, Any]:
         key = _norm(name)
@@ -166,7 +266,30 @@ def get_truth() -> CapabilityTruth:
     with _instance_lock:
         if _instance is None:
             _instance = CapabilityTruth()
-        return _instance
+    return _instance
+
+
+CapabilityTruthEngine = CapabilityTruth
+CapabilityRegistry = CapabilityTruth
+
+
+class CapabilityDependencyGraph:
+    def __init__(self, truth: CapabilityTruth | None = None) -> None:
+        self.truth = truth or get_truth()
+
+    def graph(self) -> dict[str, list[str]]:
+        return self.truth.dependencies()
+
+    def explain(self, capability: str) -> dict[str, Any]:
+        return self.truth.diagnose(capability)
+
+
+class CapabilityHealthService:
+    def __init__(self, truth: CapabilityTruth | None = None) -> None:
+        self.truth = truth or get_truth()
+
+    def check(self, capability: str) -> dict[str, Any]:
+        return self.truth.diagnose(capability)
 
 
 def seed_baseline() -> None:
@@ -182,12 +305,16 @@ def seed_baseline() -> None:
     # Verified this build: phone->desktop open_app actually launched apps and is
     # corroborated by an independent process check; reputation + breaker observe
     # it. See CODEX_CLAUDE_COORDINATION.md.
-    truth.declare("open_app", implemented=True, tested=True, has_fallback=True,
-                  observable=True, documented=True, owner="remote_access")
+    truth.declare("open_app", installed=True, implemented=True, tested=True, has_fallback=True,
+                  observable=True, documented=True, owner="remote_access",
+                  provider="desktop_automation", device_requirements=("laptop",),
+                  permissions=("app_control",), verification_method="process_or_window",
+                  fallbacks=("windows_shell", "pywinauto"))
     # The conversation planner has a passing test suite and a live diagnostics
     # endpoint, but no realtime audio pipeline -- honestly not observable yet.
-    truth.declare("conversation_plan", implemented=True, tested=True,
-                  observable=False, documented=True, owner="conversation")
+    truth.declare("conversation_plan", installed=True, implemented=True, tested=True,
+                  observable=False, documented=True, owner="conversation",
+                  provider="local", verification_method="contract_tests")
     try:
         from reyes_agent import capability_lifecycle as _cl
 
@@ -197,3 +324,32 @@ def seed_baseline() -> None:
             life.transition(name, _cl.PRODUCTION)
     except Exception:  # noqa: BLE001
         pass
+
+
+def seed_tool_registry() -> None:
+    """Declare registered tools without pretending registration proves them.
+
+    A tool with no measured successful execution is TESTING, not AVAILABLE.
+    Re-running is intentional: lazy tools/plugins can appear after startup.
+    """
+    try:
+        from reyes_agent.tools import TOOLS
+        from reyes_agent.tool_reputation import get_reputation
+    except Exception:  # noqa: BLE001
+        return
+    truth = get_truth()
+    for name, tool in list(TOOLS.items()):
+        current = truth.truth(name)
+        rep = get_reputation().reputation(name)
+        truth.declare(
+            name,
+            installed=True,
+            implemented=True,
+            tested=bool(current.get("tested") or rep.get("samples", 0) > 0),
+            observable=True,
+            description=str(getattr(tool, "description", ""))[:500],
+            provider="local_registry",
+            verification_method=(current.get("verification_method") or
+                                 "tool_result_classifier"),
+            owner="GlobalToolRegistry",
+        )

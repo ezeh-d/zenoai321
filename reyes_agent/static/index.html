@@ -1722,12 +1722,21 @@ function cmdkAsk(promptText) {
   if (q && q.trim()) runTurn(q.trim());
 }
 let jarvisHudModule = null;
+let missionControlModule = null;
 async function openJarvisHud() {
   try {
     jarvisHudModule = jarvisHudModule || await import('/static/jarvis_hud.js?v=1');
     await jarvisHudModule.openJarvisHud({ runCommand: runTurn });
   } catch (error) {
     addMessage('error', 'JARVIS Systems HUD could not open: ' + (error?.message || error));
+  }
+}
+async function openMissionControlPanel() {
+  try {
+    missionControlModule = missionControlModule || await import('/static/mission_control.js?v=1');
+    await missionControlModule.openMissionControl();
+  } catch (error) {
+    addMessage('error', 'Mission Control could not open: ' + (error?.message || error));
   }
 }
 const COMMANDS = [
@@ -1740,6 +1749,7 @@ const COMMANDS = [
   { label: 'Open Timeline', hint: 'Everything ZENO has done, from the event record', run: () => openTimeline() },
   { label: 'Tool Library', hint: 'All capabilities, providers and honest readiness states', run: () => openToolLibrary() },
   { label: 'Situation Room', hint: 'Everything at once: agents, system, missions, model, events', run: () => openSituation() },
+  { label: 'Mission Control', hint: 'Devices, capabilities, permissions, traces, quality and errors', run: () => openMissionControlPanel() },
   { label: 'JARVIS Systems HUD', hint: 'On-demand cinematic command view backed by live runtime evidence', run: () => openJarvisHud() },
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map — notes, tags, real links', run: () => openGalaxy() },
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map of real links and tags', run: () => openGalaxy() },

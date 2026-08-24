@@ -627,6 +627,25 @@ def register(app) -> None:
                 "inventory": capability_snapshot.what_can_i_do(),
                 "system": capability_snapshot.system_status()}
 
+    @protected.get("/control-plane")
+    def owner_control_plane() -> dict[str, Any]:
+        """Authenticated phone projection of the same laptop control plane.
+
+        No raw evidence targets or traces cross this boundary; the owner phone
+        gets coordinated state and aggregate truth, while detailed developer
+        diagnostics remain loopback-only.
+        """
+        from reyes_agent.capability_truth import get_truth, seed_baseline, seed_tool_registry
+        from reyes_agent.evidence_ledger import get_evidence_ledger
+        from reyes_agent.quality_score import get_quality_score
+        from reyes_agent.unified_session import get_session_state
+        seed_baseline()
+        seed_tool_registry()
+        return {"ok": True, "session": get_session_state().snapshot(),
+                "capabilities": get_truth().dashboard(),
+                "evidence": get_evidence_ledger().stats(),
+                "quality": get_quality_score().score()}
+
     @protected.get("/events")
     def owner_events(token: str = Depends(require_trusted_owner)) -> StreamingResponse:
         """Authenticated, bounded SSE invalidation feed for the owner PWA.

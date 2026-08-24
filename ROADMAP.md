@@ -6,8 +6,34 @@ Status vocabulary, used strictly:
 - **PARTIAL** — a real, working subset exists; the gap is named explicitly.
 - **NOT BUILT** — no code. Not stubbed, not faked, not simulated.
 
-Last updated: 2026-08-21. See `AGENT.md` for the dated engineering log
+Last updated: 2026-08-24. See `AGENT.md` for the dated engineering log
 behind each entry.
+
+## 2026-08-24 core intelligence, stability and capability control plane
+
+**DONE WITH EXTERNAL ACCEPTANCE LIMITS.** ZENO now has one joined operational
+control plane over its existing Kernel, Event Bus, workers, tools, permissions,
+missions, devices and agents. `unified_session.py` is the shared live answer to
+what is happening across laptop/phone/UI; device heartbeats and explicitly
+summoned agents update it. `capability_truth.py` now distinguishes DEFINED,
+TESTING, AVAILABLE, AUTH_REQUIRED, DEVICE_REQUIRED/OFFLINE, DEGRADED, DISABLED
+and UNSUPPORTED and explains dependency root causes. Registered-but-unmeasured
+tools are intentionally TESTING, never silently promoted.
+
+Independent verification, redacted durable action evidence, general
+claim-before-execute idempotency, bounded failure classification/recovery,
+OpenTelemetry-style trace correlation, measured resource profiles,
+ALLOW/DENY/ASK device/consent policy, golden failure capture, ZenoDoctor,
+Mission Control and a no-invented-number Quality Score are implemented. The
+local dashboard APIs are loopback-only; the authenticated owner phone receives
+only coordinated state and aggregate evidence. Five owner-facing read-only
+tools expose the control plane through normal routing.
+
+External observability servers, enterprise policy services, distributed
+workflow engines, OSWorld V2 assets/VMs, unauthenticated SaaS accounts and
+offline physical devices were researched but not falsely installed or marked
+working. Their local provider-neutral adapters remain ready for real
+configuration. See `docs/zeno_capability_audit.md` and `docs/research/`.
 
 ## 2026-08-21 ZENO Anywhere Live Desktop + shared agent presence
 

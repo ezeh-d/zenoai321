@@ -7,11 +7,13 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Iterator
 
 from reyes_agent.memory.privacy import redact
 
 _MAX_TRACES = 500
+_current_span: ContextVar[dict[str, str] | None] = ContextVar("zeno_current_span", default=None)
 
 
 class Tracer:
@@ -20,10 +22,19 @@ class Tracer:
         self._records: deque[dict[str, Any]] = deque(maxlen=_MAX_TRACES)
 
     @contextmanager
-    def span(self, name: str, *, request_id: str = "", attributes: dict[str, Any] | None = None) -> Iterator[dict[str, Any]]:
-        record = {"id": uuid.uuid4().hex, "request_id": request_id, "name": name,
+    def span(self, name: str, *, request_id: str = "", trace_id: str = "",
+             command_id: str = "", task_id: str = "", session_id: str = "",
+             attributes: dict[str, Any] | None = None) -> Iterator[dict[str, Any]]:
+        parent = _current_span.get()
+        span_id = uuid.uuid4().hex[:16]
+        resolved_trace = trace_id or (parent or {}).get("trace_id") or uuid.uuid4().hex
+        record = {"id": span_id, "span_id": span_id, "trace_id": resolved_trace,
+                  "parent_span_id": (parent or {}).get("span_id", ""),
+                  "request_id": request_id, "command_id": command_id,
+                  "task_id": task_id, "session_id": session_id, "name": name,
                   "started_at": time.time(), "status": "RUNNING",
                   "attributes": self._safe(attributes or {})}
+        token = _current_span.set({"trace_id": resolved_trace, "span_id": span_id})
         try:
             yield record
         except Exception as exc:
@@ -32,6 +43,7 @@ class Tracer:
         else:
             record["status"] = "OK"
         finally:
+            _current_span.reset(token)
             record["duration_ms"] = round((time.time() - record["started_at"]) * 1000, 2)
             with self._lock:
                 self._records.append(dict(record))

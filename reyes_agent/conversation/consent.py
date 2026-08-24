@@ -19,6 +19,9 @@ TRANSCRIPT_RETENTION = "transcript_retention"
 SPEAKER_ENROLLMENT = "speaker_enrollment"
 RECORDING = "recording"
 CAMERA = "camera"
+SCREEN_STREAMING = "screen_streaming"
+REMOTE_CONTROL = "remote_control"
+MEMORY_RETENTION = "memory_retention"
 
 _DEFAULTS = {
     AUDIO_PROCESSING: True,
@@ -26,6 +29,9 @@ _DEFAULTS = {
     SPEAKER_ENROLLMENT: False,
     RECORDING: False,
     CAMERA: False,
+    SCREEN_STREAMING: False,
+    REMOTE_CONTROL: False,
+    MEMORY_RETENTION: False,
 }
 
 # Privacy modes (pack6 #128) apply a consistent set of flags.
@@ -65,10 +71,13 @@ class ConsentStateManager:
             self._mode = m or "NORMAL"
             if m == NO_TRANSCRIPT_STORAGE:
                 self._flags[TRANSCRIPT_RETENTION] = False
+                self._flags[MEMORY_RETENTION] = False
             elif m == LOCAL_PROCESSING_ONLY:
                 # Nothing leaves the machine; retention/enrollment stay off too.
                 self._flags[TRANSCRIPT_RETENTION] = False
                 self._flags[RECORDING] = False
+                self._flags[SCREEN_STREAMING] = False
+                self._flags[REMOTE_CONTROL] = False
 
     def clear(self) -> None:
         """Forget this session's consent -- back to conservative defaults."""
@@ -82,3 +91,11 @@ class ConsentStateManager:
                     # A single honest line for a consent banner (pack6 #122, #129).
                     "listening": self._flags[AUDIO_PROCESSING],
                     "recording": self._flags[RECORDING]}
+
+
+_consent = ConsentStateManager()
+
+
+def get_consent() -> ConsentStateManager:
+    """Process-wide consent authority shared by voice, phone and policy paths."""
+    return _consent

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {"id": "phone-open-slack-laptop-offline", "expected": "DEVICE_OFFLINE"},
+    {"id": "slack-auth-expired", "expected": "AUTH_REQUIRED"},
+    {"id": "tool-returned-ui-unchanged", "expected": "VERIFICATION_FAILED"},
+    {"id": "duplicate-external-message", "expected": "IDEMPOTENT_NOOP"},
+    {"id": "emergency-stop-no-provider", "expected": "MODEL_FREE_CANCEL"}
+  ]
+}
