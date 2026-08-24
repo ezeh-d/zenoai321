@@ -616,12 +616,16 @@ def register(app) -> None:
         score and current resource admission. Read-only. Health and lifecycle
         are read live; the no-fake rule means only PROVEN capabilities show
         ACTIVE."""
-        from reyes_agent import admission, capability_truth
+        from reyes_agent import admission, capability_snapshot, capability_truth
 
         capability_truth.seed_baseline()
         return {"ok": True,
                 "capabilities": capability_truth.get_truth().dashboard(),
-                "resources": admission.get_admission().snapshot()}
+                "resources": admission.get_admission().snapshot(),
+                # The JARVIS/ULTRON "what can you do?" answer, read live from the
+                # real tool registry -- honest, never fabricated (#89, #91, #108).
+                "inventory": capability_snapshot.what_can_i_do(),
+                "system": capability_snapshot.system_status()}
 
     @protected.get("/events")
     def owner_events(token: str = Depends(require_trusted_owner)) -> StreamingResponse:

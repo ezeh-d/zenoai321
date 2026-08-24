@@ -258,3 +258,13 @@ NATS/Loki/A2A-wire all deferred behind the gate):
   task + result validation; can never widen ZENO permissions (#2-10).
 Integrated read-only via `GET /api/owner/capabilities/truth` in cloud_api.py,
 seeded honestly (only proven capabilities show ACTIVE). 18 tests green.
+
+## RECENT CLAUDE CHANGES — JARVIS/ULTRON capstone: live capability snapshot
+
+`capability_snapshot.py` (NEW) answers the brief's core demand (#89/#91/#96/#108):
+"what can ZENO do?" read LIVE from the real tool registry + capability->area map +
+breaker + capability_truth -- 299 tools, 27/28 areas connected, proven-active
+capabilities only, quarantined tools honestly flagged. It fabricates nothing: an
+area with no registered tools reads "not connected", never "coming soon". Folded
+into `GET /api/owner/capabilities/truth` (now also returns `inventory` + `system`).
+Read-only aggregator; imports nothing of Codex's, edits no shared registry. 8 tests.
