@@ -128,8 +128,8 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                      "prepare_for_visit", "start_visitor_session", "set_serious_mode"),
     "workflow": ("workflow_run", "workflow_teach", "workflow_confirm"),
     "voice": ("learn_my_voice", "voice_profile_status", "set_mic_level"),
-    # Evidence-based match forecasting (Elo+Poisson) + live sports news.
-    "sports": ("predict_match", "live_news"),
+    # Evidence-based forecasting + REAL fixtures/scores/standings + sports news.
+    "sports": ("predict_match", "football_matches", "football_table", "live_news"),
 }
 
 # What each capability may cost, so a bug cannot quietly reintroduce a
@@ -267,7 +267,11 @@ _INTENT: tuple[tuple[str, str], ...] = (
                  r"opportunit(?:y|ies)|campaign|market)\b"),
     ("sports", r"\b(?:predict|forecast|who (?:will|'ll) win|win probability|"
                r"likely score|score prediction|odds of|chances of|"
-               r"how will .* do|analyze .* (?:match|game|team))\b"),
+               r"how will .* do|analyze .* (?:match|game|team)|"
+               r"live (?:football|score|match)|next (?:match|game|fixture)|"
+               r"fixtures?|standings?|league table|(?:the )?table|"
+               r"how did .* (?:do|play|get on)|match result|full ?time|"
+               r"bayern|bundesliga|premier league|champions league)\b"),
     ("web", r"\b(?:search for|look up|google|find out|latest news|what.*happening|"
             r"research|today.?s? news|news (?:on|about|today|story|stories)|"
             r"headlines?|what.?s (?:the )?(?:latest|new)|any .*news)\b"),

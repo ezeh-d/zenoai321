@@ -38,25 +38,108 @@ from reyes_agent.tools import register
 def predict_match(home: str, away: str, home_elo: float = 1500.0, away_elo: float = 1500.0,
                   home_attack: float = 1.0, home_defense: float = 1.0,
                   away_attack: float = 1.0, away_defense: float = 1.0,
-                  data_quality: str = "") -> str:
+                  data_quality: str = "", competition: str = "BL1") -> str:
     from reyes_agent.sports.prediction import TeamStrength, predict_football
 
-    # If the caller supplied no distinguishing ratings, be honest: this is a
-    # thin forecast, not a grounded one.
     supplied = any(v not in (1.0, 1500.0) for v in
                    (home_elo, away_elo, home_attack, home_defense, away_attack, away_defense))
-    quality = (data_quality or ("PARTIAL" if supplied else "LIMITED")).upper()
 
+    # Prefer a GROUNDED forecast from real standings + results when no explicit
+    # ratings were supplied and football-data.org is connected.
+    if not supplied:
+        try:
+            from reyes_agent.sports.providers.football_data import get_provider
+            from reyes_agent.sports.ratings import grounded_prediction
+
+            provider = get_provider()
+            if provider.available():
+                for comp in _competitions_to_try(competition):
+                    grounded = grounded_prediction(str(home), str(away), provider, comp)
+                    if grounded is not None:
+                        return json.dumps(grounded.as_dict(), default=str)
+        except Exception:  # noqa: BLE001 -- fall back to the baseline model
+            pass
+
+    quality = (data_quality or ("PARTIAL" if supplied else "LIMITED")).upper()
     pred = predict_football(
         TeamStrength(str(home), float(home_elo), float(home_attack), float(home_defense)),
         TeamStrength(str(away), float(away_elo), float(away_attack), float(away_defense)),
         data_quality=quality)
     out = pred.as_dict()
     if not supplied:
-        out["note"] = ("No team ratings supplied and no live sports-data provider is "
-                       "connected, so this is a baseline forecast (LIMITED). Connect "
-                       "football-data.org or Sportradar for grounded ratings.")
+        out["note"] = ("Couldn't ground this in a connected competition, so it is a "
+                       "baseline forecast (LIMITED). Supply ratings or use a covered "
+                       "league for a grounded prediction.")
     return json.dumps(out, default=str)
+
+
+def _competitions_to_try(preferred: str) -> list[str]:
+    # The teams could be in any covered league; try the hint first, then majors.
+    seen, order = set(), []
+    for c in [preferred, "BL1", "PL", "PD", "SA", "FL1", "CL"]:
+        c = (c or "").strip()
+        if c and c.upper() not in seen:
+            seen.add(c.upper())
+            order.append(c)
+    return order
+
+
+@register(
+    name="football_matches",
+    description="REAL football fixtures, live scores and recent results (via "
+                "football-data.org). Use for 'Bayern's next match', 'live "
+                "football', 'how did Arsenal do'. status: SCHEDULED (upcoming), "
+                "LIVE, or FINISHED (results).",
+    input_schema={"type": "object", "properties": {
+        "team": {"type": "string", "description": "Team name, e.g. 'Bayern', 'Arsenal'."},
+        "competition": {"type": "string", "description": "League, e.g. 'Bundesliga', "
+                        "'Premier League' (default Bundesliga)."},
+        "status": {"type": "string", "enum": ["SCHEDULED", "LIVE", "FINISHED", ""]},
+    }, "required": []},
+)
+def football_matches(team: str = "", competition: str = "Bundesliga", status: str = "") -> str:
+    from reyes_agent.sports.providers.football_data import AVAILABLE, get_provider
+
+    provider = get_provider()
+    if not provider.available():
+        return json.dumps({"status": "AUTH_REQUIRED",
+                           "note": "No football-data.org API key configured."})
+    health = provider.health()
+    if health["status"] != AVAILABLE:
+        return json.dumps({"status": health["status"],
+                           "note": f"football-data.org is {health['status']}."})
+    if team.strip():
+        row = provider.find_team(team, provider.competition_code(competition))
+        if not row:
+            return json.dumps({"status": "NO_COVERAGE",
+                               "note": f"'{team}' not found in {competition}."})
+        matches = provider.team_matches(row["team_id"], status)
+    else:
+        matches = provider.recent_results(competition) if status.upper() != "SCHEDULED" else []
+    return json.dumps({"status": "AVAILABLE", "count": len(matches),
+                       "matches": matches[:15]}, default=str)
+
+
+@register(
+    name="football_table",
+    description="REAL league standings (via football-data.org). Use for 'show "
+                "the Bundesliga table', 'where are Bayern in the league'.",
+    input_schema={"type": "object", "properties": {
+        "competition": {"type": "string", "description": "League name (default Bundesliga)."},
+    }, "required": []},
+)
+def football_table(competition: str = "Bundesliga") -> str:
+    from reyes_agent.sports.providers.football_data import get_provider
+
+    provider = get_provider()
+    if not provider.available():
+        return json.dumps({"status": "AUTH_REQUIRED"})
+    table = provider.standings(competition)
+    if not table:
+        return json.dumps({"status": "NO_COVERAGE",
+                           "note": f"No standings for {competition}."})
+    return json.dumps({"status": "AVAILABLE", "competition": competition,
+                       "table": table}, default=str)
 
 
 # Declare the true capability status so ZENO never fakes coverage (Pack 7 #70).
@@ -69,6 +152,21 @@ def _declare() -> None:
                       documented=True, has_fallback=True, owner="sports.prediction",
                       description="Elo+Poisson ensemble forecast")
         truth.mark_tested("sports.predict.football", True)
+        # Live/fixtures/standings via football-data.org -- available only when a
+        # key is actually configured (honest, never faked).
+        try:
+            from reyes_agent.sports.providers.football_data import get_provider
+
+            live_ok = get_provider().available()
+        except Exception:  # noqa: BLE001
+            live_ok = False
+        for cap in ("sports.live.football", "sports.fixtures.football",
+                    "sports.standings.football"):
+            truth.declare(cap, implemented=True, tested=True, available=live_ok,
+                          owner="sports.providers.football_data",
+                          description="football-data.org" if live_ok else "needs API key")
+            if live_ok:
+                truth.mark_tested(cap, True)
         for sport in ("basketball", "tennis", "cricket", "f1"):
             truth.declare(f"sports.predict.{sport}", implemented=False, tested=False,
                           available=False, owner="sports.prediction",
