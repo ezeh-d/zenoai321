@@ -256,6 +256,20 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
     if entry is None:
         return False, {"error": f"tool '{tool_name}' is not registered on this desktop"}
 
+    # Consult the breaker BEFORE dispatch: a tool that just failed in a burst is
+    # OPEN, so refuse fast instead of burning another call (and another few
+    # seconds) on something known to be down. `allow` lets one probe through
+    # after the cooldown, so a recovered tool heals itself.
+    try:
+        from reyes_agent import circuit_breaker
+
+        if not circuit_breaker.allow(tool_name):
+            return False, {"tool": tool_name, "quarantined": True,
+                           "error": f"'{tool_name}' is temporarily quarantined after "
+                                    "repeated failures; it will retry automatically shortly."}
+    except Exception:  # noqa: BLE001 -- protection must never block a call itself
+        pass
+
     started = time.monotonic()
     try:
         builder = ACTION_ARGS.get(action)
@@ -298,6 +312,20 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
                 pass
     result = {"tool": tool_name, "detail": output[:4000],
               "verification_state": classification["verification_state"]}
+    # Tell the phone how sure we are, honestly (pack4 #72-73): a verified Windows
+    # postcondition is VERIFIED; a clean return we couldn't independently check is
+    # HIGH_CONFIDENCE, not a false "done"; a failure is FAILED.
+    try:
+        from reyes_agent import outcome_confidence as _oc
+
+        if failed:
+            result["outcome_confidence"] = _oc.FAILED
+        elif classification["verification_state"] == "verified":
+            result["outcome_confidence"] = _oc.VERIFIED
+        else:
+            result["outcome_confidence"] = _oc.HIGH_CONFIDENCE
+    except Exception:  # noqa: BLE001
+        pass
     if failed:
         result["error"] = "The application action did not produce verified Windows evidence."
     _note_reputation(tool_name, not failed, started)

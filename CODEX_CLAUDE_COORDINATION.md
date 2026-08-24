@@ -222,3 +222,12 @@ automation via `resource_leases.get_leases().hold(res, holder)`. 10 tests green.
 one honest level VERIFIED/HIGH_CONFIDENCE/PARTIAL/UNVERIFIED/FAILED (pack4
 #72-#73), composing ActionVerifier: `from_action(action,args,result)` and
 `truthful(level)` so ZENO only says "done" when it's earned. 11 tests green.
+
+## RECENT CLAUDE CHANGES — breaker before dispatch + confidence in reply
+
+`desktop_agent._run_tool` now (a) consults the circuit breaker BEFORE dispatch --
+a tripped tool is refused fast (`quarantined:true`) instead of burning another
+call, with `allow()` letting one probe through after cooldown to self-heal; and
+(b) labels every result with `outcome_confidence` (VERIFIED / HIGH_CONFIDENCE /
+FAILED) so the phone hears an honest confidence, never a false "done". Both are
+additive + defensive (never block a call on their own error). 4 new tests.
