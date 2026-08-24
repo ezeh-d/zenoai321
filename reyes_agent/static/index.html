@@ -141,7 +141,7 @@
   }
   /* Mini mode: REYES shrinks to just the orb (window is resized small by
      the desktop app). Hide all chrome so only the glowing orb shows. */
-  body.mini #ui, body.mini #map-overlay, body.mini #dev-overlay, body.mini #code-overlay, body.mini #news-overlay, body.mini #cmdk-overlay, body.mini #explain-btn, body.mini #explain-panel, body.mini #timeline-overlay, body.mini #agents-overlay, body.mini #situation-overlay, body.mini #galaxy-overlay, body.mini #council-overlay, body.mini #subspace-overlay { display: none !important; }
+  body.mini #ui, body.mini #map-overlay, body.mini #dev-overlay, body.mini #code-overlay, body.mini #news-overlay, body.mini #cmdk-overlay, body.mini #explain-btn, body.mini #explain-panel, body.mini #timeline-overlay, body.mini #tool-library-overlay, body.mini #agents-overlay, body.mini #situation-overlay, body.mini #galaxy-overlay, body.mini #council-overlay, body.mini #subspace-overlay { display: none !important; }
   body.mini #orb-canvas { cursor: pointer; }
   /* Companion mode: the whole window IS the orb. Shrink the orb to fit the
      210px window and drop the desktop background so only the glow shows. */
@@ -465,7 +465,7 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
    IDs/blocks rather than merged into map-overlay's, since each has its own
    trigger event and inner layout; the visual chrome is duplicated on
    purpose for that isolation, not because it needed rebuilding. */
-#code-overlay, #news-overlay, #timeline-overlay, #agents-overlay, #situation-overlay, #galaxy-overlay, #council-overlay, #subspace-overlay {
+#code-overlay, #news-overlay, #timeline-overlay, #tool-library-overlay, #agents-overlay, #situation-overlay, #galaxy-overlay, #council-overlay, #subspace-overlay {
   display: none;
   position: fixed;
   top: 50%; left: 50%;
@@ -480,7 +480,7 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
   overflow: hidden;
   flex-direction: column;
 }
-#code-overlay.open, #news-overlay.open, #timeline-overlay.open, #agents-overlay.open, #situation-overlay.open, #galaxy-overlay.open, #council-overlay.open, #subspace-overlay.open { display: flex; }
+#code-overlay.open, #news-overlay.open, #timeline-overlay.open, #tool-library-overlay.open, #agents-overlay.open, #situation-overlay.open, #galaxy-overlay.open, #council-overlay.open, #subspace-overlay.open { display: flex; }
 
 /* Council: the agent faces live HERE, not as floating desktop windows.
    ZENO's orb stays the primary identity; these are the specialists. */
@@ -681,6 +681,19 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
    readable, grouped-by-day list. Read-only history, not a live ticker --
    the activity pills already cover "right now". */
 #timeline-body { flex: 1; overflow-y: auto; padding: 6px 0; }
+.tool-library-controls { display:flex; gap:8px; padding:10px 14px; border-bottom:1px solid rgba(120,170,255,.12); }
+.tool-library-controls input, .tool-library-controls select { background:#0c1018; color:var(--text); border:1px solid var(--border); border-radius:7px; padding:7px 9px; }
+.tool-library-controls input { flex:1; min-width:0; }
+#tool-library-summary { padding:8px 15px; color:var(--text-dim); font:11px system-ui,sans-serif; border-bottom:1px solid rgba(120,170,255,.08); }
+#tool-library-body { flex:1; min-height:0; overflow:auto; padding:10px 14px 18px; display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:8px; align-content:start; }
+.tool-card { border:1px solid rgba(120,170,255,.14); border-radius:9px; background:rgba(255,255,255,.025); padding:10px 11px; min-width:0; }
+.tool-card-head { display:flex; gap:8px; align-items:flex-start; }
+.tool-card-head b { flex:1; min-width:0; color:var(--text); font:650 12px system-ui,sans-serif; overflow-wrap:anywhere; }
+.tool-card small { display:block; color:var(--text-dim); font:10.5px/1.45 system-ui,sans-serif; margin-top:5px; overflow-wrap:anywhere; }
+.tool-state { flex:none; border-radius:999px; padding:2px 6px; font:700 8px system-ui,sans-serif; letter-spacing:.04em; background:rgba(120,170,255,.13); color:#a8c8ff; }
+.tool-state.INSTALLED { color:#8fd6a8; background:rgba(80,200,130,.12); }
+.tool-state.NEEDS_LOGIN, .tool-state.NEEDS_DEVICE { color:#ffd479; background:rgba(245,197,24,.11); }
+.tool-state.BROKEN { color:#ff9d9d; background:rgba(255,100,100,.12); }
 .tl-day {
   position: sticky; top: 0; background: #0a0c12; padding: 8px 18px 6px;
   font: 700 11px system-ui, sans-serif; letter-spacing: 0.1em;
@@ -843,6 +856,22 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
     <button class="ws-close" id="timeline-close" title="Close">&times;</button>
   </div>
   <div id="timeline-body"></div>
+</div>
+<div id="tool-library-overlay">
+  <div class="ws-bar">
+    <span class="ws-title">Universal Capability Library</span>
+    <button class="ws-close" id="tool-library-close" title="Close">&times;</button>
+  </div>
+  <div class="tool-library-controls">
+    <input id="tool-library-query" type="search" maxlength="120" placeholder="Search capabilities or providers" />
+    <select id="tool-library-state" aria-label="Capability state">
+      <option value="">All states</option>
+      <option>INSTALLED</option><option>AVAILABLE</option><option>EXPERIMENTAL</option>
+      <option>NEEDS_LOGIN</option><option>NEEDS_DEVICE</option><option>DISABLED</option><option>BROKEN</option>
+    </select>
+  </div>
+  <div id="tool-library-summary">Open to load the local inventory. Nothing is installed or started by this view.</div>
+  <div id="tool-library-body"></div>
 </div>
 <div id="map-overlay">
   <div id="map-overlay-bar">
@@ -1709,6 +1738,7 @@ const COMMANDS = [
   { label: 'Open Settings', hint: '', run: () => settingsPanel.classList.add('open') },
   { label: 'Show what ZENO just did', hint: 'Explainability panel', run: () => { explainPanel.classList.add('open'); renderExplainPanel(); } },
   { label: 'Open Timeline', hint: 'Everything ZENO has done, from the event record', run: () => openTimeline() },
+  { label: 'Tool Library', hint: 'All capabilities, providers and honest readiness states', run: () => openToolLibrary() },
   { label: 'Situation Room', hint: 'Everything at once: agents, system, missions, model, events', run: () => openSituation() },
   { label: 'JARVIS Systems HUD', hint: 'On-demand cinematic command view backed by live runtime evidence', run: () => openJarvisHud() },
   { label: 'Knowledge Galaxy', hint: 'Your vault as a map — notes, tags, real links', run: () => openGalaxy() },
@@ -4802,6 +4832,57 @@ function openTimeline() {
   loadTimeline();
 }
 window.zenoTimeline = { open: openTimeline, reload: loadTimeline };
+
+// --- Universal Capability Library ------------------------------------
+// Inventory is fetched only while the owner opens/searches this panel. It
+// never polls, imports a provider SDK, enables a flag or starts a tool.
+let toolLibraryTimer = null;
+let toolLibraryRequest = null;
+function addToolLibraryCard(body, title, state, detail) {
+  const card = document.createElement('div'); card.className = 'tool-card';
+  const head = document.createElement('div'); head.className = 'tool-card-head';
+  const name = document.createElement('b'); name.textContent = title;
+  const badge = document.createElement('span'); badge.className = 'tool-state ' + state; badge.textContent = state;
+  const note = document.createElement('small'); note.textContent = detail;
+  head.append(name, badge); card.append(head, note); body.appendChild(card);
+}
+async function loadToolLibrary() {
+  const overlay = document.getElementById('tool-library-overlay');
+  if (!overlay.classList.contains('open')) return;
+  const body = document.getElementById('tool-library-body');
+  const summary = document.getElementById('tool-library-summary');
+  const q = document.getElementById('tool-library-query').value.trim();
+  const state = document.getElementById('tool-library-state').value;
+  if (toolLibraryRequest) toolLibraryRequest.abort();
+  toolLibraryRequest = new AbortController();
+  body.textContent = ''; summary.textContent = 'Reading local inventory…';
+  try {
+    const qs = new URLSearchParams({ q, state, limit: '500' });
+    const data = await (await fetch('/api/tool-library?' + qs, { signal: toolLibraryRequest.signal })).json();
+    summary.textContent = `${data.section_total} catalog areas · ${data.provider_total} provider choices · ${data.sections.length + data.providers.length} shown`;
+    data.sections.forEach((row) => addToolLibraryCard(body, `${row.number}. ${row.title}`, row.state, row.evidence));
+    data.providers.forEach((row) => addToolLibraryCard(body, row.name, row.state, `${row.capability} — ${row.reason}`));
+    if (!body.childElementCount) summary.textContent += ' · no matches';
+  } catch (error) {
+    if (error?.name !== 'AbortError') summary.textContent = 'The local catalog could not be read.';
+  }
+}
+function openToolLibrary() {
+  document.getElementById('tool-library-overlay').classList.add('open');
+  loadToolLibrary();
+}
+function closeToolLibrary() {
+  document.getElementById('tool-library-overlay').classList.remove('open');
+  clearTimeout(toolLibraryTimer); toolLibraryTimer = null;
+  if (toolLibraryRequest) toolLibraryRequest.abort();
+  document.getElementById('tool-library-body').textContent = '';
+}
+document.getElementById('tool-library-close').addEventListener('click', closeToolLibrary);
+document.getElementById('tool-library-state').addEventListener('change', loadToolLibrary);
+document.getElementById('tool-library-query').addEventListener('input', () => {
+  clearTimeout(toolLibraryTimer); toolLibraryTimer = setTimeout(loadToolLibrary, 180);
+});
+window.zenoToolLibrary = { open: openToolLibrary, close: closeToolLibrary, reload: loadToolLibrary };
 
 // --- Desktop Companion Mode -------------------------------------------
 // In mini mode the window is a small, chromeless floating orb. Since it

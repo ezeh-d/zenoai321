@@ -255,6 +255,14 @@ def _seed() -> None:
     cap("psutil", "inspect processes and resources", PYTHON_LIBRARY, package="psutil")
     cap("uiautomation", "read and drive Windows application controls", WINDOWS_APP,
         package="comtypes")
+    cap("pywinauto", "inspect native Windows UI Automation controls", WINDOWS_APP,
+        package="pywinauto", risk=SENSITIVE,
+        install_hint="python install.py --catalog-safe")
+    cap("native_documents", "extract bounded text from PDF, DOCX, XLSX and PPTX",
+        PYTHON_LIBRARY,
+        detector=lambda: all(inventory.has_package(name)
+                             for name in ("fitz", "docx", "openpyxl", "pptx")),
+        filesystem=True, install_hint="python install.py --catalog-safe")
     cap("ollama", "run a local model", LOCAL_MODEL, binary="ollama",
         install_hint="install Ollama from ollama.com")
 

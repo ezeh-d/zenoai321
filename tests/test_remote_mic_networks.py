@@ -191,6 +191,7 @@ class TestLocalAddressAcrossIPVersions:
             import psutil
         except ImportError:  # pragma: no cover
             return None
+        stats = psutil.net_if_stats()
         # Hyper-V / WSL / Docker install host-only virtual switches
         # (vEthernet, 172.x, 192.168.128.x). is_local_address correctly does
         # NOT treat those as the owner's real LAN -- so a test that grabbed the
@@ -200,6 +201,13 @@ class TestLocalAddressAcrossIPVersions:
                    "loopback", "docker", "default switch")
         for name, addresses in psutil.net_if_addrs().items():
             if any(marker in name.lower() for marker in virtual):
+                continue
+            # Addresses can remain in the interface table briefly while a
+            # Wi-Fi adapter is reconnecting. Production deliberately refuses
+            # a down adapter, so the live test must not manufacture a
+            # neighbour from stale address metadata and expect it to be
+            # trusted.
+            if not getattr(stats.get(name), "isup", False):
                 continue
             for entry in addresses:
                 if getattr(entry.family, "name", "") != "AF_INET":

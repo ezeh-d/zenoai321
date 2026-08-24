@@ -120,7 +120,9 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                  "resume_workspace"),
     "diagnostics": ("system_health", "system_status", "phase3_status",
                     "evolution_report", "awareness_status", "digital_dna",
-                    "voice_profile_status", "ocr_capabilities"),
+                    "voice_profile_status", "ocr_capabilities",
+                    "universal_tool_health", "universal_tool_catalog",
+                    "universal_tool_resolve"),
     "presentation": ("t21_services", "t21_remember", "siwes_evidence",
                      "prepare_for_visit", "start_visitor_session", "set_serious_mode"),
     "workflow": ("workflow_run", "workflow_teach", "workflow_confirm"),
@@ -135,7 +137,7 @@ BUDGETS: dict[str, int] = {
     "vision": 10, "agents": 8, "council": 6, "communication": 8,
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 10, "missions": 8,
-    "social": 15, "diagnostics": 10, "presentation": 8, "workflow": 6, "voice": 6,
+    "social": 15, "diagnostics": 12, "presentation": 8, "workflow": 6, "voice": 6,
     "security": 7, "language": 6, "anime": 8,
 }
 
@@ -260,7 +262,8 @@ _INTENT: tuple[tuple[str, str], ...] = (
     ("presentation", r"\b(?:siwes|evidence|portfolio|engr bello|visitor|"
                      r"presentation|serious mode|ultron|t21)\b"),
     ("diagnostics", r"\b(?:health|diagnostic|status of|are you (?:ok|working)|"
-                    r"system status)\b"),
+                    r"system status|tool library|capability library|available tools|"
+                    r"tool health|best tool)\b"),
     ("voice", r"\b(?:learn my voice|my voice|microphone level|mic level)\b"),
     ("workflow", r"\b(?:workflow|routine|do that again|the usual)\b"),
     ("missions", r"\b(?:mission|task list|what.*working on)\b"),

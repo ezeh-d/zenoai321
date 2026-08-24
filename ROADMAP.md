@@ -1706,3 +1706,56 @@ permission authority. Lock, permission, payment, DRM and other secure screens
 may suppress overlays; some games prohibit overlays or Accessibility services.
 ZENO does not bypass those controls and does not claim autonomous gameplay or
 unrestricted phone control.
+
+---
+
+## Universal Tool Catalog — STABLE SUPPORTED ADAPTER PASS COMPLETE (2026-08-21)
+
+The 148-section Universal Tool Master Catalog was audited against the current
+ZENO architecture. The catalog was treated as its author intended: a selective
+capability specification, not permission to clone every repository or install
+competing frameworks. ZENO now exposes 299 registered tools through one
+lazy registry while sending only 12 core schemas to the provider, and already
+has the Kernel, bounded task runtime, Event Bus, permission/verification
+layers, device manager, workflows, agents, MCP allowlist, memory and health
+architecture required by the catalog.
+
+The confirmed lightweight gaps are now real adapters: pywinauto for native
+Windows UIA and bounded native readers for PDF, DOCX, XLSX and PPTX. They are
+lazy and create no startup worker or polling loop. The installer now has real
+argument parsing, never upgrades compatible packages without explicit consent,
+supports a dry run and a supported `--catalog-safe` group, and always checks
+dependency consistency. The Windows doctor no longer crashes under CP1252 and
+reports the real adapter state.
+
+Live checks launched Playwright Chromium and verified a rendered DOM, queried
+the actual Windows UIA desktop, executed ffmpeg and Ollama, and generated then
+reread genuine PDF/Word/Excel/PowerPoint files. Dependency consistency passed.
+The final complete maintained ZENO suite passed 1,750/1,750 in 569.20 seconds
+with deprecation warnings treated as errors. The desktop web shell now uses the
+supported FastAPI lifespan API. Load testing also hardened two Windows process
+edges: read-only MCP discovery receives one bounded retry while effectful calls
+are never replayed, and trusted local sandbox execution remains bounded at 45
+seconds. LAN tests no longer treat stale addresses on down adapters as trusted
+local routes.
+The exact mapping, versions, tests and stability exclusions are documented in
+`ZENO_UNIVERSAL_TOOL_CATALOG_REPORT.md`.
+
+The final 2026-08-24 pass added the missing catalog-wide contract without
+creating a second executor. All 299 executable tools now have normalized,
+versioned metadata, schema validation, permission/device health, managed
+timeouts, cancellation and selection through `GlobalToolRegistry`, while real
+execution still reaches the existing gated `run_tool` path. The complete 148
+catalog sections and 57 provider candidates are exposed through lazy read-only
+admin tools, loopback-only APIs and a Tool Library dashboard panel. The panel
+fetches only while open, cancels stale searches, does not poll and releases its
+rows on close. A cold complete tool import measured 950.6 ms, 17.38 MiB and no
+thread growth; catalog status took 69.8 ms and registry health 164.8 ms.
+
+Heavy duplicate stacks (Docling/Torch where native readers suffice, extra
+vector databases, competing orchestration frameworks, Tesseract alongside
+working Windows OCR, arbitrary GitHub repositories and untrusted MCP servers)
+remain deliberately uninstalled or feature-flagged. Account tools such as
+Gmail, calendar, GitHub and Home Assistant remain unavailable until the owner
+selects and authorizes an account; ZENO does not confuse package presence with
+permission or working capability.

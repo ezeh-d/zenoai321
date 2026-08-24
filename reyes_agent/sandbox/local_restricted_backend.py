@@ -25,7 +25,7 @@ class LocalRestrictedBackend:
                 "containment": "policy + clean environment + workspace cwd; not an OS security boundary",
                 "untrusted_code": False}
 
-    def execute_python(self, script: str, *, workspace: str, timeout_s: float = 20.0) -> SandboxResult:
+    def execute_python(self, script: str, *, workspace: str, timeout_s: float = 45.0) -> SandboxResult:
         started = time.perf_counter()
         root = Path(workspace).resolve(strict=True)
         target = Path(script).resolve(strict=True)

@@ -13,8 +13,17 @@ import importlib.util
 import sys
 from pathlib import Path
 
-OK = "\033[92m✓\033[0m"
-NO = "\033[91m✗\033[0m"
+def _encodable(value: str) -> bool:
+    try:
+        value.encode(sys.stdout.encoding or "utf-8")
+        return True
+    except (LookupError, UnicodeEncodeError):
+        return False
+
+
+_UNICODE_MARKS = _encodable("✓✗")
+OK = "\033[92m✓\033[0m" if _UNICODE_MARKS else "\033[92mOK\033[0m"
+NO = "\033[91m✗\033[0m" if _UNICODE_MARKS else "\033[91mNO\033[0m"
 WARN = "\033[93m!\033[0m"
 
 
@@ -112,8 +121,17 @@ def check_extras() -> None:
          "installed" if have("mss") else "pip install mss")
     line(OK if have("playwright") else WARN, "playwright (browser)",
          "installed" if have("playwright") else "pip install playwright && playwright install chromium")
-    line(OK if have("pytesseract") else WARN, "pytesseract (screen OCR / vision)",
-         "installed" if have("pytesseract") else "pip install pytesseract + install Tesseract")
+    line(OK if have("winsdk") else WARN, "Windows OCR (screen/image text)",
+         "installed" if have("winsdk") else "pip install winsdk")
+    line(OK if have("pywinauto") else WARN, "pywinauto (native Windows UI)",
+         "installed" if have("pywinauto") else "python install.py --catalog-safe")
+    document_modules = {
+        "fitz": "PDF", "docx": "DOCX", "openpyxl": "XLSX", "pptx": "PPTX",
+    }
+    missing_docs = [label for module, label in document_modules.items() if not have(module)]
+    line(OK if not missing_docs else WARN, "Native document readers",
+         "PDF/DOCX/XLSX/PPTX ready" if not missing_docs
+         else "missing " + ", ".join(missing_docs) + "; run install.py --catalog-safe")
     line(OK, "Mobile bridge (server.py)", "standard library only — always ready")
     line(OK if have("requests") else WARN, "requests (Telegram bridge)",
          "installed" if have("requests") else "pip install requests")
@@ -129,7 +147,8 @@ def main() -> None:
     check_hud()
     check_voice()
     check_extras()
-    print("\nTip: run.py needs Brain + Terminal ✓. The HUD adds PySide6. "
+    ready_mark = "✓" if _UNICODE_MARKS else "OK"
+    print(f"\nTip: run.py needs Brain + Terminal {ready_mark}. The HUD adds PySide6. "
           "Voice adds the mic/TTS row. Everything else is optional per feature.\n")
 
 

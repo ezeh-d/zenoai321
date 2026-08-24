@@ -28,6 +28,7 @@ import socket
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,24 @@ from pydantic import BaseModel
 
 from reyes_agent import config
 
-app = FastAPI(title=config.ASSISTANT_NAME)
+
+@asynccontextmanager
+async def _lifespan(_application: FastAPI):
+    """Delegate FastAPI lifecycle to ZENO's existing staged handlers.
+
+    The names resolve when the server enters the lifespan, after this module
+    has finished defining them. Keeping the handlers separate preserves the
+    existing diagnostics/tests while avoiding FastAPI's deprecated
+    ``on_event`` registration path.
+    """
+    await _on_startup()
+    try:
+        yield
+    finally:
+        await _on_shutdown()
+
+
+app = FastAPI(title=config.ASSISTANT_NAME, lifespan=_lifespan)
 
 # --- remote access (optional, off unless configured) ---------------------
 # CORS did not exist anywhere in this app before now, which was fine while
@@ -353,7 +371,6 @@ def _boot_executive_runtime() -> None:
         _complete_boot_stage("executive", "executive_degraded", exc)
 
 
-@app.on_event("startup")
 async def _on_startup() -> None:
     """Make the HTTP shell responsive first; stage all substantial work."""
     global _event_loop_probe_stop, _event_loop_probe_task
@@ -445,7 +462,6 @@ async def _on_startup() -> None:
     _event_loop_probe_task = asyncio.create_task(event_loop_probe(_event_loop_probe_stop))
 
 
-@app.on_event("shutdown")
 async def _on_shutdown() -> None:
     if _event_loop_probe_stop is not None:
         _event_loop_probe_stop.set()
@@ -3050,6 +3066,33 @@ def _phone_origin(request: Request) -> tuple[str, str]:
 def _loopback(request: Request) -> None:
     if not request.client or request.client.host not in {"127.0.0.1", "::1"}:
         raise HTTPException(403, "Desktop-only endpoint.")
+
+
+@app.get("/api/tool-library")
+def universal_tool_library(request: Request, state: str = "", q: str = "",
+                           limit: int = 100) -> dict[str, Any]:
+    """Read-only desktop inventory; never returns secret values or runs tools."""
+    _loopback(request)
+    from reyes_agent.tools import universal_catalog
+
+    return universal_catalog.query(state=state, text=q, limit=limit)
+
+
+@app.get("/api/tool-library/health")
+def universal_tool_library_health(request: Request) -> dict[str, Any]:
+    """One local health view over the real tool runtime and catalog."""
+    _loopback(request)
+    from reyes_agent.tools import universal_catalog
+    from reyes_agent.tools.universal_registry import (
+        contract_status,
+        get_global_tool_registry,
+    )
+
+    return {
+        "catalog": universal_catalog.status(),
+        "registry": get_global_tool_registry().health(),
+        "contract": contract_status(),
+    }
 
 def _phone_session(request: Request, zeno_phone_session: str | None = Cookie(default=None)):
     from reyes_agent.phone_security import get_phone_security

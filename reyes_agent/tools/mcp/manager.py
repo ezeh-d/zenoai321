@@ -17,6 +17,7 @@ class MCPManager:
         self._slots = threading.BoundedSemaphore(2)
         self._calls = 0
         self._failures = 0
+        self._discovery_retries = 0
 
     def discover(self, server_name: str) -> list[dict[str, Any]]:
         server = self.registry.get(server_name)
@@ -25,10 +26,20 @@ class MCPManager:
             raise PermissionError(reason)
         if not self._slots.acquire(timeout=1.0):
             raise RuntimeError("MCP concurrency limit reached")
-        started = time.time()
         try:
-            tools = client.run(server, self.registry.environment_for(server), "list",
-                               timeout_s=server.startup_timeout_s)
+            # Process creation on Windows can transiently miss its deadline
+            # when antivirus or a saturated machine delays the stdio child.
+            # Discovery is read-only/idempotent, so it gets exactly one retry;
+            # actual tool calls are never replayed because their effects may
+            # not be idempotent.
+            try:
+                tools = client.run(server, self.registry.environment_for(server), "list",
+                                   timeout_s=server.startup_timeout_s)
+            except TimeoutError:
+                self._discovery_retries += 1
+                time.sleep(0.05)
+                tools = client.run(server, self.registry.environment_for(server), "list",
+                                   timeout_s=server.startup_timeout_s)
             server.tools = discovery.normalize(tools)
             server.state = CONNECTED
             server.error = ""
@@ -87,6 +98,7 @@ class MCPManager:
         registry = self.registry.status()
         return {**health.summarize(registry), "sdk_installed": client.installed(),
                 "calls": self._calls, "failures": self._failures,
+                "discovery_retries": self._discovery_retries,
                 "servers": registry["servers"], "allowlist": registry["allowlist"]}
 
     def shutdown(self) -> None:

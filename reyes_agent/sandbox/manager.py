@@ -30,7 +30,7 @@ class SandboxManager:
                 "untrusted_requires_strong_backend": True}
 
     def execute_python(self, script: str, *, workspace: str | Path | None = None,
-                       untrusted: bool = True, timeout_s: float = 20.0) -> dict[str, Any]:
+                       untrusted: bool = True, timeout_s: float = 45.0) -> dict[str, Any]:
         root = resolve_workspace(workspace)
         from reyes_agent.sandbox import aio_backend, e2b_backend
         if untrusted and not (aio_backend.status()["available"] or e2b_backend.status()["available"]):

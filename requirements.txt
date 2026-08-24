@@ -46,6 +46,15 @@ mss>=9.0
 # --- Browser automation (also run: playwright install chromium) ---
 playwright>=1.44
 
+# --- Supported lightweight catalog adapters (lazy/on-demand) ---
+# These packages have maintained ZENO adapters. Heavy or duplicative catalog
+# providers remain optional feature flags instead of burdening startup.
+pywinauto>=0.6.9,<0.7 ; sys_platform == "win32"
+PyMuPDF>=1.26,<2
+python-docx>=1.1,<2
+openpyxl>=3.1,<4
+python-pptx>=1.0,<2
+
 # --- Windows-only audio ducking (auto-skipped on macOS/Linux) ---
 pycaw>=20240210 ; sys_platform == "win32"
 comtypes>=1.4 ; sys_platform == "win32"
