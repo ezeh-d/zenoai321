@@ -832,3 +832,9 @@ def send_telegram_message(message: str) -> str:
 # other desktop-control tools -- so the shared tool loader registers them without
 # a second edit to tools/__init__.py.
 from reyes_agent.tools import hands_tools as _hands_tools  # noqa: E402,F401
+
+
+# ZENO Live News: the multi-source, de-duplicated, recency+quality-ranked news
+# pipeline exposed as the `live_news` tool. Imported here so the shared loader
+# registers it (reuses news_engine + the same RSS source as get_news).
+from reyes_agent.tools import news_tools as _news_tools  # noqa: E402,F401

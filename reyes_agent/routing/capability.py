@@ -52,7 +52,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                "restore_memory_version", "write_note", "search_notes",
                "list_notes", "link_notes", "search_vault_semantic",
                "explore_knowledge", "knowledge_graph_stats"),
-    "web": ("web_search", "get_news", "website_check", "research_lab"),
+    "web": ("live_news", "web_search", "get_news", "website_check", "research_lab"),
     # Anime and manga/manhwa: AniList facts, reading a page, the shelf.
     "anime": ("anime_search", "anime_info", "anime_recommend",
               "anime_trending", "read_manga_page", "track_series", "my_shelf"),
@@ -264,7 +264,8 @@ _INTENT: tuple[tuple[str, str], ...] = (
     ("business", r"\b(?:portfolio|invest|trade|revenue|business idea|"
                  r"opportunit(?:y|ies)|campaign|market)\b"),
     ("web", r"\b(?:search for|look up|google|find out|latest news|what.*happening|"
-            r"research)\b"),
+            r"research|today.?s? news|news (?:on|about|today|story|stories)|"
+            r"headlines?|what.?s (?:the )?(?:latest|new)|any .*news)\b"),
     ("files", r"\b(?:file|folder|directory|read (?:the )?\S+\.\w+|save (?:it |this )?to|"
               r"list (?:the )?(?:files|dir))\b"),
     ("presentation", r"\b(?:siwes|evidence|portfolio|engr bello|visitor|"

@@ -130,6 +130,41 @@ def click_element(target: str) -> str:
 
 
 @register(
+    name="send_to_chat",
+    description="Type a message into the CURRENTLY ACTIVE chat window and send it "
+                "(press Enter). Universal messaging fallback for ANY app the "
+                "dedicated Slack/WhatsApp/Telegram/Discord adapters don't cover -- "
+                "the owner should already have the right conversation open and "
+                "focused. Verified; refuses if focus is unclear or moved. Prefer "
+                "'send_message' for the four supported apps.",
+    input_schema={"type": "object", "properties": {
+        "message": {"type": "string", "description": "The message to type and send."},
+        "send": {"type": "boolean", "description": "Press Enter to send (default true). "
+                 "False leaves it typed for the owner to send."},
+    }, "required": ["message"]},
+)
+def send_to_chat(message: str, send: bool = True) -> str:
+    started = time.time()
+    text = str(message or "")
+    if not text.strip():
+        return _result("send_to_chat", "send_message", False,
+                       detail="no message given", started=started)
+    typed_ok, typed_changed, typed_detail = _run("type", text=text)
+    if not typed_ok:
+        return _result("send_to_chat", "send_message", False,
+                       target=_safe_echo(text), detail=typed_detail, started=started)
+    if not send:
+        return _result("send_to_chat", "type_message", True, target=_safe_echo(text),
+                       verified=typed_changed, detail="typed; not sent (owner to send)",
+                       started=started)
+    sent_ok, sent_changed, sent_detail = _run("key", target="enter")
+    # Sent only when the Enter actually produced a change in the conversation.
+    return _result("send_to_chat", "send_message", sent_ok, target=_safe_echo(text),
+                   verified=sent_changed,
+                   detail=f"{typed_detail}; {sent_detail}", started=started)
+
+
+@register(
     name="scroll_screen",
     description="Scroll the active window up or down. Amount is a number of "
                 "notches (default 3). Respects the same 'don't steal the mouse "
