@@ -147,4 +147,13 @@ def system_status() -> dict[str, Any]:
                               if f["enabled"]]
     except Exception:  # noqa: BLE001
         status["flags_on"] = []
+    # Gated provider adapters (camera/smart-home/robotics + external services):
+    # each reported with its true readiness so ZENO can say "that needs setup"
+    # rather than faking it. Off by default (#91, JARVIS/ULTRON #96, #110).
+    try:
+        from reyes_agent import adapters
+
+        status["adapters"] = adapters.get_registry().dashboard()
+    except Exception:  # noqa: BLE001
+        status["adapters"] = []
     return status

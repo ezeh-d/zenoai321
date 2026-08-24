@@ -55,6 +55,20 @@ _REGISTRY: dict[str, Flag] = {
         Flag("enable_mesh_remote", False, "Private mesh transport, e.g. Tailscale (#55)."),
         Flag("enable_new_memory", False, "Experimental memory backend."),
         Flag("enable_otel_traces", False, "OpenTelemetry tracing (#87)."),
+        # Hardware adapters -- explicit opt-in, touch the physical world.
+        Flag("enable_camera", False, "Camera capture/vision (hardware opt-in)."),
+        Flag("enable_smart_home", False, "Smart-home control via a hub (opt-in)."),
+        Flag("enable_robotics", False, "Serial robotics/Arduino/Pi (opt-in)."),
+        # External-service adapters (Pack 5 P1/P2) -- deferred behind the gate.
+        Flag("enable_observability", False, "LLM tracing/evals (Langfuse/Phoenix)."),
+        Flag("enable_vault", False, "Secret broker (HashiCorp Vault)."),
+        Flag("enable_ray", False, "Distributed compute (Ray)."),
+        Flag("enable_vllm", False, "High-throughput model serving (vLLM)."),
+        Flag("enable_keycloak", False, "Identity/SSO (Keycloak, multi-user)."),
+        Flag("enable_tauri", False, "Native desktop/mobile shell (Tauri)."),
+        Flag("enable_syncthing", False, "Private device file sync (Syncthing)."),
+        Flag("enable_nats", False, "Service message bus (NATS)."),
+        Flag("enable_loki", False, "Central log aggregation (Grafana Loki)."),
         # Stability refinement, on by default: a no-op until reputation data
         # exists, then orders each capability's tools best-first (pack 3 #19-20).
         Flag("enable_reputation_routing", True,

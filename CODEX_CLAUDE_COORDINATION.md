@@ -280,3 +280,21 @@ overwriting the other. Claude's dependents (outcome_confidence, desktop_agent,
 tests) now import process_verifier; `action_verifier.py`, `capability_truth.py`
 (Codex extended it, kept Claude's API), and `conversation/consent.py` (Codex added
 get_consent()) are left as Codex has them. 169 tests green.
+
+## RECENT CLAUDE CHANGES — gated provider adapters + authed capability verify
+
+New self-contained package `reyes_agent/adapters/` (base + hardware + external):
+12 replaceable providers, ALL OFF by default, each reporting true readiness
+(DISABLED / DEPENDENCY_MISSING / NOT_CONFIGURED / READY) and raising honestly
+when unavailable -- never a fake success (#91, #105).
+- hardware: camera_vision, smart_home, robotics (explicit opt-in; robotics
+  refuses weapon/harm commands, #27/#99).
+- external (Pack 5 P1/P2): observability (Langfuse/Phoenix), secrets_vault
+  (Vault), distributed_compute (Ray), model_serving (vLLM), identity_keycloak,
+  native_shell (Tauri), file_sync (Syncthing), message_bus (NATS),
+  log_aggregation (Loki).
+12 new OFF feature flags register them. `capability_snapshot.system_status()`
+now lists them so the phone sees "needs setup", not fake. Also added
+`test_capabilities_endpoint.py`: proves GET /api/owner/capabilities/truth
+returns REAL registry data over the AUTHENTICATED HTTP layer (tool_count>50,
+open_app proven-active). 180 new-module tests green.
