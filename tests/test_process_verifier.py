@@ -1,10 +1,10 @@
-"""Contracts for the independent action post-condition verifier."""
+"""Contracts for the OS-process post-condition verifier (process_verifier)."""
 
 from __future__ import annotations
 
 import os
 
-from reyes_agent import action_verifier as av
+from reyes_agent import process_verifier as av
 
 
 # --- explicit evidence wins -------------------------------------------------

@@ -268,3 +268,15 @@ capabilities only, quarantined tools honestly flagged. It fabricates nothing: an
 area with no registered tools reads "not connected", never "coming soon". Folded
 into `GET /api/owner/capabilities/truth` (now also returns `inventory` + `system`).
 Read-only aggregator; imports nothing of Codex's, edits no shared registry. 8 tests.
+
+## COEXISTENCE — action_verifier.py handed to Codex; Claude uses process_verifier.py
+
+Codex replaced `action_verifier.py` with a richer strategy/evidence-ledger design
+(VerificationResult + VerificationStrategyRegistry + evidence_ledger). GOOD — it
+is kept. Claude's original OS-process verifier (Verdict + verify(action,args,result)
++ app_is_running, used by the remote desktop executor to corroborate open_app) has
+moved to a NEW module `process_verifier.py` so the two coexist without either
+overwriting the other. Claude's dependents (outcome_confidence, desktop_agent,
+tests) now import process_verifier; `action_verifier.py`, `capability_truth.py`
+(Codex extended it, kept Claude's API), and `conversation/consent.py` (Codex added
+get_consent()) are left as Codex has them. 169 tests green.

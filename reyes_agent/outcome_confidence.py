@@ -59,9 +59,9 @@ def from_action(action: str, args: dict | None = None, result: Any = None) -> di
     """Verify an action and label its confidence in one call. Returns
     ``{"confidence": <level>, "verdict": {...}}``. Never raises."""
     try:
-        from reyes_agent import action_verifier
+        from reyes_agent import process_verifier
 
-        verdict = action_verifier.verify(action, args, result)
+        verdict = process_verifier.verify(action, args, result)
         result_failed = (verdict.verifiable and not verdict.verified
                          and verdict.method == "evidence")
         level = assess(verdict, result_failed=result_failed)

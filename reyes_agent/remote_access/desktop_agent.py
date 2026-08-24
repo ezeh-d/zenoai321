@@ -300,9 +300,9 @@ def _run_tool(action: str, payload: dict[str, Any]) -> tuple[bool, dict[str, Any
             # when the tool returned only a model-friendly sentence. This only
             # ever upgrades a would-be failure to success on real evidence.
             try:
-                from reyes_agent import action_verifier
+                from reyes_agent import process_verifier
 
-                verdict = action_verifier.verify("open_app", args, output)
+                verdict = process_verifier.verify("open_app", args, output)
                 if verdict.verified:
                     failed = False
                     classification = {**classification,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from reyes_agent import outcome_confidence as oc
-from reyes_agent.action_verifier import Verdict
+from reyes_agent.process_verifier import Verdict
 
 
 def test_result_failed_is_failed():
