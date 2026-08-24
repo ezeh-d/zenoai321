@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-".venv\Scripts\pythonw.exe" -m reyes_agent.desktop_app
+".venv\Scripts\pythonw.exe" -S "tools\zeno_desktop_bootstrap.py"

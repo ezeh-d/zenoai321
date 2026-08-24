@@ -200,3 +200,87 @@ like-for-like speedup.
   process handle count leak-free.
 - The controlled provider and ElevenLabs timeout seams remain deterministic
   regression tests; this pass did not deliberately black-hole a live provider.
+
+## Final native closure addendum — 2026-08-24
+
+### Newly confirmed startup root cause and fix
+
+The desktop-owned backend could remain at one thread with approximately 4.5 MiB
+RSS and never bind its fixed port. The stall occurred before ZENO application
+code: this workstation's machine-global Python `sitecustomize` imports pip and
+trust-store infrastructure during interpreter startup, and under current memory
+pressure that path could park `pythonw` for minutes. The normal desktop launcher
+and its owned backend now start through small `-S` bootstraps. Those bootstraps
+add only the repository virtual environment through `site.addsitedir`, preserving
+the venv's pywin32 `.pth` setup needed by DPAPI while excluding the global hook.
+
+This is a startup-path correction, not another scheduler or application runtime.
+The existing `reyes_agent.desktop_app` and `reyes_agent.web` entry points remain
+authoritative. After restart, one visible `ZENO Mini Orb` window was present and
+Windows reported its owning host process responding. The fixed backend reached
+kernel Stage 2, reported `MICROPHONE_READY`, loaded the enrolled DPAPI-protected
+owner voice profile with its 3D-Speaker CAM++/sherpa-onnx backend READY, and had
+zero worker/Event Bus queue depth.
+
+### Corrected five-minute native A/B evidence
+
+The first attempted sample used the validator's old default port (8768), which
+belonged to another development backend and did not include the native WebView2
+tree. It is intentionally excluded from acceptance. Repeating the full interval
+against the desktop's fixed origin at `http://127.0.0.1:8765` produced:
+
+| Metric | Correct native result |
+|---|---:|
+| Duration / samples | 300.4 s / 133 |
+| Whole ZENO CPU | 4.12% mean, 9.45% max |
+| WebView2 CPU | 2.77% mean |
+| WebView2 GPU-process CPU | 0.32% mean |
+| Backend RSS | 132.7 -> 132.6 MiB (flat) |
+| Whole ZENO RSS | 385.0 -> 406.7 MiB |
+| Backend threads | 18 -> 17 (19 max) |
+| Whole-tree threads | 179 -> 164 (180 max) |
+| Backend handles | 535 -> 530 (543 max) |
+| Whole-tree handles | 4,456 -> 4,398 |
+| Worker / Event Bus queues | 0 / 0 |
+| UI heartbeat delay | 77.18 ms mean, 569.2 ms max |
+| Watchdog records during interval | 9 |
+| System CPU | 72.65% mean, 100% max |
+| System RAM | 74.1% -> 92.2% (92.8% max) |
+| Swap change | -234.5 MiB |
+
+The approximately 5–8% isolated target is met even though a truly isolated run
+could not be performed without closing the active development/ChatGPT host. The
+remaining heartbeat outliers occurred while the two-core/8 GiB machine reached
+100% CPU and more than 92% RAM. This confirms machine-wide pressure remains the
+dominant residual scheduling risk; it does not excuse blocking ZENO code, which
+remains covered by the worker, Event Bus and browser timeout regressions.
+
+### Fresh acceptance tests
+
+- Focused Phase 21/22, recognition, visual-performance, Mini Orb and kernel
+  regressions: **70/70 passed**.
+- Complete current maintained repository suite: **1,862/1,862 passed** in
+  502.00 seconds with one optional urllib3/PySocks warning and no failures.
+- Real Playwright: **20/20 verified DOM actions** in 4,932.6 ms, followed by a
+  controlled context close and successful safe restart.
+- Managed-runtime load: **100/100 missions**, **1,000 Event Bus events**, 603
+  scheduler ticks, four of four workers alive, bounded 60-message history and
+  **+1.59 MiB RSS** over 60 seconds.
+- Native window: exactly one visible `ZENO Mini Orb`; Win32 reported
+  `hung=false`, `topmost=true`, `no_activate=true`, `minimized=false`, a valid
+  monitor and the owning process `Responding=True`. The dashboard remained lazy
+  rather than creating a second renderer during the five-minute measurement.
+
+### Remaining operational gates, not unfinished Phase 21/22 code
+
+- Automated pointer geometry could not certify native drag feel because the
+  available Windows screenshot/input helper rejected this WebView2 surface.
+  Static topmost/no-activate/drag/off-screen-recovery tests pass, and the native
+  host/window was directly observed responding. Owner-visible drag feel remains
+  an acceptance check.
+- Eight-hour and 24-hour no-diagnostics soaks remain release observations. The
+  existing one-hour soak plus this five-minute whole-tree run found no backend
+  RSS/thread/handle growth, but no shorter test can prove a 24-hour result.
+- External provider black-hole behaviour remains covered with deterministic
+  timeout seams; deliberately disrupting the owner's real provider account is
+  not required for software completion.

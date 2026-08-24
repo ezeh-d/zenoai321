@@ -446,6 +446,90 @@ def situation() -> dict[str, Any]:
     return snapshot
 
 
+def resolve_reference(reference: str, *, state: dict[str, Any] | None = None,
+                      risk: str = "low") -> dict[str, Any]:
+    """Resolve a conversational reference only when observable context is unique.
+
+    Pronouns are never sent to an action as guessed target text. A typed
+    category (``that app``, ``this task``, ``the current window``) selects
+    only the matching observed field. A bare ``it`` is resolved only when
+    exactly one actionable candidate exists across the current projection.
+    High-risk resolution still requires the normal permission confirmation;
+    reference confidence can never grant authority.
+    """
+    snapshot = dict(state) if state is not None else situation()
+    text = " ".join(str(reference or "").casefold().split())
+    risk = str(risk or "low").casefold()
+    if risk not in {"low", "medium", "high", "critical"}:
+        risk = "medium"
+
+    candidates: list[dict[str, str]] = []
+
+    def add(kind: str, value: Any, evidence: str) -> None:
+        value = _safe_text(value, 500).strip()
+        if value and all(item["value"].casefold() != value.casefold() for item in candidates):
+            candidates.append({"kind": kind, "value": value, "evidence": evidence})
+
+    categories: set[str]
+    if re.fullmatch(r"(?:the\s+)?(?:current|active|that|this)?\s*(?:app|application)", text):
+        categories = {"application"}
+    elif re.fullmatch(r"(?:the\s+)?(?:current|active|that|this)?\s*window", text):
+        categories = {"window"}
+    elif re.fullmatch(r"(?:the\s+)?(?:current|active|last|that|this)?\s*(?:task|operation|job)", text):
+        categories = {"task"}
+    elif re.fullmatch(r"(?:the\s+)?(?:current|active|last|that|this)?\s*(?:mission|workflow)", text):
+        categories = {"mission"}
+    elif text in {"it", "that", "this", "the one", "that one", "this one"}:
+        categories = {"application", "window", "task", "mission"}
+    else:
+        return {
+            "resolved": False, "reference": reference,
+            "reason": "The phrase is not an ambiguous context reference.",
+            "candidates": [], "risk": risk,
+            "requires_confirmation": risk in {"high", "critical"},
+        }
+
+    if "application" in categories:
+        add("application", snapshot.get("active_application"), "observed foreground application")
+    if "window" in categories:
+        add("window", snapshot.get("active_window"), "observed foreground window")
+    if "task" in categories:
+        add("task", snapshot.get("current_task"), "current managed task")
+        operations = list(snapshot.get("active_operations") or [])
+        if len(operations) == 1:
+            add("task", operations[0].get("label"), "only active managed operation")
+    if "mission" in categories:
+        mission = snapshot.get("active_mission")
+        if isinstance(mission, dict):
+            add("mission", mission.get("title") or mission.get("goal") or mission.get("mission_id"),
+                "active durable mission")
+        else:
+            add("mission", mission, "active durable mission")
+        workflow = snapshot.get("workflow")
+        if isinstance(workflow, dict) and str(workflow.get("mode") or "").upper() not in {"", "NORMAL"}:
+            add("workflow", workflow.get("name") or workflow.get("prompt"), "active workflow")
+
+    if len(candidates) != 1:
+        reason = ("No matching observed target exists." if not candidates
+                  else "More than one observed target matches; ask which one.")
+        return {
+            "resolved": False, "reference": reference, "reason": reason,
+            "candidates": candidates, "risk": risk,
+            "requires_confirmation": risk in {"high", "critical"},
+        }
+    result = {
+        "resolved": True, "reference": reference, "target": candidates[0],
+        "confidence": 1.0 if len(categories) == 1 else 0.8,
+        "confidence_basis": candidates[0]["evidence"], "risk": risk,
+        "requires_confirmation": risk in {"high", "critical"},
+    }
+    _publish("situation.reference_resolved", {
+        "kind": candidates[0]["kind"], "risk": risk,
+        "requires_confirmation": result["requires_confirmation"],
+    })
+    return result
+
+
 def persist_mission_state(mission_id: int, **state: Any) -> dict[str, Any]:
     """Persist only observable mission state, never model reasoning."""
     current = load_mission_state(mission_id) or {"mission_id": int(mission_id)}
@@ -587,15 +671,15 @@ _CAPABILITIES: dict[str, tuple[str, str]] = {
     "desktop_automation": ("AVAILABLE", "Permission-gated desktop tools are registered; exact app state must still be verified."),
     "workflow_replay": ("AVAILABLE", "Owner-approved workflows use guarded replay and explicit visual verification for manual desktop steps."),
     "workflow_semantic_observation": ("DEGRADED", "Accessibility/OCR anchors are used when available; manually demonstrated desktop clicks remain guarded."),
-    "voice_identity": ("DEGRADED", "Local acoustic similarity is privacy posture, not spoof-resistant authentication."),
+    "voice_identity": ("NOT_CONFIGURED", "Model-backed owner voice evidence is optional and never replaces strong authentication."),
     "audio_recognition": ("NOT_CONFIGURED", "A provider token or local fingerprint database is required for live song names."),
-    "video_understanding": ("DEGRADED", "Explicit screen/frame analysis and OCR exist; there is no continuous temporal video classifier."),
+    "video_understanding": ("AVAILABLE", "Explicit bounded frame sampling, temporal change evidence, OCR and optional audio fusion are integrated without a continuous model loop."),
     "knowledge_graph": ("AVAILABLE", "Existing local graph is permission-bound and loaded on demand."),
     "universal_search": ("AVAILABLE", "Bounded search spans permitted memory, notes, projects, workflows and event history."),
-    "undo": ("DEGRADED", "ZENO project text writes up to 512 KiB are safely reversible when unchanged; external/destructive actions are not promised undo."),
-    "mission_resume": ("DEGRADED", "Observable goal, plan, state, files, agents, decisions, blockers and verification can persist locally."),
+    "undo": ("AVAILABLE", "Safe ZENO project text writes up to 512 KiB are hash-verified and reversible; non-reversible actions are labelled before execution."),
+    "mission_resume": ("AVAILABLE", "Observable goal, plan, state, files, agents, decisions, blockers and verification persist locally with idempotent mission keys."),
     "safe_simulation": ("AVAILABLE", "Plans can be previewed without executing tools."),
-    "proactive_suggestions": ("DEGRADED", "Existing quiet, opt-in rule-based notices run; no claim of open-ended predictive intelligence."),
+    "proactive_suggestions": ("AVAILABLE", "Quiet opt-in notices and count-backed routine anticipation are integrated without an open-ended provider loop."),
     # Creative Design + Learning uses ZEAL, the existing tool registry and
     # state database. These entries name actual connected paths and their
     # gaps, rather than treating a model instruction as proof of a native
@@ -629,6 +713,20 @@ def capabilities() -> list[dict[str, str]]:
                 current = "AVAILABLE" if providers() else status
             except Exception:  # noqa: BLE001
                 pass
+        elif name == "voice_identity":
+            try:
+                from reyes_agent import speaker_identity
+
+                profile = speaker_identity.enrollment_status()
+                backend = profile.get("backend") or {}
+                if profile.get("enrolled") and backend.get("state") == "READY":
+                    current = "AVAILABLE"
+                elif backend.get("state") == "READY":
+                    current = "NOT_CONFIGURED"
+                else:
+                    current = "DEGRADED"
+            except Exception:  # noqa: BLE001
+                current = "DEGRADED"
         items.append({"capability": name, "status": current, "detail": detail})
     return items
 
@@ -699,26 +797,64 @@ def resolve_time(expression: str, *, now: datetime | None = None) -> dict[str, A
     local_now = now or datetime.now().astimezone()
     text = " ".join(str(expression or "").casefold().split())
     result = local_now
-    if text in {"now", "today"}:
-        result = local_now if text == "now" else local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    elif text == "yesterday":
-        result = (local_now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    elif text == "tomorrow":
-        result = (local_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    clock_match = re.fullmatch(
+        r"(today|tomorrow|yesterday)(?:\s+at\s+(noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?", text,
+    )
+    if clock_match:
+        day_name, clock = clock_match.groups()
+        day_delta = {"yesterday": -1, "today": 0, "tomorrow": 1}[day_name]
+        result = (local_now + timedelta(days=day_delta)).replace(hour=0, minute=0, second=0, microsecond=0)
+        if clock:
+            if clock == "noon":
+                hour, minute = 12, 0
+            elif clock == "midnight":
+                hour, minute = 0, 0
+            else:
+                value = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", clock)
+                assert value is not None
+                hour, minute, meridiem = int(value.group(1)), int(value.group(2) or 0), value.group(3)
+                if minute > 59 or hour > (12 if meridiem else 23) or (meridiem and hour < 1):
+                    return {"resolved": False, "expression": expression, "reason": "The requested clock time is invalid."}
+                if meridiem:
+                    hour = hour % 12 + (12 if meridiem == "pm" else 0)
+            result = result.replace(hour=hour, minute=minute)
+    elif text == "now":
+        result = local_now
+    elif text in {"noon", "midnight", "tonight", "this morning", "this afternoon", "this evening"}:
+        hour = {"midnight": 0, "this morning": 9, "noon": 12, "this afternoon": 15,
+                "tonight": 20, "this evening": 19}[text]
+        result = local_now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            year, month, day = (int(value) for value in text.split("-"))
+            result = local_now.replace(year=year, month=month, day=day, hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            return {"resolved": False, "expression": expression, "reason": "The requested calendar date is invalid."}
     else:
-        match = re.fullmatch(r"(\d+)\s+(minute|minutes|hour|hours|day|days|week|weeks)\s+from\s+now", text)
+        match = re.fullmatch(r"(?:in\s+)?(\d+)\s+(minute|minutes|hour|hours|day|days|week|weeks)(?:\s+from\s+now)?", text)
         if match:
             quantity, unit = int(match.group(1)), match.group(2)
             seconds = {"minute": 60, "minutes": 60, "hour": 3600, "hours": 3600,
                        "day": 86400, "days": 86400, "week": 604800, "weeks": 604800}[unit]
             result = local_now + timedelta(seconds=quantity * seconds)
-        elif text.startswith("last "):
+        elif (past := re.fullmatch(r"(\d+)\s+(minute|minutes|hour|hours|day|days|week|weeks)\s+ago", text)):
+            quantity, unit = int(past.group(1)), past.group(2)
+            seconds = {"minute": 60, "minutes": 60, "hour": 3600, "hours": 3600,
+                       "day": 86400, "days": 86400, "week": 604800, "weeks": 604800}[unit]
+            result = local_now - timedelta(seconds=quantity * seconds)
+        elif text.startswith(("last ", "next ", "this ")):
             names = {name: index for index, name in enumerate(("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"))}
-            wanted = names.get(text[5:])
+            direction, weekday = text.split(" ", 1)
+            wanted = names.get(weekday)
             if wanted is None:
                 return {"resolved": False, "expression": expression, "reason": "Unsupported temporal phrase; ask for a date or time."}
-            delta = (local_now.weekday() - wanted) % 7 or 7
-            result = (local_now - timedelta(days=delta)).replace(hour=0, minute=0, second=0, microsecond=0)
+            if direction == "last":
+                delta = -((local_now.weekday() - wanted) % 7 or 7)
+            elif direction == "next":
+                delta = (wanted - local_now.weekday()) % 7 or 7
+            else:
+                delta = wanted - local_now.weekday()
+            result = (local_now + timedelta(days=delta)).replace(hour=0, minute=0, second=0, microsecond=0)
         else:
             return {"resolved": False, "expression": expression, "reason": "Unsupported temporal phrase; ask for a date or time."}
     return {"resolved": True, "expression": expression, "timestamp": result.timestamp(),

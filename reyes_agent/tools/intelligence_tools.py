@@ -112,6 +112,7 @@ def universal_search(query: str, limit: int = 8) -> str:
         "source": {"type": "string"}, "relation": {"type": "string"}, "target": {"type": "string"},
         "evidence": {"type": "string", "description": "Short owner-confirmed basis; do not invent one."},
     }, "required": ["source", "relation", "target"]},
+    requires_confirmation=True,
 )
 def remember_relationship(source: str, relation: str, target: str, evidence: str = "owner-confirmed") -> str:
     item = intelligence.add_relationship(source, relation, target, evidence=evidence)
@@ -150,6 +151,20 @@ def forget_relationship(relationship_id: str) -> str:
 def resolve_time(expression: str) -> str:
     result = intelligence.resolve_time(expression)
     return json.dumps(result)
+
+
+@register(
+    name="resolve_context_reference",
+    description=("Resolve 'it', 'that app', 'this task', or a similar pronoun only when ZENO's observable "
+                 "current situation contains one unique target. This never grants permission for a risky action."),
+    input_schema={"type": "object", "properties": {
+        "reference": {"type": "string"},
+        "risk": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+    }, "required": ["reference"]},
+    light=True,
+)
+def resolve_context_reference(reference: str, risk: str = "low") -> str:
+    return json.dumps(intelligence.resolve_reference(reference, risk=risk))
 
 
 @register(

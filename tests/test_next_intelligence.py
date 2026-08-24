@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 
@@ -111,6 +112,40 @@ def test_mission_state_and_temporal_resolution_are_explicit() -> None:
         temp.cleanup()
 
 
+def test_temporal_resolution_handles_common_relative_and_clock_phrases() -> None:
+    from reyes_agent import intelligence
+
+    local = datetime(2026, 8, 24, 14, 30, tzinfo=timezone(timedelta(hours=1)))
+    assert intelligence.resolve_time("today at 6:15 pm", now=local)["iso"].startswith("2026-08-24T18:15")
+    assert intelligence.resolve_time("in 45 minutes", now=local)["iso"].startswith("2026-08-24T15:15")
+    assert intelligence.resolve_time("2 hours ago", now=local)["iso"].startswith("2026-08-24T12:30")
+    assert intelligence.resolve_time("next Monday", now=local)["iso"].startswith("2026-08-31T00:00")
+    assert intelligence.resolve_time("2026-02-30", now=local)["resolved"] is False
+
+
+def test_context_reference_resolves_only_one_observed_target_and_keeps_risk_gate() -> None:
+    from reyes_agent import intelligence
+
+    unique = intelligence.resolve_reference(
+        "that app", state={"active_application": "notepad.exe"}, risk="high",
+    )
+    assert unique["resolved"] is True
+    assert unique["target"]["value"] == "notepad.exe"
+    assert unique["requires_confirmation"] is True
+
+    ambiguous = intelligence.resolve_reference(
+        "it", state={"active_application": "notepad.exe", "current_task": "write report"},
+    )
+    assert ambiguous["resolved"] is False
+    assert len(ambiguous["candidates"]) == 2
+
+
+def test_relationship_memory_requires_owner_confirmation_at_tool_boundary() -> None:
+    from reyes_agent.tools import TOOLS
+
+    assert TOOLS["remember_relationship"].requires_confirmation is True
+
+
 def test_personal_relationships_support_correction_and_deletion() -> None:
     intelligence, temp, original = _temporary_history()
     try:
@@ -132,7 +167,7 @@ def test_capability_and_simulation_never_claim_execution() -> None:
     assert simulation["mode"] == "SIMULATION"
     assert simulation["executed"] is False
     assert simulation["approval_required"] is True
-    assert intelligence.capability("undo")["status"] == "DEGRADED"
+    assert intelligence.capability("undo")["status"] == "AVAILABLE"
 
 
 def test_agent_worker_observes_owner_cancellation_between_provider_steps() -> None:

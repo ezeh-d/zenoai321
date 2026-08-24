@@ -125,6 +125,20 @@ def test_desktop_starts_server_from_background_loader_not_main() -> None:
     assert "create_window(" in main
 
 
+def test_desktop_and_backend_bypass_machine_global_site_startup() -> None:
+    desktop = (ROOT / "reyes_agent" / "desktop_app.py").read_text(encoding="utf-8")
+    launcher = (ROOT / "Open REYES.bat").read_text(encoding="utf-8")
+    desktop_bootstrap = (ROOT / "tools" / "zeno_desktop_bootstrap.py").read_text(encoding="utf-8")
+    backend_bootstrap = (ROOT / "tools" / "zeno_web_bootstrap.py").read_text(encoding="utf-8")
+
+    assert '"-S", str(backend_bootstrap)' in desktop
+    assert '-S "tools\\zeno_desktop_bootstrap.py"' in launcher
+    for source in (desktop_bootstrap, backend_bootstrap):
+        assert 'ROOT / ".venv" / "Lib" / "site-packages"' in source
+        assert "site.addsitedir(str(SITE_PACKAGES))" in source
+        assert "sys.path.insert(0, path)" in source
+
+
 def test_provider_failure_isolated_and_does_not_kill_worker() -> None:
     import reyes_agent.provider as provider
 
@@ -234,6 +248,10 @@ def test_idle_validation_is_bounded_and_reports_resource_cleanup() -> None:
     assert "process_iter([\"pid\", \"cmdline\"])" in source
     assert 'parser.add_argument("--warmup"' in source
     assert '"cold_process": cold' in source
+    for group_metric in ("zeno_group", "webview2_cpu_percent", "webview2_gpu_cpu_percent",
+                         "ui_heartbeat_delay_ms", "active_animation_loops", "active_timers"):
+        assert group_metric in source
+    assert "process.open_files()" not in source
 
 
 def test_frontend_audit_reads_scoped_animation_metrics_through_public_apis() -> None:

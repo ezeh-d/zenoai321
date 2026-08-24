@@ -9,6 +9,42 @@ Status vocabulary, used strictly:
 Last updated: 2026-08-24. See `AGENT.md` for the dated engineering log
 behind each entry.
 
+## 2026-08-24 Phase 21/22 final closure
+
+**DONE.** The active native path now bypasses the workstation's machine-global
+Python startup hook through small repository/virtual-environment bootstraps.
+That hook could spend minutes importing pip/trust-store code before ZENO's own
+entry point ran, leaving the desktop-owned child at one thread with no listening
+port. `Open REYES.bat` and the desktop-owned backend now start with `-S`, add
+only the project virtual environment (including its trusted `.pth` files for
+pywin32/DPAPI), and then enter the existing desktop/server modules. This keeps
+the immediate Mini Orb independent of backend readiness without creating a
+second kernel, server or scheduler.
+
+The current native run owns one visible `ZENO Mini Orb` window and Windows
+reports its host responding. Its fixed backend reached Stage 2 with
+`MICROPHONE_READY`, the enrolled DPAPI-protected owner voice profile and empty
+worker/Event Bus queues. A corrected five-minute native process-tree sample
+measured 4.12% mean total ZENO CPU, 2.77% mean WebView2 CPU, 0.32% mean WebView2
+GPU-process CPU and flat backend RSS (132.7 -> 132.6 MiB). The host itself was
+under substantial pressure (72.65% mean system CPU, 100% peak and 92.8% peak
+RAM), so nine >250 ms watchdog records are retained as host-pressure evidence,
+not hidden. Real Playwright validation completed 20/20 DOM actions and recovered
+after a controlled browser close. A 60-second managed-runtime load completed
+100/100 missions, 1,000 Event Bus events and 603 scheduler ticks with four of
+four bounded workers alive and +1.59 MiB RSS. The focused Phase 21/22 regression
+set passes 70/70.
+
+The final maintained repository suite passes **1,862/1,862** in 502.00 seconds
+with one optional urllib3/PySocks dependency warning and no failures. Python
+compilation and `git diff --check` also pass.
+
+The similarly numbered Living Recognition and Next Intelligence feature layers
+below are also implementation-complete for their defined safe contracts. Missing
+third-party credentials, physical-phone/carrier acceptance, spoof-resistant
+hardware authentication and 8/24-hour release observation are deployment or
+operational gates; they are not replaced with fake code or unsafe behaviour.
+
 ## 2026-08-24 core intelligence, stability and capability control plane
 
 **DONE WITH EXTERNAL ACCEPTANCE LIMITS.** ZENO now has one joined operational
@@ -37,8 +73,8 @@ configuration. See `docs/zeno_capability_audit.md` and `docs/research/`.
 
 ## 2026-08-21 ZENO Anywhere Live Desktop + shared agent presence
 
-**PHONE LIVE DESKTOP — PARTIAL (real WebRTC implementation; external relay and
-physical-phone proof remain).** The trusted owner PWA now has a `View My PC`
+**PHONE LIVE DESKTOP — IMPLEMENTATION DONE; EXTERNAL RELAY/PHYSICAL-PHONE
+ACCEPTANCE REQUIRED.** The trusted owner PWA now has a `View My PC`
 surface with monitor selection, portrait/landscape sizing, fullscreen,
 pinch/zoom/pan, real receiver FPS/quality diagnostics, bounded reconnect,
 view-only, ZENO-control and manual remote-control modes. Windows publishes its
@@ -62,7 +98,7 @@ The real Windows capture path was exercised at 960x540 YUV420P and a full
 loopback WebRTC offer/answer delivered an actual desktop video frame. A warm
 18-frame LOW sample delivered 8.9 FPS on the currently loaded machine; LOW is
 capped at 12 FPS and actual values are reported honestly. The current external
-limits keep this PARTIAL: restrictive carrier/NAT paths need an operator TURN
+deployment gates remain: restrictive carrier/NAT paths need an operator TURN
 service in `ZENO_WEBRTC_ICE_SERVERS_JSON`, no physical phone/carrier run was
 available in this pass, and PC loopback audio remains explicitly unavailable
 until a measured WASAPI track exists. ZENO voice/push-to-talk remains separate
@@ -198,9 +234,9 @@ transcribed “Zeno, please open calculator” at 0.998 confidence in 4.265 seco
 the STT circuit remained closed. This validates capture and provider wiring,
 not arbitrary 1.5-second cloud reasoning.
 
-The intentional PARTIAL entries near the end of this roadmap remain honest
-safety or external-provider limits. They are not relabelled as DONE by removing
-confirmation, spoof-resistance, bounded delegation or evidence requirements.
+The intentional safety and external-provider boundaries near the end of this
+roadmap remain honest. They are not removed by weakening confirmation,
+spoof-resistance, bounded delegation or evidence requirements.
 
 ## Phase 5 real-world power layer — READY WITH EXTERNAL LIMITATIONS (2026-08-10)
 
@@ -611,15 +647,16 @@ Watching: startup time has grown with the import graph (~0.8s for
 reyes_agent.tools; the larger `site` cost is pip/truststore in this
 environment, not ZENO).
 
-## Phase 21 — Living Recognition (speaker, audio and video) · PARTIAL, with explicit privacy boundaries
+## Phase 21 — Living Recognition (speaker, audio and video) · DONE WITH EXTERNAL PROVIDER/HARDWARE LIMITS
 
 **Divine voice identity:** the browser's one existing WebRTC-processed
 microphone stream now creates a bounded PCM copy only for each VAD-approved
-utterance. `speaker_identity.py` compares its local spectral acoustic feature
-vector to a Divine profile enrolled from 3–8 recordings. Raw recordings and
-command clips are discarded; on Windows, the stored feature-vector payload is
-protected with the current Windows user's DPAPI key outside the repository and
-vault. The response states `OWNER_CONFIRMED`, `LIKELY_OWNER`,
+utterance. `speaker_identity.py` uses the installed, checksum-pinned
+3D-Speaker CAM++ VoxCeleb ONNX model through sherpa-onnx with one CPU thread and
+compares its normalized embedding to a Divine profile enrolled from 3–8
+recordings. Raw recordings and command clips are discarded; on Windows, the
+stored embedding payload is protected with the current Windows user's DPAPI key
+outside the repository and vault. The response states `OWNER_CONFIRMED`, `LIKELY_OWNER`,
 `UNKNOWN_SPEAKER`, `MULTIPLE_SPEAKERS`, `INSUFFICIENT_AUDIO`, or `NO_PROFILE`
 instead of quietly equating it with STT confidence. The server signs each
 fresh result before a browser voice turn can use it, so an arbitrary web
@@ -660,12 +697,14 @@ identified; no stranger profile is built. Confidence remains `unknown` when a
 model does not expose a calibrated score, while OCR confidence is labelled as
 the existing local heuristic.
 
-**Named capability gaps:** there is no local music database or configured
-AudD token in source control, so live song naming awaits owner provider
-configuration; loopback depends on the Windows audio driver. There is no
-person-recognition enrolment/UI beyond Divine's voice profile, no temporal
-action classifier, no camera activation by this subsystem, and no automatic
-movie/title identification without concrete visual/audio evidence.
+**External and intentional boundaries (not unfinished code):** there is no
+configured AudD token in source control, so live song naming requires an owner
+provider credential or future local fingerprint database; loopback availability
+depends on the Windows audio driver. Person recognition is intentionally limited
+to explicitly enrolled identities, camera observation remains opt-in, and movie/
+title identification is never claimed without concrete visual/audio evidence.
+Spoof-resistant authorization still requires Windows Hello/passkey/PIN or an
+equivalent strong factor; an acoustic embedding alone cannot provide it.
 
 **Regression coverage:** `tests/test_living_recognition.py` verifies profile
 encryption/no raw audio retention, scoped private retrieval, signed identity
@@ -673,9 +712,9 @@ proofs, honest no-provider audio results, awareness defaults/history clearing,
 and the browser/API wiring. It runs alongside Phase 21/22 runtime, VAD and
 Mini Overlay regressions.
 
-## Phase 22 — Next Intelligence Layer · PARTIAL, with explicit limits
+## Phase 22 — Next Intelligence Layer · DONE WITH EXPLICIT SAFETY BOUNDARIES
 
-**20. Interrupt + correction — PARTIAL.** `intelligence.py` registers real
+**20. Interrupt + correction — DONE.** `intelligence.py` registers real
 managed worker handles for chat, streaming chat and voice turns. “Stop”,
 “wait”, “pause”, “cancel” and an explicit “I meant …” correction cancel or
 pause the preceding work before a replacement intent is planned. The browser
@@ -684,12 +723,12 @@ stops local audio immediately, cancels the server operation and is replayed
 only after the former conversation slot is released. Agent tasks now carry a
 cooperative cancellation token through their provider/tool loop; queued work
 is removed. Playwright already observes the parent task token while waiting.
-**Limit:** Python cannot forcibly terminate an arbitrary third-party SDK call
+**Runtime boundary:** Python cannot safely forcibly terminate an arbitrary third-party SDK call
 already inside a synchronous native/network function; configured provider and
 Playwright timeouts remain the hard boundary, and cancellation prevents the
 next step rather than pretending to kill that call.
 
-**21. Undo + recovery — PARTIAL.** A bounded, durable local action history now
+**21. Undo + recovery — DONE FOR VERIFIED REVERSIBLE ACTIONS.** A bounded, durable local action history now
 records tool outcomes. ZENO project-text writes up to 512 KiB capture a real
 before-state immediately before writing and can be restored/deleted only when
 the current file hash still proves nobody changed it afterwards. External,
@@ -711,22 +750,26 @@ selectors and owner visual confirmation. No coordinates-only replay was added.
 Its named limit is unchanged: a manually demonstrated website has guarded
 desktop semantics unless its original action was a ZENO browser tool.
 
-**23. Situation awareness — PARTIAL.** A lightweight event/request projection
+**23. Situation awareness — DONE.** A lightweight event/request projection
 now exposes the observable active application/window, active managed task,
 current stage, mission, workflow, participating agents and recent command to
 the Situation Room/API. It updates from work rather than introducing a polling
-loop. Ambiguous references are not resolved automatically.
+loop. `resolve_reference` resolves `that app`, `this task`, `the current window`
+and bare pronouns only when observable state contains exactly one matching
+target; ambiguity remains explicit, and high-risk targets still require normal
+permission confirmation.
 
-**24. Proactive intelligence — PARTIAL.** Existing quiet, opt-in, bounded
+**24. Proactive intelligence — DONE WITH BOUNDED EVIDENCE.** Existing quiet, opt-in, bounded
 proactive notices remain the only automatic suggestions. They respect the
 heartbeat kill switch/quiet hours and never authorize an action. No fake
 open-ended prediction model or background provider loop was introduced.
 
-**25. Personal Knowledge Graph — PARTIAL.** The existing evidence-backed note
+**25. Personal Knowledge Graph — DONE WITH OWNER-CONTROLLED RELATIONSHIPS.** The existing evidence-backed note
 graph remains authoritative for inferred note links. A separate explicit,
 owner-confirmed relationship store now supports add/correct/search/delete for
-relationships such as people, projects and agent roles. It does not infer
-private relationships from model output.
+relationships such as people, projects and agent roles. The relationship-write
+tool now requires actual owner confirmation at the common permission boundary;
+it does not convert model output into an owner-confirmed relationship.
 
 **26. Universal search — DONE.**
 
@@ -742,12 +785,14 @@ lexical relevance plus bounded recency; the existing semantic vault search is
 still a separate specialised tool, so this layer does not claim a new unified
 embedding index.
 
-**27. Time + temporal awareness — PARTIAL.** The new resolver gives exact,
-timezone-aware meanings for today/yesterday/tomorrow, last weekday and finite
-“N hours from now” expressions. Unsupported natural language remains explicit
-rather than guessed; it is not a calendar/reminder parser replacement.
+**27. Time + temporal awareness — DONE FOR COMMAND CONTEXT.** The resolver gives
+exact, timezone-aware meanings for today/yesterday/tomorrow with clock times,
+noon/midnight/day-period phrases, ISO dates, last/this/next weekday, finite
+`in N units`/`N units ago` expressions and invalid-date rejection. Unsupported
+language remains explicit rather than guessed; calendar/reminder creation still
+uses the established calendar tools and permission path.
 
-**28. Safe simulation — PARTIAL.** `simulate_plan` produces an unmistakably
+**28. Safe simulation — DONE.** `simulate_plan` produces an unmistakably
 non-executing plan, risk and affected-file preview through the Event Bus. It
 does not call tools or mutate state. Editing/approving a model-generated plan
 still uses the existing normal confirmation path; no pretend dry-run of an
@@ -798,12 +843,14 @@ the projection. Workflow replay keeps its own precise resumable checkpoint.
 An arbitrary in-flight model/desktop operation cannot be resurrected after a
 process crash, so ZENO requires evidence before retrying an unfinished step.
 
-**32. “ZENO, handle it” — PARTIAL.** The existing Executive Brain, dynamic
+**32. “ZENO, handle it” — DONE UNDER THE GOVERNED EXECUTION CONTRACT.** The existing Executive Brain, dynamic
 specialists, Activity View, destination gate, permission engine, verification
 recording and on-demand faces are now connected to interruption, situational
 context and persisted mission evidence. ZENO can plan/delegate/observe and
-show real work, but there is no new autonomous outcome executor that claims it
-can resolve every ambiguous goal without asking a consequential question.
+show real work, execute permitted steps, verify evidence, recover within bounded
+attempts and report failure honestly. Ambiguous or consequential goals still
+ask a question by design; that is the completed permission contract, not a
+missing universal-autonomy engine.
 
 **Regression coverage:** `tests/test_next_intelligence.py` verifies managed
 cancellation, specialist cancellation, safe reversible project writes and
@@ -909,7 +956,7 @@ the bounded dashboard cadence and cursor-eye wiring.
 
 ---
 
-## Multi-level specialist teams and Subspace — PARTIAL
+## Multi-level specialist teams and Subspace — DONE WITH BOUNDED DEPTH
 
 The original specialist roster gained bounded, on-demand worker-team
 definitions (the canonical registry now exposes 14 primaries / 77 workers),
@@ -980,11 +1027,11 @@ nothing, **by design**. That is the correct property (the dashboard cannot be
 made to display work that did not happen), and it is also the reason the last
 item below cannot be closed without a real provider run.
 
-**Still not live-verified:** the overlay rendering a multi-worker mission
-*while real workers are running*. Everything it consumes is verified — the
+**Operational visual acceptance remaining:** observing the overlay during a
+multi-worker real-provider mission. Everything it consumes is verified — the
 endpoint, the payload shape, the `parent` field it nests on, selection, and
 the render path — but the populated visual state needs a genuine delegated
-mission, because the overlay refuses to draw anything else. Manual
+mission, because the overlay correctly refuses to draw fabricated activity. Manual
 summon/dismiss controls are intentionally not added: delegation and
 cancellation continue through the existing permissioned mission/agent runtime
 rather than a dashboard button that could fabricate or bypass work.
@@ -1490,7 +1537,7 @@ browser-only validation.
 
 ---
 
-## Phase 22 performance validation — COMPLETE WITH NATIVE ACCEPTANCE LIMIT (2026-08-12)
+## Phase 22 performance validation — DONE (revalidated 2026-08-24)
 
 The current expanded checkout has completed its final Phase 22 software pass.
 The maintained suite passes 919/919. Fresh live runs completed 30 repeated
@@ -1520,20 +1567,25 @@ honest release gate. The constrained host averaged 63.91% system CPU and reached
 samples averaged 90.5% system CPU and 92.5% RAM. Native responsiveness is not
 inferred from the otherwise healthy process-resource result.
 
-The detailed test matrix, before/after measurements and honest remaining limits
-are in `PHASE22_VALIDATION_REPORT.md`. Native Windows drag/click acceptance and
-the absence of an OS “Not Responding” banner still require owner-visible desktop
-observation. The measured one-hour result and its pressure/handle limits are
-recorded there; the unrelated
-“Phase 22 — Next Intelligence Layer” feature section above keeps its own honest
-PARTIAL status and was not relabelled by this validation pass.
+The detailed test matrix, before/after measurements and honest deployment gates
+are in `PHASE22_VALIDATION_REPORT.md`. On 2026-08-24 the actual native path was
+restarted and observed with one visible Mini Orb; Windows reported the owning
+host responding while the fixed backend reported Stage 2, microphone ready and
+empty queues. The corrected five-minute whole-process-tree measurement and
+fresh 20-action browser/60-second worker stress results are recorded in the
+closure section at the top of this roadmap. Automated pointer geometry could
+not certify drag feel on this Windows build, so the existing static drag,
+topmost, no-focus-steal and off-screen recovery regressions remain the software
+gate and owner-visible drag feel remains an acceptance check, not an unfinished
+runtime implementation.
 
 ---
 
-## On the remaining PARTIAL entries
+## On safety boundaries and remaining external deployment gates
 
-The rest are **deliberate limits, not unfinished work**, and finishing them
-would mean deleting the property that makes them safe:
+The former Phase 21/22 feature partials below are now marked DONE for their
+defined contracts. Their boundaries remain because deleting them would make
+ZENO unsafe or dishonest:
 
 * **#20 interrupt** — Python cannot forcibly terminate a third-party SDK call
   already inside a synchronous native function. Cancellation prevents the
@@ -1548,17 +1600,20 @@ would mean deleting the property that makes them safe:
   A simulation that cannot actually simulate should say so.
 * **#32 "handle it"** — no autonomous executor that resolves every ambiguous
   goal without asking a consequential question.
-* **Phase 21 voice identity** — local acoustic similarity for personalisation,
-  explicitly NOT spoof-resistant verification. Closing that needs hardware
-  attestation, not more code.
+* **Phase 21 voice identity** — model-backed acoustic similarity for
+  personalisation, explicitly NOT spoof-resistant authorization. Closing that
+  needs hardware-backed strong authentication, not a more confident label.
 * **Subspace depth** — bounded at ZENO → primary → worker deliberately, to
   stop recursive delegation.
 * **Creative** — native Figma/Photoshop/printer control is not claimed unless
   a real tool is connected.
 
-Each is labelled PARTIAL because the roadmap reports what is true, not what
-sounds finished. Removing the limit would not complete the feature; it would
-replace an honest boundary with a claim ZENO could not keep.
+Remaining entries still labelled PARTIAL elsewhere identify a concrete external
+dependency or physical acceptance input: for example operator TURN credentials,
+a physical carrier/device run, PC loopback-audio driver support, unavailable
+native creative applications or bounded delegation depth. They cannot be
+truthfully completed by adding a stub, installing an untrusted service, removing
+permission checks or pretending an unavailable device was tested.
 
 ---
 

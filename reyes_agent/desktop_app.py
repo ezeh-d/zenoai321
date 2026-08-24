@@ -331,8 +331,9 @@ def _start_server() -> None:
     # Popen duplicates these handles for the child on Windows. Closing the
     # parent's copies immediately avoids one leaked descriptor per restart.
     with open(log_path, "a", buffering=1, encoding="utf-8") as log_file:
+        backend_bootstrap = config.PROJECT_ROOT / "tools" / "zeno_web_bootstrap.py"
         _server_proc = subprocess.Popen(
-            [sys.executable, "-m", "reyes_agent.web"],
+            [sys.executable, "-S", str(backend_bootstrap)],
             creationflags=creationflags,
             stdout=log_file,
             stderr=log_file,
