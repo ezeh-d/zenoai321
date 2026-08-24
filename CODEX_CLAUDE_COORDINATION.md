@@ -210,3 +210,15 @@ re-opens (pack4 #82/#84/#125). Injectable clock, thread-safe, never raises.
 Wired: `desktop_agent._note_reputation` now also feeds the breaker; the router's
 `_rank_by_reputation` sinks OPEN tools to the bottom (soft quarantine). 25 tests
 green across breaker+routing+executors.
+
+**B. ResourceLeases (`resource_leases.py`, NEW).** Exclusive, self-expiring
+leases so two agents never drive the same tab/file/window (pack4 #110-#113, #28).
+`acquire/release/hold()`, TTL (a crashed holder can't lock forever), re-entrant
+for the same holder, injectable clock, thread-safe, `acquire` returns None on
+contention (never throws). Infrastructure -- adopt around browser-tab/file/window
+automation via `resource_leases.get_leases().hold(res, holder)`. 10 tests green.
+
+**C. OutcomeConfidence (`outcome_confidence.py`, NEW).** Collapses evidence into
+one honest level VERIFIED/HIGH_CONFIDENCE/PARTIAL/UNVERIFIED/FAILED (pack4
+#72-#73), composing ActionVerifier: `from_action(action,args,result)` and
+`truthful(level)` so ZENO only says "done" when it's earned. 11 tests green.
