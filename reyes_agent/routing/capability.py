@@ -128,6 +128,8 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                      "prepare_for_visit", "start_visitor_session", "set_serious_mode"),
     "workflow": ("workflow_run", "workflow_teach", "workflow_confirm"),
     "voice": ("learn_my_voice", "voice_profile_status", "set_mic_level"),
+    # Evidence-based match forecasting (Elo+Poisson) + live sports news.
+    "sports": ("predict_match", "live_news"),
 }
 
 # What each capability may cost, so a bug cannot quietly reintroduce a
@@ -139,7 +141,7 @@ BUDGETS: dict[str, int] = {
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 10, "missions": 8,
     "social": 15, "diagnostics": 12, "presentation": 8, "workflow": 6, "voice": 6,
-    "security": 7, "language": 6, "anime": 8,
+    "security": 7, "language": 6, "anime": 8, "sports": 4,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow
@@ -263,6 +265,9 @@ _INTENT: tuple[tuple[str, str], ...] = (
                 r"create (?:a |the )?(?:website|web app|landing page))\b"),
     ("business", r"\b(?:portfolio|invest|trade|revenue|business idea|"
                  r"opportunit(?:y|ies)|campaign|market)\b"),
+    ("sports", r"\b(?:predict|forecast|who (?:will|'ll) win|win probability|"
+               r"likely score|score prediction|odds of|chances of|"
+               r"how will .* do|analyze .* (?:match|game|team))\b"),
     ("web", r"\b(?:search for|look up|google|find out|latest news|what.*happening|"
             r"research|today.?s? news|news (?:on|about|today|story|stories)|"
             r"headlines?|what.?s (?:the )?(?:latest|new)|any .*news)\b"),
