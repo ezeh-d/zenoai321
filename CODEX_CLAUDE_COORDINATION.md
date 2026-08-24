@@ -174,3 +174,16 @@ Deterministic `in_rollout(name, key)` (stable hash slice), atomic JSON persisten
 in `%LOCALAPPDATA%/ZENO/feature_flags.json`, `register()` for adapter-owned
 flags, thread-safe, never raises. Standalone -- consumed on demand (item 5 gates
 on it). 13 tests green.
+
+**5. UniversalSearchService (`universal_search.py`, NEW).** Pack #7 done the
+gated way (#218, #255): a genuinely useful LOCAL backend today (token-overlap +
+fuzzy/typo-tolerant ranking, dependency-free, thread-safe) and an OPTIONAL
+Meilisearch backend used only when `enable_meilisearch` is on AND a server is
+reachable (health-checked at construction, degrades to local otherwise). No
+heavy install forced; `MEILISEARCH_URL`/`MEILISEARCH_KEY` + the flag upgrade it
+transparently. Local mirror is always kept so a Meilisearch outage still
+returns results. 12 tests green.
+
+All five build-next items (#258) are shipped, each self-contained + tested and
+committed separately. Nothing here is auto-wired into the hot conversation loop
+beyond the two additive `desktop_agent`/`tools` touches noted above.
