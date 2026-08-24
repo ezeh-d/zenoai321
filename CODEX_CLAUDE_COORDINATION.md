@@ -244,3 +244,17 @@ cloud_api.py (Conversation Diagnostics #283, owner-auth, runs/stores nothing).
 Codex: the tool-registry import line in `tools/__init__.py` was deliberately
 NOT touched — if you want a `conversation_plan` brain tool, add a module there;
 the planner API (`conversation.planner.get_planner().plan(...)`) is stable.
+
+## RECENT CLAUDE CHANGES — Pack 5 production-intelligence P0 (new modules)
+
+Pure-logic P0 layer (external providers Ray/vLLM/Vault/Keycloak/Tauri/Langfuse/
+NATS/Loki/A2A-wire all deferred behind the gate):
+- `capability_lifecycle.py` -- validated FSM + criticality (#135-138).
+- `capability_truth.py` -- no-fake-capability dashboard + production-readiness
+  score, health/lifecycle read LIVE from reputation + breaker + FSM (#246-251).
+- `admission.py` -- per-class concurrency budgets, backpressure, voice-critical
+  reservation (#18-24, #118).
+- `a2a_registry.py` -- Agent2Agent trust levels, new-agent quarantine, card +
+  task + result validation; can never widen ZENO permissions (#2-10).
+Integrated read-only via `GET /api/owner/capabilities/truth` in cloud_api.py,
+seeded honestly (only proven capabilities show ACTIVE). 18 tests green.

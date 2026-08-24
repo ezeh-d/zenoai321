@@ -609,6 +609,20 @@ def register(app) -> None:
             ambiguous_reference=bool(payload.get("ambiguous_reference", False)))
         return {"ok": True, "plan": plan.as_dict()}
 
+    @protected.get("/capabilities/truth")
+    def owner_capability_truth() -> dict[str, Any]:
+        """Pack 5 capability-truth dashboard (#246-251): advertised vs. actually
+        implemented / tested / healthy / available, plus a production-readiness
+        score and current resource admission. Read-only. Health and lifecycle
+        are read live; the no-fake rule means only PROVEN capabilities show
+        ACTIVE."""
+        from reyes_agent import admission, capability_truth
+
+        capability_truth.seed_baseline()
+        return {"ok": True,
+                "capabilities": capability_truth.get_truth().dashboard(),
+                "resources": admission.get_admission().snapshot()}
+
     @protected.get("/events")
     def owner_events(token: str = Depends(require_trusted_owner)) -> StreamingResponse:
         """Authenticated, bounded SSE invalidation feed for the owner PWA.
