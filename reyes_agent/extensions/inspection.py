@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import ast
+import configparser
 import importlib.metadata
 import json
 import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -214,6 +216,40 @@ class RepositoryInspector:
                         for key, value in (package.get(group) or {}).items()}
             except (TypeError, ValueError):
                 return set()
+        if name == "pyproject.toml":
+            try:
+                project = tomllib.loads(text)
+            except (TypeError, ValueError):
+                return set()
+            dependencies = set(str(item) for item in (project.get("project", {}).get("dependencies") or []))
+            poetry = project.get("tool", {}).get("poetry", {}).get("dependencies") or {}
+            dependencies.update(f"{key}{value if isinstance(value, str) else ''}"
+                                for key, value in poetry.items() if key.casefold() != "python")
+            return dependencies
+        if name == "setup.cfg":
+            parser = configparser.ConfigParser()
+            try:
+                parser.read_string(text)
+            except configparser.Error:
+                return set()
+            raw = parser.get("options", "install_requires", fallback="")
+            return {line.strip() for line in raw.splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")}
+        if name == "setup.py":
+            try:
+                tree = ast.parse(text)
+            except SyntaxError:
+                return set()
+            dependencies: set[str] = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                for keyword in node.keywords:
+                    if keyword.arg != "install_requires" or not isinstance(keyword.value, (ast.List, ast.Tuple)):
+                        continue
+                    dependencies.update(str(item.value) for item in keyword.value.elts
+                                        if isinstance(item, ast.Constant) and isinstance(item.value, str))
+            return dependencies
         return set()
 
     @staticmethod
@@ -246,6 +282,22 @@ class CompatibilityAnalyzer:
             conflicts.append("Repository appears to require Termux/Linux system tooling.")
         python = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         node = self._node_version()
+        python_constraint, node_constraint = self._runtime_constraints(snapshot)
+        if python_constraint:
+            requirements.append(f"extension requires Python {python_constraint}; host has {python}")
+            try:
+                from packaging.specifiers import SpecifierSet
+                from packaging.version import Version
+                if Version(python) not in SpecifierSet(python_constraint):
+                    conflicts.append(f"Host Python {python} does not satisfy {python_constraint}.")
+            except Exception as exc:  # noqa: BLE001 - report uncertainty, do not guess
+                requirements.append(f"Python constraint evaluation unavailable ({type(exc).__name__})")
+        if node_constraint:
+            requirements.append(f"extension declares Node {node_constraint}; host reports {node}")
+        if any(marker in docs for marker in ("cuda", "nvidia gpu", "requires gpu", "rocm")):
+            requirements.append("Repository may require GPU/CUDA/ROCm; isolated benchmark must measure it.")
+        if snapshot.binary_paths:
+            requirements.append("Native/binary files require architecture and provenance verification.")
         for dependency in report.dependencies:
             if dependency.startswith("npm:"):
                 continue
@@ -258,7 +310,8 @@ class CompatibilityAnalyzer:
                 requirements.append(f"isolated environment needs {dependency}")
             else:
                 requirements.append(f"main environment has {package}=={installed}; extension requested {dependency}")
-        compatible = windows == "SUPPORTED" and not any(item.severity == "CRITICAL" for item in report.findings)
+        compatible = (windows == "SUPPORTED" and not conflicts
+                      and not any(item.severity == "CRITICAL" for item in report.findings))
         reason = "Compatible for isolated adapter evaluation." if compatible else "; ".join(conflicts) or "Critical security finding."
         return CompatibilityReport(compatible, windows, python, node, conflicts, requirements, reason)
 
@@ -272,6 +325,21 @@ class CompatibilityAnalyzer:
                                   timeout=3, shell=False).stdout.strip()[:50] or "UNKNOWN"
         except Exception:
             return "UNKNOWN"
+
+    @staticmethod
+    def _runtime_constraints(snapshot: RepositorySnapshot) -> tuple[str, str]:
+        python_constraint = ""
+        node_constraint = ""
+        for path, text in snapshot.files.items():
+            name = PurePosixPath(path).name.casefold()
+            try:
+                if name == "pyproject.toml":
+                    python_constraint = str(tomllib.loads(text).get("project", {}).get("requires-python") or "")
+                elif name == "package.json":
+                    node_constraint = str((json.loads(text).get("engines") or {}).get("node") or "")
+            except (TypeError, ValueError):
+                continue
+        return python_constraint, node_constraint
 
 
 class UsefulComponentExtractor:
@@ -296,13 +364,14 @@ class IntegrationPlanner:
              compatibility: CompatibilityReport, focus: str = "") -> IntegrationPlan:
         components = self.extractor.extract(snapshot, report, focus)
         matches: list[str] = []
+        comparison_error = ""
         try:
             from reyes_agent.tools.universal_registry import get_global_tool_registry
             registry = get_global_tool_registry()
             for capability in report.capabilities[:20]:
                 matches.extend(item.metadata().name for item in registry.find_by_capability(capability)[:3])
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - comparison is advisory
+            comparison_error = type(exc).__name__
         matches = list(dict.fromkeys(matches))[:20]
         critical = any(item.severity == "CRITICAL" for item in report.findings)
         if critical:
@@ -327,6 +396,8 @@ class IntegrationPlanner:
             reasons.append("Unknown license prevents source copying; prefer a process/API adapter.")
         if snapshot.truncated:
             reasons.append("Bounded inspection did not cover every source file.")
+        if comparison_error:
+            reasons.append(f"Existing capability comparison was unavailable ({comparison_error}).")
         return IntegrationPlan(classification, components, matches, report.permissions,
                                adapter_kind, feature_flag_for(snapshot), False, reasons)
 

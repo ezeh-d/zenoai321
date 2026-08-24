@@ -165,6 +165,18 @@ def test_supply_chain_and_trust_are_measured_not_claimed_safe(tmp_path: Path) ->
     assert "not proof" in result["trust"]["meaning"].lower()
 
 
+def test_pyproject_dependencies_and_python_constraint_are_enforced(tmp_path: Path) -> None:
+    source = tmp_path / "future-python"
+    source.mkdir()
+    (source / "pyproject.toml").write_text(
+        '[project]\nname="future-only"\nrequires-python=">=99"\n'
+        'dependencies=["httpx==1.2.3"]\n', encoding="utf-8")
+    result = make_engine(tmp_path).inspect(source)
+    assert result["state"] == REJECTED
+    assert "httpx==1.2.3" in result["inspection"]["dependencies"]
+    assert any("does not satisfy" in item for item in result["compatibility"]["conflicts"])
+
+
 def test_registry_is_atomic_redacted_and_rejects_lifecycle_skips(tmp_path: Path) -> None:
     registry = ExtensionRegistry(tmp_path / "registry")
     record = registry.create({"original": "local:test", "api_token": "must-not-persist"})
@@ -173,6 +185,14 @@ def test_registry_is_atomic_redacted_and_rejects_lifecycle_skips(tmp_path: Path)
     assert persisted["extensions"][record["id"]]["source"]["api_token"] == "[REDACTED]"
     with pytest.raises(ValueError, match="invalid extension transition"):
         registry.transition(record["id"], APPROVAL, "skip every gate")
+
+
+def test_corrupt_catalog_fails_closed_instead_of_overwriting_history(tmp_path: Path) -> None:
+    registry = ExtensionRegistry(tmp_path / "registry-corrupt")
+    registry.path.write_text("{not valid json", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="catalog is unreadable"):
+        registry.list()
+    assert registry.path.read_text(encoding="utf-8") == "{not valid json"
 
 
 def test_approval_does_not_activate_without_real_adapter(tmp_path: Path) -> None:

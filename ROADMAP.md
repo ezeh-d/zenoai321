@@ -95,8 +95,8 @@ stops honestly at `QUARANTINED / NOT_EXECUTED`; the local restricted worker is
 not falsely treated as an OS boundary. Live GitHub validation pinned and parsed
 Click `core.py` at commit `2c8cd3ac958a7eb316d67f2d316c27086c4c0369`
 without executing it. Focused self-extension, control-plane,
-universal-registry and routing validation passes 63/63, and the complete
-maintained repository suite passes 1,986/1,986 in 1,309.64 seconds. See
+universal-registry and routing validation passes 65/65, and the complete
+maintained repository suite passes 1,988/1,988 in 1,111.13 seconds. See
 `docs/ZENO_SELF_EXTENSION_ENGINE.md`.
 
 ## 2026-08-24 core intelligence, stability and capability control plane

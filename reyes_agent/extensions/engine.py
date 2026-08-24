@@ -291,6 +291,7 @@ class SelfExtensionEngine:
             extension_id = str(record.get("id") or "")
             if extension_id in self._runtime_adapters:
                 continue
+            self._unregister(record)
             self._disable_flag(record)
             self.registry.transition(extension_id, BROKEN,
                     "runtime adapter was not restored after process start",
@@ -319,8 +320,8 @@ class SelfExtensionEngine:
             try:
                 from reyes_agent.tools.universal_registry import get_global_tool_registry
                 get_global_tool_registry().unregister(tool_id)
-            except (KeyError, ValueError):
-                pass
+            except (KeyError, ValueError) as exc:
+                _audit_extension_error("unregister", str(record.get("id") or ""), exc)
         self._runtime_adapters.pop(str(record.get("id") or ""), None)
 
     @staticmethod
@@ -328,8 +329,8 @@ class SelfExtensionEngine:
         try:
             from reyes_agent import feature_flags
             feature_flags.get_flags().disable(str((record.get("plan") or {}).get("feature_flag") or ""))
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - shutdown must continue
+            _audit_extension_error("disable_flag", str(record.get("id") or ""), exc)
 
     @staticmethod
     def _declare_truth(record: dict[str, Any], *, tested: bool) -> None:
@@ -342,8 +343,8 @@ class SelfExtensionEngine:
                 version=str(record.get("version") or ""),
                 permissions=tuple((record.get("plan") or {}).get("permissions", {}).keys()),
                 verification_method="extension canary health and adapter verification")
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - truth projection cannot crash runtime
+            _audit_extension_error("declare_truth", str(record.get("id") or ""), exc)
 
 
 class ExtensionUpdateManager:
@@ -432,6 +433,17 @@ def snapshot_version(snapshot: RepositorySnapshot) -> str:
     for path in sorted(snapshot.binary_paths):
         digest.update(f"binary:{path}\0".encode("utf-8", errors="replace"))
     return f"inspect-sha256:{digest.hexdigest()}"
+
+
+def _audit_extension_error(operation: str, extension_id: str, exc: Exception) -> None:
+    try:
+        from reyes_agent import audit
+        audit.log("extension_control_error", operation=operation,
+                  extension_id=extension_id, error=type(exc).__name__)
+    except Exception:
+        # The primary operation already remains fail-closed. Audit failure is
+        # deliberately contained so shutdown/removal cannot strand the host.
+        return
 
 
 _engine: SelfExtensionEngine | None = None
