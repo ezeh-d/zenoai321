@@ -55,6 +55,10 @@ _REGISTRY: dict[str, Flag] = {
         Flag("enable_mesh_remote", False, "Private mesh transport, e.g. Tailscale (#55)."),
         Flag("enable_new_memory", False, "Experimental memory backend."),
         Flag("enable_otel_traces", False, "OpenTelemetry tracing (#87)."),
+        # Stability refinement, on by default: a no-op until reputation data
+        # exists, then orders each capability's tools best-first (pack 3 #19-20).
+        Flag("enable_reputation_routing", True,
+             "Rank exposed tools by rolling-window reputation."),
     ]
 }
 

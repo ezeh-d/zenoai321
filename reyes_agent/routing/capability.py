@@ -363,6 +363,29 @@ def classify(message: str) -> tuple[tuple[str, ...], str, str]:
     return ("memory", "web"), "low", "no clear capability; offering a modest set"
 
 
+def _rank_by_reputation(tools: tuple[str, ...]) -> tuple[str, ...]:
+    """Order a capability's tools best-first by recent reputation, so the most
+    reliable survive the per-capability budget cap and appear earliest to the
+    model. Stable: tools with no data yet keep their curated relative order, so
+    a brand-new tool is never buried under a barely-proven one. A consistently
+    failing tool sinks and may fall past the cap -- soft quarantine (pack4 #84).
+    Never raises; degrades to the given order."""
+    if len(tools) < 2:
+        return tools
+    try:
+        from reyes_agent import feature_flags, tool_reputation
+
+        if not feature_flags.is_enabled("enable_reputation_routing"):
+            return tools
+        rep = tool_reputation.get_reputation()
+        indexed = list(enumerate(tools))
+        # Stable sort: primary key confidence desc, secondary original position.
+        indexed.sort(key=lambda item: (-rep.reputation(item[1])["confidence"], item[0]))
+        return tuple(name for _, name in indexed)
+    except Exception:  # noqa: BLE001 -- routing must never break on telemetry
+        return tools
+
+
 def tools_for(message: str, *, expand: bool = False) -> Route:
     """The tool names to expose for this message."""
     from reyes_agent.tools import TOOLS
@@ -374,7 +397,7 @@ def tools_for(message: str, *, expand: bool = False) -> Route:
     names: list[str] = list(ESSENTIAL)
     for capability in capabilities:
         budget = BUDGETS.get(capability, 12)
-        for tool in CAPABILITIES.get(capability, ())[:budget]:
+        for tool in _rank_by_reputation(CAPABILITIES.get(capability, ()))[:budget]:
             if tool not in names:
                 names.append(tool)
 

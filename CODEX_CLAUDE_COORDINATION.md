@@ -187,3 +187,14 @@ returns results. 12 tests green.
 All five build-next items (#258) are shipped, each self-contained + tested and
 committed separately. Nothing here is auto-wired into the hot conversation loop
 beyond the two additive `desktop_agent`/`tools` touches noted above.
+
+## RECENT CLAUDE CHANGES — router ranks on ToolReputation
+
+`routing/capability.py` `tools_for` now orders each capability's tools best-first
+by ToolReputation BEFORE the per-capability budget cap (new `_rank_by_reputation`),
+so the most reliable tools survive the cap and appear earliest to the model; a
+consistently failing tool sinks (soft quarantine). Stable (unseen tools keep
+curated order), a no-op until data exists, gated by `enable_reputation_routing`
+(default ON), and it degrades to the original order on any error -- routing never
+breaks on telemetry. Codex: this is the only touch to `routing/`; it's additive
+and flag-reversible. 20 tests green.
