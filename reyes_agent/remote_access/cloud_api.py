@@ -585,6 +585,30 @@ def register(app) -> None:
         report["elevation"] = get_owner_auth().elevation_status(token)
         return report
 
+    @protected.post("/conversation/plan")
+    def owner_conversation_plan(payload: dict = Body(...)) -> dict[str, Any]:
+        """Pack 6 conversation diagnostics (#283): given a spoken line and its
+        setting, explain how ZENO would handle it -- who it is addressed to,
+        whether ZENO would speak, and in what register/detail. Read-only: it
+        PLANS a turn, it runs nothing and stores nothing."""
+        from reyes_agent.conversation.planner import get_planner
+
+        def _names(key: str) -> tuple[str, ...]:
+            value = payload.get(key)
+            return tuple(str(x)[:60] for x in value[:12]) if isinstance(value, list) else ()
+
+        plan = get_planner().plan(
+            str(payload.get("text", ""))[:2000],
+            mode=str(payload.get("mode", "normal"))[:20],
+            relationship=str(payload.get("relationship", ""))[:40],
+            setting=str(payload.get("setting", ""))[:40],
+            audience_level=str(payload.get("audience_level", "UNKNOWN"))[:20],
+            agents=_names("agents"), humans=_names("humans"),
+            detail=str(payload.get("detail", ""))[:20],
+            proactive=bool(payload.get("proactive", False)),
+            ambiguous_reference=bool(payload.get("ambiguous_reference", False)))
+        return {"ok": True, "plan": plan.as_dict()}
+
     @protected.get("/events")
     def owner_events(token: str = Depends(require_trusted_owner)) -> StreamingResponse:
         """Authenticated, bounded SSE invalidation feed for the owner PWA.

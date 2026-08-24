@@ -231,3 +231,16 @@ call, with `allow()` letting one probe through after cooldown to self-heal; and
 (b) labels every result with `outcome_confidence` (VERIFIED / HIGH_CONFIDENCE /
 FAILED) so the phone hears an honest confidence, never a false "done". Both are
 additive + defensive (never block a call on their own error). 4 new tests.
+
+## RECENT CLAUDE CHANGES — Pack 6 human-conversation P0 (new package)
+
+New self-contained package `reyes_agent/conversation/` (pure logic, no realtime
+deps — LiveKit/pyannote/WhisperX stay deferred): SpeakerIdentityManager (session
+labels + explicit names only, no guessing), AddresseeResolver, SocialRegisterEngine,
+StayQuietPolicy, ExplanationAdapter, ConsentStateManager, and the composing
+ConversationResponsePlanner. 21 tests green, verified against the pack's own
+examples. Integrated read-only via `POST /api/owner/conversation/plan` in
+cloud_api.py (Conversation Diagnostics #283, owner-auth, runs/stores nothing).
+Codex: the tool-registry import line in `tools/__init__.py` was deliberately
+NOT touched — if you want a `conversation_plan` brain tool, add a module there;
+the planner API (`conversation.planner.get_planner().plan(...)`) is stable.
