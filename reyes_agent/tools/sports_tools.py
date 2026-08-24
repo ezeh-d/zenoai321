@@ -121,6 +121,24 @@ def football_matches(team: str = "", competition: str = "Bundesliga", status: st
 
 
 @register(
+    name="live_sports",
+    description="LIVE in-play scores for ANY sport happening right now (via "
+                "API-Sports): football, basketball, baseball, hockey, rugby, "
+                "American football, volleyball, handball, F1. Use for 'what's "
+                "live now?', 'show me live basketball', 'any live football'.",
+    input_schema={"type": "object", "properties": {
+        "sport": {"type": "string", "description": "football/basketball/baseball/"
+                  "hockey/rugby/american-football/volleyball/handball/formula-1 "
+                  "(aliases: soccer, nba, nfl, f1). Default football."},
+    }, "required": []},
+)
+def live_sports(sport: str = "football") -> str:
+    from reyes_agent.sports.live_feed import get_engine
+
+    return json.dumps(get_engine().live(sport or "football"), default=str)
+
+
+@register(
     name="football_table",
     description="REAL league standings (via football-data.org). Use for 'show "
                 "the Bundesliga table', 'where are Bayern in the league'.",
@@ -160,13 +178,25 @@ def _declare() -> None:
             live_ok = get_provider().available()
         except Exception:  # noqa: BLE001
             live_ok = False
-        for cap in ("sports.live.football", "sports.fixtures.football",
-                    "sports.standings.football"):
+        for cap in ("sports.fixtures.football", "sports.standings.football"):
             truth.declare(cap, implemented=True, tested=True, available=live_ok,
                           owner="sports.providers.football_data",
                           description="football-data.org" if live_ok else "needs API key")
             if live_ok:
                 truth.mark_tested(cap, True)
+        # Live in-play across many sports via API-Sports.
+        try:
+            from reyes_agent.sports.providers.api_sports import SPORTS, get_provider
+
+            aps_ok = get_provider().available()
+        except Exception:  # noqa: BLE001
+            SPORTS, aps_ok = (), False
+        for sport in SPORTS:
+            truth.declare(f"sports.live.{sport}", implemented=True, tested=True,
+                          available=aps_ok, owner="sports.providers.api_sports",
+                          description="API-Sports live" if aps_ok else "needs API_SPORTS_KEY")
+            if aps_ok:
+                truth.mark_tested(f"sports.live.{sport}", True)
         for sport in ("basketball", "tennis", "cricket", "f1"):
             truth.declare(f"sports.predict.{sport}", implemented=False, tested=False,
                           available=False, owner="sports.prediction",
