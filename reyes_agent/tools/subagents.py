@@ -95,10 +95,15 @@ _SPECIALISTS: dict[str, dict] = {
             "coding_inspect/coding_execute when the optional Open Interpreter "
             "backend is available. It is a specialist tool, never ZENO's brain; "
             "if unavailable, use your existing gated file/command tools."
+            " For owner-supplied GitHub repositories, packages, MCP servers, "
+            "plugins or skills, use extension_inspect and extension_status. "
+            "Never import or execute unknown source directly."
         ),
         "tools": {"write_project_file", "list_project_files", "write_note", "read_file", "list_dir",
                    "run_command", "create_3d_model", "coding_inspect", "coding_execute",
-                   "mcp_status", "mcp_read", "mcp_action"},
+                   "mcp_status", "mcp_read", "mcp_action", "extension_inspect",
+                   "extension_status", "extension_search", "extension_update_check", "extension_approve",
+                   "extension_rollback", "extension_remove"},
     },
     "stark": {
         "description": "STARK -- Cybersecurity & Infrastructure Intelligence. Monitors system health, explains errors, reviews configuration -- defensive only.",

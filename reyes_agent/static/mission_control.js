@@ -53,7 +53,7 @@ export async function openMissionControl() {
   ensureStyle();
   root = document.createElement('section'); root.className = 'zmc'; root.tabIndex = -1;
   const nav = document.createElement('nav'); const brand = document.createElement('h2'); brand.textContent = 'ZENO MISSION CONTROL'; nav.appendChild(brand);
-  const sections = ['OVERVIEW','DEVICES','CAPABILITIES','TOOLS','AGENTS','TASKS','MODELS','VOICE','MEMORY','PERMISSIONS','OBSERVABILITY','QUALITY','ERRORS','EVENTS','RESOURCES'];
+  const sections = ['OVERVIEW','DEVICES','CAPABILITIES','TOOLS','EXTENSIONS','AGENTS','TASKS','MODELS','VOICE','MEMORY','PERMISSIONS','OBSERVABILITY','QUALITY','ERRORS','EVENTS','RESOURCES'];
   for (const section of sections) {
     const button = document.createElement('button'); button.type = 'button'; button.dataset.section = section; button.textContent = section.replaceAll('_', ' ');
     button.addEventListener('click', () => { active = section; render(); }); nav.appendChild(button);

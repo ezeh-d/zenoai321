@@ -30,6 +30,11 @@ class MissionControl:
             memory = get_memory_manager().status()
         except Exception as exc:
             memory = {"state": "DEGRADED", "error": type(exc).__name__}
+        try:
+            from reyes_agent.extensions import get_extension_engine
+            extensions = get_extension_engine().status()
+        except Exception as exc:
+            extensions = {"state": "DEGRADED", "error": type(exc).__name__}
         failures = [row for row in get_evidence_ledger().history(limit=100)
                     if row.get("verification") == "FAILED"][:25]
         session = get_session_state().snapshot()
@@ -43,6 +48,7 @@ class MissionControl:
             "MODELS": provider_manager.status(),
             "VOICE": {"state": session["voice_state"], "microphone": microphone.runtime_status()},
             "MEMORY": memory,
+            "EXTENSIONS": extensions,
             "PERMISSIONS": permissions.describe(),
             "OBSERVABILITY": get_tracer().snapshot(25),
             "QUALITY": get_quality_score().score(),

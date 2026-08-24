@@ -15,6 +15,12 @@ class DiagnosticsEngine:
     def diagnose(self, capability: str = "") -> dict[str, Any]:
         started = time.perf_counter()
         if capability:
+            if str(capability).startswith("ext_"):
+                from reyes_agent.extensions import get_extension_engine
+                report = get_extension_engine().doctor(capability)
+                report["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+                return {"scope": capability, "diagnosis": report,
+                        "latency_ms": report["latency_ms"]}
             from reyes_agent.capability_truth import get_truth
             return {"scope": capability, "diagnosis": get_truth().diagnose(capability),
                     "latency_ms": round((time.perf_counter() - started) * 1000, 2)}

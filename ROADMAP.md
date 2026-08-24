@@ -70,6 +70,35 @@ agent-team, routing, security-policy, catalog, reputation and universal-tool
 integration set passes 160/160. See
 `docs/AVA_ALL_HACKING_TOOLS.md`.
 
+## 2026-08-24 autonomous self-extension and GitHub integration
+
+**DONE FOR THE SAFE LOCAL CONTROL PLANE; EXECUTABLE IMPORTS ARE CORRECTLY
+GATED BY DEPLOYMENT ISOLATION.** ZENO now accepts bounded GitHub
+repository/file/directory/release references, local sources/archives, package,
+MCP, plugin and skill references through one `SelfExtensionEngine`. Read-only
+acquisition, repository structure inspection, secret/prohibited-purpose and
+permission review, license/dependency/compatibility reporting, useful-component
+planning, declarative adapter generation, strict lifecycle transitions, atomic
+redacted catalog, feature-flag canary, verification-gated promotion,
+GlobalToolRegistry/CapabilityTruth integration, update discovery, rollback,
+removal and Mission Control/ZenoDoctor visibility are implemented.
+
+Unknown executable code is never imported or run during inspection. Traversal
+archives, critical secrets and prohibited purposes are rejected. Generated
+adapter manifests are labelled non-executable; approval alone cannot mark a
+capability working. A real adapter enters a 10% canary and reaches ACTIVE only
+after verification evidence. Native ZENO tools cannot be removed by the
+extension unregistration path.
+
+This workstation has no configured strong AIO/E2B runner, so executable source
+stops honestly at `QUARANTINED / NOT_EXECUTED`; the local restricted worker is
+not falsely treated as an OS boundary. Live GitHub validation pinned and parsed
+Click `core.py` at commit `2c8cd3ac958a7eb316d67f2d316c27086c4c0369`
+without executing it. Focused self-extension, control-plane,
+universal-registry and routing validation passes 63/63, and the complete
+maintained repository suite passes 1,986/1,986 in 1,309.64 seconds. See
+`docs/ZENO_SELF_EXTENSION_ENGINE.md`.
+
 ## 2026-08-24 core intelligence, stability and capability control plane
 
 **DONE WITH EXTERNAL ACCEPTANCE LIMITS.** ZENO now has one joined operational

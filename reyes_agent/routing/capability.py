@@ -131,7 +131,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
     # Evidence-based forecasting + REAL fixtures/scores/standings + sports news.
     "sports": ("predict_match", "live_sports", "football_matches", "football_table",
                "live_news"),
-    "extensions": ("extension_inspect", "extension_status", "extension_update_check",
+    "extensions": ("extension_inspect", "extension_status", "extension_search", "extension_update_check",
                    "extension_approve", "extension_rollback", "extension_remove"),
 }
 
@@ -144,7 +144,7 @@ BUDGETS: dict[str, int] = {
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 10, "missions": 8,
     "social": 15, "diagnostics": 12, "presentation": 8, "workflow": 6, "voice": 6,
-    "security": 7, "language": 6, "anime": 8, "sports": 4, "extensions": 6,
+    "security": 7, "language": 6, "anime": 8, "sports": 4, "extensions": 7,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow

@@ -372,6 +372,26 @@ class GlobalToolRegistry:
             self._names[metadata.name] = metadata.tool_id
         return metadata
 
+    def unregister(self, tool_id_or_name: str) -> bool:
+        """Remove only a non-native adapter from the catalog.
+
+        Native tools remain owned by ``reyes_agent.tools`` and cannot be
+        removed by an extension lifecycle operation.
+        """
+        self._seed()
+        key = str(tool_id_or_name or "").strip()
+        with self._lock:
+            tool_id = key if key in self._adapters else self._names.get(key, "")
+            adapter = self._adapters.get(tool_id)
+            if adapter is None:
+                return False
+            name = adapter.metadata().name
+            if name in self._native_names:
+                raise ValueError(f"native tool '{name}' cannot be unregistered")
+            self._adapters.pop(tool_id, None)
+            self._names.pop(name, None)
+            return True
+
     def get(self, tool_id_or_name: str) -> ToolAdapter | None:
         self._seed()
         key = str(tool_id_or_name or "").strip()

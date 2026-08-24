@@ -169,6 +169,34 @@ def _audd_timeout() -> float:
         return 15.0
 
 
+def _resolve_input_device(sd: Any) -> dict[str, Any]:
+    """The input device ZENO should record from.
+
+    Honours ``ZENO_INPUT_DEVICE`` (a device index, or a case-insensitive name
+    substring) so the owner can point ZENO at a WORKING microphone without
+    changing Windows' system default -- the fix when the default input is a
+    muted/dead device (e.g. a USB receiver returning digital silence). Falls
+    back to the system default input when unset or unmatched.
+    """
+    import os
+
+    pref = os.environ.get("ZENO_INPUT_DEVICE", "").strip()
+    if pref:
+        try:
+            if pref.lstrip("-").isdigit():
+                info = sd.query_devices(int(pref))
+                if int(info.get("max_input_channels", 0) or 0) > 0:
+                    return info
+            else:
+                for dev in sd.query_devices():
+                    if (int(dev.get("max_input_channels", 0) or 0) > 0
+                            and pref.casefold() in str(dev.get("name", "")).casefold()):
+                        return dev
+        except Exception:  # noqa: BLE001 -- fall back to the default input
+            pass
+    return sd.query_devices(kind="input")
+
+
 def capture(source: str = "microphone", seconds: int = 8) -> bytes:
     """Capture a finite mic or WASAPI loopback sample on a worker thread."""
     try:
@@ -192,7 +220,7 @@ def capture(source: str = "microphone", seconds: int = 8) -> bytes:
             raise AudioRecognitionError("Windows WASAPI loopback is unavailable on this audio device.") from exc
     else:
         try:
-            device = sd.query_devices(kind="input")
+            device = _resolve_input_device(sd)
             settings = None
             channels = 1
             device_id = device.get("name")

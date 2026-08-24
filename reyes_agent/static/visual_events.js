@@ -28,6 +28,10 @@ export const EVENTS = Object.freeze({
   MISSION_PROGRESS: "mission:progress",
   MISSION_COMPLETED: "mission:completed",
   NOTIFICATION: "notification",
+  // Normalised 0..1 audio amplitude (mic while listening, TTS while speaking).
+  // The amplitude SOURCE emits this; the visualizer subscribes -- so mic/audio
+  // processing never touches the renderer (PixiJS brief #5, #6).
+  AUDIO_LEVEL: "zeno:audio-level",
 });
 
 // Subscribe. Returns an unsubscribe function (idempotent).

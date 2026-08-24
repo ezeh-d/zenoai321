@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ZENO voice visualizer test</title></head>
+<body style="background:#07090f;color:#e8eef8;font:14px system-ui">
+<div id="out">running…</div>
+<div id="viz" style="position:relative;width:360px;height:120px;margin-top:12px;border:1px solid #1e2a3d"></div>
+<script type="module">
+import * as bus from "./visual_events.js";
+import * as cfg from "./visual_config.js";
+import * as vv from "./voice_visualizer.js";
+
+const results = [];
+const ok = (n, c) => results.push([n, !!c]);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+(async () => {
+  try {
+    cfg.setConfig({ audioVisualizer: true, fpsLimit: 60 });
+    const init = await vv.initVoiceVisualizer(document.getElementById("viz"), { bars: 28 });
+    ok("visualizer init (renderer=" + (init.renderer || init.reason) + ")", init.enabled === true);
+    if (init.enabled) {
+      // Drive a realistic fluctuating mic level for ~2.5s so it actually animates.
+      let stop = false;
+      (function drive(t0) {
+        function step() {
+          if (stop) return;
+          const t = performance.now() / 1000;
+          const level = 0.35 + 0.35 * Math.abs(Math.sin(t * 3)) + 0.1 * Math.random();
+          bus.emit(bus.EVENTS.AUDIO_LEVEL, { level });
+          requestAnimationFrame(step);
+        }
+        step();
+      })();
+      await sleep(2500);
+      const measured = vv.fps();
+      stop = true;
+      // FPS is INFORMATIONAL: a real visible window free-runs the ticker; some
+      // automated/headless panes do not composite continuously, so measure FPS
+      // in the actual ZENO UI. Not asserted here to avoid a false failure.
+      window.__VOICE_FPS__ = measured;
+      vv.destroyVoiceVisualizer();
+      ok("cleanup removed visualizer", vv.isEnabled() === false);
+    }
+  } catch (e) { results.push(["harness threw: " + e.message, false]); }
+  const passed = results.filter(r => r[1]).length;
+  const fpsLine = (typeof window.__VOICE_FPS__ === "number") ? (" | FPS=" + window.__VOICE_FPS__) : "";
+  document.getElementById("out").textContent =
+    "VOICE_TEST: " + passed + "/" + results.length + " passed" + fpsLine + " — " +
+    results.map(r => (r[1] ? "PASS " : "FAIL ") + r[0]).join(" | ");
+  window.__VOICE_TEST__ = { passed, total: results.length, fps: window.__VOICE_FPS__ };
+})();
+</script></body></html>

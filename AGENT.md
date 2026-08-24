@@ -4,6 +4,20 @@ Single source of truth for what we're building and why. Written from the
 Tier 0 interview on 2026-07-22. Update this file if any answer below changes
 — it's what any future session should read first.
 
+## Engineering checkpoint — 2026-08-24 self-extension
+
+Owner-supplied GitHub/package/MCP/plugin/skill sources must enter through
+`reyes_agent.extensions.SelfExtensionEngine`. Acquisition is bounded and
+read-only; repository-authored instructions are data, never commands. Critical
+secrets and prohibited purposes are rejected. Executable source remains
+quarantined until a configured strong AIO/E2B boundary produces real test
+evidence. Declarative adapter generation, owner approval, or successful import
+alone must never mark a capability available. Promotion requires one existing
+GlobalToolRegistry adapter, health, a feature-flag canary and verification
+evidence; CapabilityTruth is updated only after those gates. Preserve the
+atomic extension catalog and never let extension removal unregister native
+ZENO tools.
+
 ## Engineering checkpoint — 2026-08-21
 
 ZENO Anywhere Live Desktop reuses the existing trusted-owner session,
