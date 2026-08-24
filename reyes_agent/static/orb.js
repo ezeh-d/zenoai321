@@ -149,6 +149,20 @@ function injectStyles() {
   document.head.appendChild(style);
 }
 
+// Bridge orb state onto the shared visual-event bus (PixiJS #28) so optional
+// renderers (a Pixi overlay, a HUD) can react WITHOUT the orb importing them.
+// Best-effort and fully guarded: if the bus is missing or throws, the orb is
+// entirely unaffected -- this is a one-way report, never a dependency.
+let _visualBus = null;
+try { import("./visual_events.js").then((m) => { _visualBus = m; }).catch(() => {}); } catch (_) {}
+const _STATE_EVENT = {
+  listening: "zeno:listening", understanding: "zeno:thinking", thinking: "zeno:thinking",
+  reasoning: "zeno:thinking", processing: "zeno:thinking", acting: "zeno:executing",
+  coding: "zeno:executing", speaking: "zeno:speaking", success: "zeno:success",
+  error: "zeno:error", idle: "zeno:idle",
+};
+function _emitVisual(ev, detail) { try { _visualBus && _visualBus.emit(ev, detail); } catch (_) {} }
+
 export function initOrb(canvas) {
   injectStyles();
   // The canvas element stays in the DOM (index.html references it) but
@@ -191,6 +205,10 @@ export function initOrb(canvas) {
     // glow plus low-rate particles keep ZENO visibly present without a
     // permanent compositor workload in the Windows overlay.
     root.classList.toggle("orb-motion", currentState !== "idle" && currentState !== "waiting");
+    // Report the real state onto the bus (one generic + one semantic event).
+    _emitVisual("zeno:state", { state: currentState });
+    const _ve = _STATE_EVENT[currentState];
+    if (_ve) _emitVisual(_ve, { state: currentState });
     currentHue = s.hue;
     root.style.setProperty("--orb-hue", String(currentHue));
     root.style.setProperty("--orb-spin", s.spin + "s");
@@ -398,10 +416,14 @@ export function initOrb(canvas) {
   let agentEnergy = 0;
   // Energy now toggles on the ROOT so the static .orb-glow layer changes,
   // not the breathing core -- keeps the glow off the animated element.
-  function dispatchAgent(_id) { pulse(); agentEnergy = 1; root.classList.add("energy-on"); }
+  function dispatchAgent(_id) {
+    pulse(); agentEnergy = 1; root.classList.add("energy-on");
+    _emitVisual("agent:activated", { id: _id });
+  }
   function setAgentWorking(_id, working) {
     agentEnergy = working ? 1 : 0;
     root.classList.toggle("energy-on", agentEnergy > 0);
+    _emitVisual(working ? "agent:thinking" : "agent:completed", { id: _id });
   }
   function getAgentScreenPositions() { return []; }
 

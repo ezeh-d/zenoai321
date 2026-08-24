@@ -108,9 +108,19 @@ models/piper/*.wav
 # Local Netlify folder
 .netlify
 
+# Self-extension runtime isolation and evidence. The redacted catalog and
+# reviewed manifests remain versionable; environments/source quarantine do not.
+extensions/environments/
+extensions/quarantine/
+extensions/history/
+extensions/audit.jsonl
+
 # Native Android Companion build/tooling output
 **/.gradle/
 **/local.properties
 **/build/
 *.apk
 *.aab
+
+# Vendored Pixi browser bundle (build artifact copied from node_modules)
+reyes_agent/static/vendor/

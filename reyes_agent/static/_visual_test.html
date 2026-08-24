@@ -1,0 +1,59 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ZENO visual layer test</title></head>
+<body style="background:#07090f;color:#e8eef8;font:14px system-ui">
+<div id="out">running…</div>
+<div id="stage" style="position:relative;width:320px;height:220px;margin-top:12px;border:1px solid #1e2a3d"></div>
+<script type="module">
+import * as bus from "./visual_events.js";
+import * as cfg from "./visual_config.js";
+import * as pixi from "./pixi_layer.js";
+
+const results = [];
+const ok = (name, cond) => results.push([name, !!cond]);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+(async () => {
+  try {
+    // 1) bus on/emit/off
+    let n = 0; const h = () => n++;
+    const un = bus.on(bus.EVENTS.SUCCESS, h);
+    bus.emit(bus.EVENTS.SUCCESS); ok("bus emit delivers", n === 1);
+    un(); bus.emit(bus.EVENTS.SUCCESS); ok("bus off stops delivery", n === 1);
+
+    // 2) crash isolation: a throwing handler must not break a sibling or throw
+    let got = false;
+    bus.on(bus.EVENTS.ERROR, () => { throw new Error("boom"); });
+    bus.on(bus.EVENTS.ERROR, () => { got = true; });
+    let threw = false; try { bus.emit(bus.EVENTS.ERROR); } catch (_) { threw = true; }
+    ok("crash-isolated emit", got && !threw);
+
+    // 3) performance mode forces the cheap profile
+    cfg.setConfig({ pixi: true, particles: "high", glow: true });
+    cfg.setPerformanceMode(true);
+    const eff = cfg.effectiveConfig();
+    ok("perf mode disables pixi+particles", eff.pixi === false && eff.particles === "off" && eff.glow === false);
+    cfg.setPerformanceMode(false);
+
+    // 4) pixi overlay: init (WebGL), burst on SUCCESS, then clean up
+    cfg.setConfig({ pixi: true, particles: "medium" });
+    const init = await pixi.initPixiLayer(document.getElementById("stage"));
+    ok("pixi initialised (renderer=" + (init.renderer||init.reason) + ")", init.enabled === true);
+    if (init.enabled) {
+      bus.emit(bus.EVENTS.SUCCESS);
+      await sleep(60);
+      ok("burst spawned particles", pixi._debugStats().particles > 0);
+      pixi.destroyPixiLayer();
+      ok("cleanup removed overlay", pixi.isEnabled() === false && pixi._debugStats().particles === 0);
+    }
+  } catch (e) {
+    results.push(["harness threw: " + e.message, false]);
+  }
+  const passed = results.filter(r => r[1]).length;
+  const line = "VISUAL_TEST: " + passed + "/" + results.length + " passed";
+  const detail = results.map(r => (r[1] ? "PASS " : "FAIL ") + r[0]).join(" | ");
+  document.getElementById("out").textContent = line + " — " + detail;
+  console.log(line);
+  results.forEach(r => console.log((r[1] ? "PASS " : "FAIL ") + r[0]));
+  window.__VISUAL_TEST__ = { passed, total: results.length, results };
+})();
+</script></body></html>
