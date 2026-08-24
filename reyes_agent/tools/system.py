@@ -824,3 +824,11 @@ def send_telegram_message(message: str) -> str:
         f"Telegram accepted the message as ID {message_id}; postcondition verified "
         "from the authenticated provider response."
     )
+
+
+# --- ZENO Hands ---------------------------------------------------------
+# Expose the existing gated/verified computer.agentic engine (type / press keys
+# / click by description / scroll) as brain tools. Imported here -- next to the
+# other desktop-control tools -- so the shared tool loader registers them without
+# a second edit to tools/__init__.py.
+from reyes_agent.tools import hands_tools as _hands_tools  # noqa: E402,F401

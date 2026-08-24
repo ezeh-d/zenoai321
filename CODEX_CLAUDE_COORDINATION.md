@@ -298,3 +298,21 @@ now lists them so the phone sees "needs setup", not fake. Also added
 `test_capabilities_endpoint.py`: proves GET /api/owner/capabilities/truth
 returns REAL registry data over the AUTHENTICATED HTTP layer (tool_count>50,
 open_app proven-active). 180 new-module tests green.
+
+## RECENT CLAUDE CHANGES — ZENO Hands (typing/keys/click now real brain tools)
+
+Root cause of "typing not working": the gated/verified keyboard-mouse engine
+`computer.agentic.act` existed but was NOT exposed as brain tools, so the model
+had nothing to call. Fixed by REUSING that engine (no rebuild):
+- NEW `tools/hands_tools.py`: type_text, press_keys, click_element (grounded by
+  description, not blind coords), scroll_screen. Standardized results, honest
+  verification (only "verified" when the screen actually changed), secret echo
+  redaction. Registered via a one-line import at the END of the CLEAN
+  `tools/system.py` (NOT tools/__init__.py, which is Codex-dirty).
+- `routing/capability.py` (clean): added the four tools to the desktop tuple and
+  desktop trigger patterns for type/press/paste/hotkey (with a negative lookahead
+  so "what type of..." does NOT misroute). 84 routing tests still green.
+- `capability_snapshot.hands_and_comms()`: live READY/NOT_CONNECTED for hands +
+  messaging (reuses each provider's own status()). Messaging was already honest
+  (router reports SEND_FAILED/APP_NOT_FOUND, only SENT on real verification);
+  news already exists (get_news/research_lab/web_search). 176 tests green.

@@ -72,7 +72,8 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
     "browser": ("browser_open", "browser_click", "browser_read", "browser_fill",
                 "browser_scroll", "browser_extract", "browser_screenshot",
                 "browser_close", "browser_vision_click", "web_search"),
-    "desktop": ("open_app", "run_command", "list_processes", "lock_screen",
+    "desktop": ("open_app", "run_command", "type_text", "press_keys",
+                "click_element", "scroll_screen", "list_processes", "lock_screen",
                 "read_screen_text", "take_screenshot", "open_path",
                 "media_control", "set_volume"),
     "files": ("read_file", "write_project_file", "list_dir", "list_project_files",
@@ -235,7 +236,14 @@ _INTENT: tuple[tuple[str, str], ...] = (
     ("desktop", r"\b(?:open|launch|start|close|quit)\s+(?:the\s+)?"
                 r"(?:app|application|calculator|notepad|explorer|terminal|"
                 r"vs ?code|pycharm|slack|word|excel|settings)\b"
-                r"|\block (?:the )?screen\b|\bvolume\b|\bmute\b|\bwhat.*running\b"),
+                r"|\block (?:the )?screen\b|\bvolume\b|\bmute\b|\bwhat.*running\b"
+                # ZENO Hands: typing/keys/paste on the desktop. "type" guards
+                # against "what type of", and click/scroll are already browser-
+                # routed above; here they cover general desktop windows too.
+                r"|\btype (?!of\b|is\b|are\b|a \w)|\bpress (?:enter|tab|esc|escape|"
+                r"backspace|delete|space|the|key|ctrl|alt|shift|win|arrow)"
+                r"|\bhit enter\b|\bpaste (?:this|that|it|here|into)|\bhotkey\b"
+                r"|\bctrl\s*\+|\balt\s*\+|\balt.?tab\b"),
     ("vision", r"\b(?:look at|what.*on (?:my|the) screen|see (?:my|the) screen|"
                r"screenshot|read (?:the )?screen|webcam|camera|this image)\b"),
     ("communication", r"\b(?:send|message|text|email|slack|telegram|whatsapp|"

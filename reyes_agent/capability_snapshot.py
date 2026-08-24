@@ -157,3 +157,55 @@ def system_status() -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         status["adapters"] = []
     return status
+
+
+def hands_and_comms() -> dict[str, Any]:
+    """Live hands + communication readiness (JARVIS/ULTRON HANDS report format).
+    Reads the REAL tool registry and each messaging provider's own status(),
+    reporting READY / PARTIAL / NOT_CONNECTED honestly -- never a fake claim."""
+    def _has(*names: str) -> bool:
+        try:
+            from reyes_agent.tools import TOOLS
+            return all(n in TOOLS for n in names)
+        except Exception:  # noqa: BLE001
+            return False
+
+    hands = {
+        "keyboard": "READY" if _has("type_text", "press_keys") else "NOT_CONNECTED",
+        "mouse": "READY" if _has("click_element", "scroll_screen") else "NOT_CONNECTED",
+        "clipboard": "READY" if _has("read_clipboard", "write_clipboard") else "NOT_CONNECTED",
+        "screen_awareness": "READY" if _has("read_screen_text", "take_screenshot") else "NOT_CONNECTED",
+        "application_control": "READY" if _has("open_app") else "NOT_CONNECTED",
+    }
+
+    def _provider(mod: str) -> str:
+        try:
+            import importlib
+            status = importlib.import_module(f"reyes_agent.tools.messaging.{mod}").status()
+            if isinstance(status, dict):
+                if status.get("ready") or status.get("connected") or status.get("configured"):
+                    return "READY"
+                return "NOT_CONNECTED"
+        except Exception:  # noqa: BLE001
+            pass
+        return "NOT_CONNECTED"
+
+    def _desktop_ok() -> str:
+        try:
+            from reyes_agent.tools.messaging import desktop
+            ok, _ = desktop.available()
+            return "READY" if ok else "NOT_CONNECTED"
+        except Exception:  # noqa: BLE001
+            return "NOT_CONNECTED"
+
+    comms = {
+        "message_interface": "READY" if _has("send_message") else "NOT_CONNECTED",
+        "slack": _provider("slack"),
+        "telegram": _provider("telegram"),
+        "whatsapp": _desktop_ok(),      # desktop automation drives WhatsApp/Web
+        "discord": _provider("discord"),
+        "email": "READY" if _has("check_email") else "NOT_CONNECTED",
+        "sms": "NOT_CONNECTED",         # no SMS/phone bridge provider wired
+        "calls": "NOT_CONNECTED",       # no telephony provider wired
+    }
+    return {"hands": hands, "communication": comms}
