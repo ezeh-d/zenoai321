@@ -71,7 +71,12 @@ def _handle(channel_id: str, text: str, say) -> None:
         tool_notes.append(f"_using {name}_")
 
     try:
-        run_agent(history, on_tool_call=on_tool_call)
+        run_agent(
+            history,
+            on_tool_call=on_tool_call,
+            action_source="connected_service",
+            owner_authenticated=False,
+        )
         reply = history[-1]["content"]
     except ProviderError as exc:
         del history[turn_start:]

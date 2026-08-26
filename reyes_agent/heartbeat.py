@@ -279,7 +279,11 @@ def _run_check(check: dict) -> None:
             }
         ]
         try:
-            run_agent(history)
+            run_agent(
+                history,
+                action_source="background",
+                owner_authenticated=False,
+            )
             reply = history[-1]["content"].strip()
         except ProviderError:
             reply = None  # a failed check is not itself a notice -- stay silent, try next cycle

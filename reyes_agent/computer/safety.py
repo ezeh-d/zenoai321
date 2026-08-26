@@ -111,5 +111,29 @@ def gate(action: str, target: str = "", context: str = "",
     if risk.refused:
         return False, risk
     if risk.needs_approval and not approved:
+        # A current authenticated command such as "send Ada hello" is the
+        # approval for that exact ordinary outward click.  Reuse the central
+        # action policy instead of asking again here. Payments/security are
+        # already REFUSED above and destructive clicks remain approval-gated.
+        outward = re.search(r"\b(send|post|publish|submit|share|forward|reply)\b",
+                            " ".join((str(action), str(target))).casefold())
+        if outward:
+            try:
+                from reyes_agent.action_policy import PolicyEffect, evaluate
+
+                capability = (
+                    "social_post"
+                    if outward.group(1) in {"post", "publish", "share"}
+                    else "messaging_send"
+                )
+                decision = evaluate(
+                    "computer_external_action",
+                    {"target": target, "window": context},
+                    capability=capability,
+                )
+                if decision.effect is PolicyEffect.EXECUTE:
+                    return True, risk
+            except Exception:  # noqa: BLE001 -- safety fails closed
+                pass
         return False, risk
     return True, risk

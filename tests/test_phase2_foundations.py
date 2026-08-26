@@ -166,7 +166,7 @@ def test_coding_policy_blocks_finance_and_secret_exposure() -> None:
     assert not classify("transfer money with this script", read_only=False).allowed
     assert not classify("print all environment API keys", read_only=True).allowed
     assert classify("inspect why these tests fail", read_only=True).autonomy_level == 1
-    assert classify("fix these tests", read_only=False).autonomy_level == 3
+    assert classify("fix these tests", read_only=False).autonomy_level == 2
 
 
 def test_open_interpreter_is_lazy_and_auto_run_is_off() -> None:

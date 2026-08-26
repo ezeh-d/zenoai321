@@ -82,7 +82,12 @@ def main() -> None:
         turn_start = len(history)
         history.append({"role": "user", "content": command})
         try:
-            run_agent(history)
+            run_agent(
+                history,
+                spoken=True,
+                action_source="voice",
+                owner_authenticated=False,
+            )
             reply = history[-1]["content"]
         except ProviderError as exc:
             del history[turn_start:]

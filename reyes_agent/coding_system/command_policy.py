@@ -18,7 +18,8 @@ _BLOCKED = (
     re.compile(r"(?i)\b(?:transfer|wire|purchase|checkout|place\s+order|send\s+money)\b"),
     re.compile(r"(?i)\b(?:dump|print|echo|show)\b.{0,30}\b(?:environment|env|api key|token|password|secret)\b"),
 )
-_SENSITIVE = re.compile(r"(?i)\b(?:delete|remove|rmdir|rm\s|move|rename|install|uninstall|write|edit|fix|modify|commit|push|deploy)\b")
+_MUTATING = re.compile(r"(?i)\b(?:delete|remove|rmdir|rm\s|move|rename|install|uninstall|write|edit|fix|modify|commit|push|deploy)\b")
+_HIGH_IMPACT = re.compile(r"(?i)\b(?:delete|remove|rmdir|rm\s|uninstall|push|deploy)\b")
 
 
 def classify(goal: str, *, read_only: bool) -> CommandDecision:
@@ -28,9 +29,11 @@ def classify(goal: str, *, read_only: bool) -> CommandDecision:
     for pattern in _BLOCKED:
         if pattern.search(text):
             return CommandDecision(False, 4, "blocked destructive, financial, credential, or secret-exposure request")
-    if read_only and not _SENSITIVE.search(text):
+    if read_only and not _MUTATING.search(text):
         return CommandDecision(True, 1, "read-only repository/system inspection")
-    return CommandDecision(True, 3, "local changes or commands require the existing confirmation gate")
+    if _HIGH_IMPACT.search(text):
+        return CommandDecision(True, 3, "destructive or externally consequential development action")
+    return CommandDecision(True, 2, "owner-requested workspace development action")
 
 
 def safe_args(executable: str, goal: str, *, read_only: bool, timeout_s: int) -> list[str]:
@@ -40,6 +43,6 @@ def safe_args(executable: str, goal: str, *, read_only: bool, timeout_s: int) ->
     if read_only:
         args += ["--sandbox", "read-only", "--ask-for-approval", "untrusted"]
     else:
-        args += ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]
+        args += ["--sandbox", "workspace-write", "--ask-for-approval", "never"]
     args.append(str(goal))
     return args

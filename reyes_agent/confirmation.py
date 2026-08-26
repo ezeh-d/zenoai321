@@ -1,11 +1,9 @@
-"""Tier 6 (minimal): the hard confirmation gate for consequential tools.
+"""The non-blocking queue for Council and genuinely high-impact actions.
 
-Any tool registered with `requires_confirmation=True` never runs
-immediately -- the request lands here instead, and something with eyes on
-it (the web panel) approves or denies. The agent loop never blocks waiting
-on a human: a queued action just sits until someone acts on it, or expires
-after PENDING_TIMEOUT_SECONDS -- "never block forever waiting on a human;
-time out into a safe default" from AGENT.md's Tier 6 section, applied.
+``reyes_agent.action_policy`` decides whether one current request executes,
+needs clarification, queues here, or is denied. Historical per-tool flags are
+risk hints rather than unconditional prompts. A queued action never blocks the
+agent thread and expires into a safe default after ``PENDING_TIMEOUT_SECONDS``.
 """
 
 from __future__ import annotations

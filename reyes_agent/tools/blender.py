@@ -85,8 +85,8 @@ bpy.ops.wm.save_as_mainfile(filepath=r"{blend_path}")
         "materials). A scene scaffold (clean scene, camera, light, render) "
         "is added automatically -- just write the geometry. Good for "
         "procedural/parametric models, props, simple scenes and logos in "
-        "3D. Requires the user's approval (it runs generated Python in "
-        "Blender)."
+        "3D. A clear owner request to create the model authorizes the bounded "
+        "Blender run; generated code still passes ZENO's command and workspace safeguards."
     ),
     input_schema={
         "type": "object",

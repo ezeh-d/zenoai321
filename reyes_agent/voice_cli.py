@@ -89,7 +89,14 @@ def _turn(history: list[dict], speaking: threading.Event, stop_speech: threading
         print(f"{config.ASSISTANT_NAME}> ", end="", flush=True)
 
     try:
-        run_agent(history, on_text=on_text, on_tool_call=on_tool_call)
+        run_agent(
+            history,
+            on_text=on_text,
+            on_tool_call=on_tool_call,
+            spoken=True,
+            action_source="voice",
+            owner_authenticated=False,
+        )
         print()
     except ProviderError as exc:
         message = f"Sorry, I couldn't respond: {exc}"

@@ -83,7 +83,12 @@ def _handle_message(token: str, chat_id: int, text: str) -> None:
         tool_notes.append(f"[using {name}]")
 
     try:
-        run_agent(history, on_tool_call=on_tool_call)
+        run_agent(
+            history,
+            on_tool_call=on_tool_call,
+            action_source="connected_service",
+            owner_authenticated=False,
+        )
         reply = history[-1]["content"]
     except ProviderError as exc:
         del history[turn_start:]

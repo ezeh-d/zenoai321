@@ -250,6 +250,13 @@ CORE_TOOL_NAMES = frozenset({
     "enable_tools", "delegate", "open_app", "web_search", "build_project",
     "website_project", "learning_mode", "creator_project", "mastery_mode",
     "foodie_mode", "phase3_status", "system_health",
+    # Spatial memory (eMEM): core so the capability router can actually expose
+    # them on a spatial turn -- routing NARROWS core, so a capability whose tools
+    # are not in core can never reach the model. Narrowed out of every non-spatial
+    # turn, so this adds no cost elsewhere.
+    "spatial_remember", "spatial_move", "spatial_where_is", "spatial_room_state",
+    "spatial_recent", "spatial_events_at", "spatial_events_when", "spatial_recall",
+    "spatial_memory_status",
 })
 GROUP_NAMES = sorted(set(TOOL_GROUPS.values()) | {"extended"})
 
@@ -475,29 +482,6 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
         return f"Error running '{tool.name}': {exc}"
 
 
-def _autonomy_allows(name: str) -> bool:
-    """Whether a consequential tool may run without stopping to ask.
-
-    Refactored 2026-08-04 to delegate to the Permission Engine
-    (reyes_agent/permissions.py) instead of keeping a second, parallel set
-    of rules here. One decision point, one place to read the policy --
-    autonomy flags living here while plugin rules lived in the loader was
-    exactly the drift the roadmap says to avoid.
-
-    AUTONOMY_MODE remains a kill switch: off forces everything
-    consequential back through the confirmation gate regardless of profile.
-    """
-    from reyes_agent import config, permissions
-
-    # Money movement stays hard-blocked here too, independently of the
-    # Permission Engine -- two locks, no single point of failure.
-    if name in config.AUTONOMY_NEVER_AUTO_TOOLS:
-        return False
-    if not config.AUTONOMY_MODE:
-        return False
-    return permissions.check(name) == permissions.ENABLED
-
-
 def _canonical_tool_input(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
     """Repair a tiny set of safe provider argument aliases.
 
@@ -560,16 +544,6 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
             pass
         return f"Blocked: {arguments_reason}. Nothing ran."
 
-    # Contextual Phase 3 policy does not replace permissions.py; it is the
-    # constitution facade over that same authority and adds immutable critical
-    # action denial. Every registered tool reaches this point.
-    from reyes_agent.security.policy import CONFIRM as POLICY_CONFIRM
-    from reyes_agent.security.policy import DENY as POLICY_DENY
-    from reyes_agent.security.policy import decide as policy_decide
-    policy = policy_decide(name)
-    if policy.effect == POLICY_DENY:
-        return f"Blocked: {policy.reason}. Nothing ran."
-
     # Permission state applies to EVERY declared capability, not only tools
     # which also happened to set requires_confirmation=True. Previously a
     # cautious-profile capability could say CONFIRM while a read-looking
@@ -594,72 +568,106 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
             "then call build_add_files with the task_id for the rest."
         )
 
-    # Voice identity is request-scoped and server-signed. It can protect
-    # private retrieval, but never becomes authority for a consequential
-    # action: desktop confirmation remains a separate factor.
+    # Voice identity is request-scoped and server-signed. Private retrieval
+    # remains a separate gate from action authorization.
     try:
         from reyes_agent import speaker_identity
 
         denial = speaker_identity.privacy_denial(name)
         if denial:
             return denial
-        voice_requires_confirmation = speaker_identity.requires_strong_confirmation(name)
     except Exception:  # noqa: BLE001 -- identity diagnostics cannot break tools
-        voice_requires_confirmation = False
+        pass
 
-    # Confidence is evidence-backed: model providers do not currently emit a
-    # calibrated intent score, so a high-risk tool has *unknown* confidence
-    # rather than a fabricated positive number.  That unknown state is a
-    # reason not to auto-approve consequential actions, even on a trusted
-    # local installation. Low-risk/read-only tools still run without friction.
+    # Confidence remains evidence for diagnostics and clarification. Unknown
+    # confidence by itself is no longer a second approval engine: the current
+    # authenticated owner command and contextual action policy decide whether
+    # this exact call is authorized.
     from reyes_agent.confidence import decide_tool
 
     confidence = decide_tool(name, requires_confirmation=tool.requires_confirmation)
-    must_confirm = (tool.requires_confirmation or policy.effect == POLICY_CONFIRM
-                    or confidence.requires_confirmation
-                    or voice_requires_confirmation or permission_state == permissions.CONFIRM)
+    from reyes_agent.action_policy import (
+        PolicyEffect,
+        current_action_context,
+        evaluate as evaluate_action,
+    )
 
-    if (must_confirm and _autonomy_allows(name) and not confidence.requires_confirmation
-            and not voice_requires_confirmation):
+    capability = permissions.capability_for_tool(name) or ""
+    decision = evaluate_action(
+        name,
+        tool_input,
+        requires_confirmation=tool.requires_confirmation,
+        permission_state=permission_state,
+        capability=capability,
+    )
+
+    try:
         from reyes_agent import audit
 
-        # Still audited, so an unattended action is never invisible after
-        # the fact even though nobody was asked at the time.
-        audit.log("autonomy_auto_approved", tool=name, input=tool_input)
-        return execute_tool(tool, tool_input)
+        audit.log(
+            "action_policy_decision",
+            actor="zeno",
+            action=name,
+            policy="smart_autonomy",
+            outcome=decision.effect.value.casefold(),
+            level=int(decision.level),
+            reason=decision.reason,
+            fingerprint=decision.fingerprint,
+            source=current_action_context().source,
+            input=_audit_safe(tool_input),
+            confidence=confidence.reason,
+        )
+    except Exception:  # noqa: BLE001 -- audit cannot change the decision
+        pass
 
-    # A consequential tool requested during an AUTHENTICATED, TRUSTED-owner
-    # remote turn runs now instead of queuing for desktop approval: the owner
-    # scanned a fingerprint (a WebAuthn assertion) to elevate this session, so
-    # the fingerprint IS the approval. Unlike passive autonomy this is a fresh,
-    # strong, per-session human authorization, so it runs ordinary
-    # control/communication tools -- but NOT the denylisted arbitrary-execution,
-    # irreversible, public or security tools, which always take an explicit
-    # desktop confirmation. Audited like every other auto-run.
-    from reyes_agent import confirmation as _confirmation
-    if (must_confirm and _confirmation.auto_approve_active()
-            and _confirmation.remote_auto_run_allowed(name)
-            and not voice_requires_confirmation):
-        from reyes_agent import audit
+    if decision.effect is PolicyEffect.DENY:
+        return f"Blocked: {decision.reason}. Nothing ran."
+    if decision.effect is PolicyEffect.CLARIFY:
+        return f"Clarification needed: {decision.reason}. Nothing ran."
 
-        audit.log("remote_owner_auto_approved", tool=name, input=tool_input,
-                  reason=_confirmation.auto_approve_active())
-        return execute_tool(tool, tool_input)
-
-    if must_confirm:
+    if decision.effect in {
+        PolicyEffect.COUNCIL_APPROVAL,
+        PolicyEffect.HIGH_IMPACT_CONFIRMATION,
+    }:
         from reyes_agent import confirmation
 
+        # Existing paired-phone step-up may satisfy a legacy routine
+        # confirmation, but it never bypasses Council or the remote denylist.
+        if (
+            decision.effect is PolicyEffect.HIGH_IMPACT_CONFIRMATION
+            and confirmation.auto_approve_active()
+            and confirmation.remote_auto_run_allowed(name)
+        ):
+            try:
+                from reyes_agent import audit
+
+                audit.log(
+                    "remote_owner_auto_approved",
+                    tool=name,
+                    input=_audit_safe(tool_input),
+                    reason=confirmation.auto_approve_active(),
+                    fingerprint=decision.fingerprint,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return execute_tool(tool, tool_input)
+
         action = confirmation.request(
-            tool_name=name, tool_input=tool_input,
-            description=(f"{name}({tool_input}) — confidence: {confidence.reason}"
-                         + (" — voice identity is not enough; complete desktop confirmation."
-                            if voice_requires_confirmation else "")),
+            tool_name=name,
+            tool_input=tool_input,
+            description=(
+                f"{decision.effect.value}: {name} — {decision.reason} "
+                f"(confidence evidence: {confidence.reason})"
+            ),
+        )
+        label = (
+            "Council approval"
+            if decision.effect is PolicyEffect.COUNCIL_APPROVAL
+            else "high-impact confirmation"
         )
         return (
-            f"Queued as request #{action.id} -- this action needs the user's "
-            "explicit approval before it runs, and has NOT run yet. Tell the "
-            "user it's waiting for them in the REYES panel; do not claim it's "
-            "done and do not retry it yourself."
+            f"Queued as request #{action.id} for {label}. It has NOT run yet; "
+            "approve or deny that one request in the ZENO panel."
         )
 
     return execute_tool(tool, tool_input)

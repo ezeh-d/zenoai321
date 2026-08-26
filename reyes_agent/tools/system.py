@@ -166,7 +166,8 @@ def _post_close_message(hwnd: int) -> bool:
     description=(
         "Gracefully close visible windows for one explicitly allow-listed application. "
         "Never terminates a process and never closes ZENO, Python, WebView2, Explorer, "
-        "or the Windows shell. Requires confirmation because unsaved work may prompt."
+        "or the Windows shell. The application's own save/discard prompt remains visible "
+        "when there is unsaved work."
     ),
     input_schema={
         "type": "object",
@@ -398,7 +399,7 @@ def list_processes(limit: int = 30) -> str:
 
 @register(
     name="delete_file",
-    description="Permanently delete a file. Requires user approval first.",
+    description="Permanently delete one file. This is irreversible and retains ZENO's high-impact confirmation safeguard.",
     input_schema={
         "type": "object",
         "properties": {
@@ -421,7 +422,7 @@ def delete_file(path: str) -> str:
 
 @register(
     name="move_file",
-    description="Move/rename a file. Requires user approval first.",
+    description="Move or rename one normal user file. A clear owner command authorizes a non-overwriting move directly.",
     input_schema={
         "type": "object",
         "properties": {
@@ -449,8 +450,9 @@ def move_file(src: str, dst: str) -> str:
 @register(
     name="run_command",
     description=(
-        "Run a shell command. ONLY use when the user explicitly asks for a "
-        "command/admin action. Requires user approval first."
+        "Run one bounded shell command. Use only inside the owner's requested "
+        "development/system task; destructive disk, financial, credential and "
+        "security-changing commands remain blocked or high-impact."
     ),
     input_schema={
         "type": "object",
@@ -530,9 +532,9 @@ def media_control(action: str) -> str:
         "uses its Ctrl+K quick switcher to jump to the target, types the "
         "message, and presses send. Desktop automation cannot prove that "
         "Slack selected the intended recipient, so the result remains "
-        "unverified until a real Slack API connection is configured. Always requires the user's explicit "
-        "confirmation first, same as any other message REYES sends on "
-        "the user's behalf."
+        "unverified until a real Slack API connection is configured. A current "
+        "authenticated owner command using SEND/TELL authorizes that exact "
+        "recipient and message; a draft request never sends."
     ),
     input_schema={
         "type": "object",
@@ -780,9 +782,9 @@ def get_news(topic: str = "", limit: int = 6) -> str:
         "Send a message to the user's own Telegram, via REYES's bot "
         "(@Reyes3_boss_bot). Only sends to the one chat already set up "
         "for this user -- not a general Telegram messaging tool for "
-        "other people or chats. Always requires the user's explicit "
-        "confirmation first, same as any other message REYES sends on "
-        "the user's behalf."
+        "other people or chats. A current authenticated owner SEND command "
+        "authorizes that exact message without a duplicate prompt; drafting "
+        "alone never sends."
     ),
     input_schema={
         "type": "object",

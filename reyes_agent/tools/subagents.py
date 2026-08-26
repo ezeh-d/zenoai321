@@ -253,14 +253,15 @@ _SPECIALISTS: dict[str, dict] = {
         "tools": {"take_screenshot", "take_webcam_photo"},
     },
     "hermes_comm": {
-        "description": "HERMES -- Communication Intelligence. Slack/Telegram messaging, email, calendar -- gated, never auto-sends.",
+        "description": "HERMES -- Communication Intelligence. Slack/Telegram messaging, email and calendar with exact-command authorization.",
         "prompt": (
             "You are HERMES, ZENO's communication specialist -- Slack and "
             "Telegram messages, checking/reading email, calendar events. "
             "(Unrelated to any external 'Hermes' integration -- this is "
-            "just your name inside ZENO.) Every message you send still "
-            "requires the user's explicit confirmation through the normal "
-            "gate -- being a specialist doesn't skip that."
+            "just your name inside ZENO.) WRITE/DRAFT means prepare only. "
+            "SEND/TELL/REPLY in the current authenticated owner command "
+            "authorizes only that exact recipient and content; never extend "
+            "it into an autonomous conversation."
         ),
         "tools": {"send_slack_message", "send_telegram_message", "check_email", "read_email",
                    "add_calendar_event", "list_calendar_events"},

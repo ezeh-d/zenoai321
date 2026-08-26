@@ -38,6 +38,86 @@ def run_agent(
     cancel_check: Callable[[], None] | None = None,
     turn_id: str = "",
     spoken: bool = False,
+    action_source: str = "",
+    owner_authenticated: bool | None = None,
+) -> None:
+    """Run one shared-brain turn inside an expiring authorization context.
+
+    Existing callers remain source-compatible.  Front doors that are not a
+    live local owner command (for example a heartbeat) must pass an explicit
+    source and ``owner_authenticated=False``.
+    """
+    from reyes_agent.action_policy import current_action_context, use_action_context
+
+    # Nested execution (for example a scoped specialist) inherits the exact
+    # current request instead of replacing it with a broader one.
+    if current_action_context().active:
+        return _run_agent_impl(
+            history, on_text=on_text, on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result, on_stage=on_stage,
+            cancel_check=cancel_check, turn_id=turn_id, spoken=spoken,
+        )
+
+    utterance = next(
+        (
+            str(message.get("original_text") or message.get("content") or "")
+            for message in reversed(history)
+            if message.get("role") == "user"
+        ),
+        "",
+    )
+    source = str(action_source or "").strip().casefold()
+    authenticated = owner_authenticated
+
+    try:
+        from reyes_agent import confirmation, speaker_identity
+
+        speaker = speaker_identity.current_context()
+        elevated = bool(confirmation.auto_approve_active())
+        if not source:
+            if elevated:
+                source = "paired_phone"
+            elif speaker.is_voice or spoken:
+                source = "voice"
+            else:
+                source = "local_text"
+        if authenticated is None:
+            if source == "local_text":
+                authenticated = True
+            elif source == "paired_phone":
+                authenticated = elevated
+            elif source == "voice":
+                authenticated = speaker.status == speaker_identity.OWNER_CONFIRMED
+            else:
+                authenticated = False
+    except Exception:  # noqa: BLE001 -- a missing identity observer fails closed
+        source = source or ("voice" if spoken else "local_text")
+        if authenticated is None:
+            authenticated = source == "local_text"
+
+    with use_action_context(
+        utterance,
+        source=source,
+        owner_authenticated=bool(authenticated),
+        turn_id=turn_id,
+        batch_id=turn_id,
+    ):
+        return _run_agent_impl(
+            history, on_text=on_text, on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result, on_stage=on_stage,
+            cancel_check=cancel_check, turn_id=turn_id, spoken=spoken,
+        )
+
+
+def _run_agent_impl(
+    history: list[dict],
+    on_text: OnText | None = None,
+    on_tool_call: OnToolCall | None = None,
+    on_tool_result: OnToolResult | None = None,
+    on_stage: OnStage | None = None,
+    cancel_check: Callable[[], None] | None = None,
+    turn_id: str = "",
+    spoken: bool = False,
 ) -> None:
     """Run the agent to completion for the latest turn already in `history`.
 
