@@ -104,6 +104,17 @@ def register(
 # specialists still get their scoped sets as before, and ZENO can pull any
 # group in mid-turn when a request actually needs it.
 TOOL_GROUPS: dict[str, str] = {
+    # Context-specific local intelligence: activated deterministically in
+    # agent.py before provider schemas are built, never carried on ordinary
+    # conversation turns.
+    "charm_reply": "charm", "charm_analyze": "charm",
+    "charm_set_mode": "charm", "charm_status": "charm",
+    "charm_feedback": "charm", "charm_coach": "charm",
+    "spatial_remember": "spatial", "spatial_move": "spatial",
+    "spatial_where_is": "spatial", "spatial_room_state": "spatial",
+    "spatial_recent": "spatial", "spatial_events_at": "spatial",
+    "spatial_events_when": "spatial", "spatial_recall": "spatial",
+    "spatial_memory_status": "spatial",
     # Next-intelligence operations stay lazy so capability breadth does not
     # regress the measured default provider payload. Direct stop/cancel is
     # intercepted before model planning, so it does not need a core schema.
@@ -250,13 +261,6 @@ CORE_TOOL_NAMES = frozenset({
     "enable_tools", "delegate", "open_app", "web_search", "build_project",
     "website_project", "learning_mode", "creator_project", "mastery_mode",
     "foodie_mode", "phase3_status", "system_health",
-    # Spatial memory (eMEM): core so the capability router can actually expose
-    # them on a spatial turn -- routing NARROWS core, so a capability whose tools
-    # are not in core can never reach the model. Narrowed out of every non-spatial
-    # turn, so this adds no cost elsewhere.
-    "spatial_remember", "spatial_move", "spatial_where_is", "spatial_room_state",
-    "spatial_recent", "spatial_events_at", "spatial_events_when", "spatial_recall",
-    "spatial_memory_status",
 })
 GROUP_NAMES = sorted(set(TOOL_GROUPS.values()) | {"extended"})
 
@@ -674,7 +678,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
 
 
 # Import tool modules for their registration side effects.
-from reyes_agent.tools import android_tools, anime_tools, animation_tools, awareness_tools, creative_market_tools, blender, browser, build, calendar, campaign_tools, career_tools, coding_system, social_tools, companion_tools, control_plane_tools, council_tools, design, devices, email_tools, extension_tools, intelligence_tools, investing, knowledge_tools, language_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, opportunity_tools, paid_work_tools, agent_identity, evidence_tools, mode_tools, messaging_tools, security_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, t21_tools, universal_tools, utility, vision, website, work, workflow_tools  # noqa: E402,F401
+from reyes_agent.tools import android_tools, anime_tools, animation_tools, awareness_tools, creative_market_tools, blender, browser, build, calendar, campaign_tools, career_tools, charm_tools, coding_system, social_tools, companion_tools, control_plane_tools, council_tools, design, devices, email_tools, extension_tools, intelligence_tools, investing, knowledge_tools, language_tools, mcp_tools, media_recognition, memory, missions, notes, obsidian, opportunity_tools, paid_work_tools, agent_identity, evidence_tools, mode_tools, messaging_tools, security_tools, visit_tools, ocr_tools, phase3_tools, phase5_tools, phone_network, profile_tools, projects, rag, skills, subagents, system, t21_tools, universal_tools, utility, vision, website, work, workflow_tools  # noqa: E402,F401
 
 # heartbeat.py lives at the top level (reyes_agent/heartbeat.py), not
 # inside tools/, but registers tools the same way -- imported here so

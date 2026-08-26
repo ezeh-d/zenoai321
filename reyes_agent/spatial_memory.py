@@ -93,16 +93,91 @@ class _LocationMap:
             return tuple(self._map[key])  # type: ignore[return-value]
 
 
+class _ObjectIndex:
+    """A precise, persisted registry of currently-known objects: entity -> where
+    it is, zone, when, source, confidence, coordinates. eMEM does not surface the
+    zone label in its entity text, so ZENO keeps this itself, giving EXACT room/
+    zone filtering (and a fast last-known answer) that eMEM's entity list can't."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._lock = threading.RLock()
+        self._items: dict[str, dict[str, Any]] = self._load()
+
+    def _load(self) -> dict[str, dict[str, Any]]:
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save(self) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._items, indent=2), encoding="utf-8")
+            os.replace(tmp, self._path)
+        except OSError:
+            pass
+
+    def upsert(self, entity: str, location: str, zone: str, source: str,
+               confidence: float, coordinates: list[float], ts: float) -> None:
+        key = str(entity or "").strip().casefold()
+        if not key:
+            return
+        with self._lock:
+            self._items[key] = {
+                "entity": entity, "location": location, "zone": zone,
+                "source": source, "confidence": confidence,
+                "coordinates": [float(c) for c in coordinates], "last_seen": ts,
+                "when": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))}
+            self._save()
+
+    def in_zone(self, zone: str = "") -> list[dict[str, Any]]:
+        z = str(zone or "").strip().casefold()
+        with self._lock:
+            items = list(self._items.values())
+        if z:
+            items = [it for it in items if str(it.get("zone", "")).strip().casefold() == z]
+        return sorted(items, key=lambda it: -float(it.get("last_seen", 0)))
+
+    def get(self, entity: str) -> dict[str, Any] | None:
+        with self._lock:
+            return self._items.get(str(entity or "").strip().casefold())
+
+
 class SpatialMemoryService:
     def __init__(self, db_path: Path | None = None) -> None:
         self._lock = threading.RLock()
         self._db_path = Path(db_path) if db_path else _DB
         self._locmap = _LocationMap(self._db_path.parent / "locations.json")
+        self._objects = _ObjectIndex(self._db_path.parent / "objects.json")
         self._mem: Any = None
         self._available: bool | None = None
         self._error = ""
+        self._embed_note = ""
 
     # -- lifecycle -------------------------------------------------------
+    def _embedding_provider(self):
+        """Optional semantic embeddings for recall. Gated by
+        ``ZENO_SPATIAL_EMBEDDINGS`` (default 'on'); if the model cannot load,
+        return None and spatial memory falls back to keyword/spatial recall, so
+        it still works fully offline. Loaded lazily on first spatial use."""
+        mode = os.environ.get("ZENO_SPATIAL_EMBEDDINGS", "on").strip().casefold()
+        if mode in {"0", "off", "false", "no"}:
+            self._embed_note = "embeddings off (ZENO_SPATIAL_EMBEDDINGS=off); keyword recall"
+            return None
+        try:
+            from emem.embeddings import SentenceTransformerProvider
+
+            provider = SentenceTransformerProvider(
+                os.environ.get("ZENO_SPATIAL_EMBED_MODEL", "all-MiniLM-L6-v2"))
+            self._embed_note = f"semantic embeddings on ({provider.dim}-dim)"
+            return provider
+        except Exception as exc:  # noqa: BLE001 -- keep working without embeddings
+            self._embed_note = f"embeddings unavailable ({type(exc).__name__}); keyword recall"
+            return None
+
     def _ensure(self) -> bool:
         if self._mem is not None:
             return True
@@ -110,7 +185,8 @@ class SpatialMemoryService:
             from emem import SpatioTemporalMemory
 
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._mem = SpatioTemporalMemory(db_path=str(self._db_path))
+            self._mem = SpatioTemporalMemory(db_path=str(self._db_path),
+                                             embedding_provider=self._embedding_provider())
             self._available = True
             return True
         except Exception as exc:  # noqa: BLE001 -- optional dependency
@@ -126,7 +202,8 @@ class SpatialMemoryService:
         with self._lock:
             ok = self._ensure()
             return {"available": ok, "backend": "eMEM SpatioTemporalMemory" if ok else None,
-                    "db_path": str(self._db_path), "error": "" if ok else self._error}
+                    "db_path": str(self._db_path), "embeddings": self._embed_note,
+                    "error": "" if ok else self._error}
 
     def close(self) -> None:
         with self._lock:
@@ -166,6 +243,9 @@ class SpatialMemoryService:
                     self._mem.add_entity(entity, x=x, y=y, z=z,
                                          entity_type=str(meta.get("entity_type", "object")),
                                          confidence=conf, metadata=meta)
+                    # Keep ZENO's own precise object registry (exact zone/where).
+                    self._objects.upsert(entity, location, zone, str(source or "user"),
+                                         conf, [x, y, z], time.time())
                 self._mem.save()
                 return {"ok": True, "id": oid, "entity": entity, "location": location,
                         "zone": zone, "coordinates": [x, y, z], "text": text}
@@ -195,7 +275,16 @@ class SpatialMemoryService:
         entity = str(entity or "").strip()
         if not entity:
             return {"ok": False, "error": "name the object to locate."}
-        return self._q("locate", entity)
+        known = self._objects.get(entity)
+        detail = self._q("locate", entity)
+        if known:
+            human = (f"{entity} was last seen at {known.get('location') or 'an unknown place'}"
+                     f"{(' in the ' + known['zone']) if known.get('zone') else ''} "
+                     f"(recorded {known.get('when')}, source {known.get('source')}, "
+                     f"confidence {known.get('confidence')}).")
+            return {"ok": True, "entity": entity, "last_known": known,
+                    "result": human + (("\n" + detail["result"]) if detail.get("ok") else "")}
+        return detail
 
     def recall(self, query: str) -> dict[str, Any]:
         query = str(query or "").strip()
@@ -204,13 +293,21 @@ class SpatialMemoryService:
         return self._q("recall", query)
 
     def room_state(self, zone: str = "") -> dict[str, Any]:
-        # The current known objects. eMEM's entity list does not carry the zone
-        # label in its text, so we return all known entities and note the zone
-        # rather than silently dropping matches (honest over precise).
-        res = self._q("entity_query")
-        if res.get("ok") and zone:
-            res["note"] = f"All currently-known objects (zone '{zone}' not filtered at source)."
-        return res
+        # Precise: filter ZENO's own object index by zone. eMEM's entity text has
+        # no zone label, so this index is what makes "what's in the office" exact.
+        with self._lock:
+            self._ensure()   # harmless; keeps availability status fresh
+        objects = self._objects.in_zone(zone)
+        if not objects:
+            where = f" in '{zone}'" if zone else ""
+            return {"ok": True, "zone": zone, "objects": [],
+                    "result": f"No objects are currently known{where}."}
+        lines = [f"- {o['entity']} at {o.get('location') or 'unknown'}"
+                 f"{(' [' + o['zone'] + ']') if o.get('zone') and not zone else ''}"
+                 f" (seen {o.get('when', '?')}, source {o.get('source', '?')})"
+                 for o in objects]
+        return {"ok": True, "zone": zone, "count": len(objects),
+                "objects": objects, "result": "\n".join(lines)}
 
     def events_at(self, location: str, zone: str = "", radius: float = 5.0) -> dict[str, Any]:
         with self._lock:

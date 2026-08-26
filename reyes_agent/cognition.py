@@ -179,6 +179,11 @@ _MEMORY_MARKERS = (
     "you said", "we decided", "what was", "remind me", "previously",
     "before", "our conversation", "yesterday", "continue what we did",
     "continue where we left", "pick up where we left", "resume our work",
+    # Spatial-memory queries must keep their tools, not be treated as pure chat
+    # (the capability router then narrows to the spatial tools).
+    "last see", "last seen", "where is my", "where's my", "where are my",
+    "where did you last", "moved from", "moved to", "what objects",
+    "known to be in", "spatial",
 )
 
 _COUNCIL_MARKERS = (

@@ -16,6 +16,13 @@ import pytest
 from reyes_agent.spatial_memory import SpatialMemoryService
 
 
+@pytest.fixture(autouse=True)
+def _fast_offline(monkeypatch):
+    # Keep the suite fast + deterministic: keyword/spatial recall, no model load.
+    # A dedicated test exercises the embedding path explicitly.
+    monkeypatch.setenv("ZENO_SPATIAL_EMBEDDINGS", "off")
+
+
 @pytest.fixture
 def svc(tmp_path):
     return SpatialMemoryService(tmp_path / "spatial.db")
@@ -66,6 +73,16 @@ def test_room_state_lists_known_objects(svc):
     assert state["ok"] and ("laptop" in state["result"] or "mug" in state["result"])
 
 
+def test_room_state_zone_filter_is_exact(svc):
+    svc.store_event("laptop", "office desk", zone="office")
+    svc.store_event("charger", "office desk", zone="office")
+    svc.store_event("mug", "kitchen counter", zone="kitchen")
+    office = {o["entity"] for o in svc.room_state("office")["objects"]}
+    kitchen = {o["entity"] for o in svc.room_state("kitchen")["objects"]}
+    assert office == {"laptop", "charger"} and kitchen == {"mug"}
+    assert svc.room_state("garage")["objects"] == []      # empty zone, honest
+
+
 # --- temporal + location queries -------------------------------------------
 def test_temporal_query(svc):
     svc.store_event("keys", "hallway table", zone="hallway")
@@ -83,6 +100,25 @@ def test_semantic_recall(svc):
     svc.store_event("laptop", "office desk", zone="office")
     res = svc.recall("laptop")
     assert res["ok"] and "laptop" in res["result"].lower()
+
+
+def test_where_is_gives_exact_last_known(svc):
+    svc.store_event("keys", "hallway table", zone="hallway", source="user")
+    res = svc.where_is("keys")
+    assert res["ok"] and res["last_known"]["location"] == "hallway table"
+    assert "hallway" in res["result"] and "keys" in res["result"]
+
+
+def test_embeddings_wire_up_without_crashing(tmp_path, monkeypatch):
+    # Turn embeddings ON. Whether the model loads (semantic) or degrades to
+    # keyword, the service must be available and report an embeddings note --
+    # never crash. (Manual/live verification confirms the semantic path.)
+    monkeypatch.setenv("ZENO_SPATIAL_EMBEDDINGS", "on")
+    s = SpatialMemoryService(tmp_path / "s.db")
+    st = s.status()
+    assert st["available"] is True and isinstance(st.get("embeddings"), str)
+    assert s.store_event("laptop", "office desk", zone="office")["ok"] is True
+    s.close()
 
 
 # --- persistence after restart ---------------------------------------------

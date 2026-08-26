@@ -44,6 +44,8 @@ ESSENTIAL = ("enable_tools", "delegate")
 # Capability -> the tools it owns. Derived from real registered names.
 CAPABILITIES: dict[str, tuple[str, ...]] = {
     "conversation": (),
+    "charm": ("charm_reply", "charm_analyze", "charm_set_mode",
+              "charm_status", "charm_feedback", "charm_coach"),
     "utility": ("get_datetime", "resolve_time", "system_health", "system_status",
                 "read_clipboard", "write_clipboard", "set_volume", "media_control",
                 "current_activity", "check_presence"),
@@ -150,7 +152,7 @@ BUDGETS: dict[str, int] = {
     "builder": 10, "creative": 10, "missions": 8,
     "social": 15, "diagnostics": 12, "presentation": 8, "workflow": 6, "voice": 6,
     "security": 7, "language": 6, "anime": 8, "sports": 4, "extensions": 7,
-    "spatial": 9,
+    "spatial": 9, "charm": 8,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow
@@ -400,9 +402,17 @@ def classify(message: str) -> tuple[tuple[str, ...], str, str]:
             return carried, "inherited", "a follow-up to the previous request"
 
     found: list[str] = []
+    try:
+        from reyes_agent.charm.routing import is_charm_request
+
+        if is_charm_request(text):
+            found.append("charm")
+    except Exception:  # noqa: BLE001 -- optional classifier never breaks routing
+        pass
     for name, pattern in _COMPILED:
         if pattern.search(text):
-            found.append(name)
+            if name not in found:
+                found.append(name)
             if len(found) >= 3:      # three capabilities is already generous
                 break
 

@@ -25,11 +25,12 @@ def _svc():
 
 @register(
     name="spatial_remember",
-    description="Remember WHERE an object is, or record a spatial event -- e.g. "
-                "'my laptop is on the office desk'. Stores the object, its "
-                "location and zone with a source and confidence, so ZENO can "
-                "recall it later even after a restart. Use spatial_move when an "
-                "object CHANGES location.",
+    description="Save WHERE an object is into ZENO's PERSISTENT spatial memory -- "
+                "e.g. 'my laptop is on the office desk'. ALWAYS call this to "
+                "actually store an object's location (it survives restarts and can "
+                "be queried later); simply replying 'noted' does NOT persist it. "
+                "Records object, location, zone, source and confidence. Use "
+                "spatial_move when an object CHANGES location.",
     input_schema={"type": "object", "properties": {
         "entity": {"type": "string", "description": "The object/thing, e.g. 'laptop', 'bag'."},
         "location": {"type": "string", "description": "Where it is, e.g. 'office desk', 'kitchen counter'."},
@@ -67,9 +68,11 @@ def spatial_move(entity: str, to_location: str, from_location: str = "",
 
 @register(
     name="spatial_where_is",
-    description="Where was an object LAST seen? -- e.g. 'where did you last see "
-                "my laptop?'. Returns its last-known location and how many "
-                "observations support it.",
+    description="Look up an object's LAST-KNOWN location from ZENO's STORED spatial "
+                "memory -- wherever it was last recorded (the owner told ZENO, or a "
+                "sensor did). ALWAYS call this when asked where something is or "
+                "'where did you last see X'. It queries remembered data, so never "
+                "say you lack a camera -- check the memory first.",
     input_schema={"type": "object", "properties": {
         "entity": {"type": "string", "description": "The object to locate."},
     }, "required": ["entity"]},
