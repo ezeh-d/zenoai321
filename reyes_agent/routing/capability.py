@@ -133,6 +133,11 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                "live_news"),
     "extensions": ("extension_inspect", "extension_status", "extension_search", "extension_update_check",
                    "extension_approve", "extension_rollback", "extension_remove"),
+    # Spatial Memory (eMEM): where objects are, and spatial events by
+    # place/time/meaning. "remember my laptop is on the desk", "where's my bag?".
+    "spatial": ("spatial_remember", "spatial_move", "spatial_where_is",
+                "spatial_room_state", "spatial_recent", "spatial_events_at",
+                "spatial_events_when", "spatial_recall", "spatial_memory_status"),
 }
 
 # What each capability may cost, so a bug cannot quietly reintroduce a
@@ -145,6 +150,7 @@ BUDGETS: dict[str, int] = {
     "builder": 10, "creative": 10, "missions": 8,
     "social": 15, "diagnostics": 12, "presentation": 8, "workflow": 6, "voice": 6,
     "security": 7, "language": 6, "anime": 8, "sports": 4, "extensions": 7,
+    "spatial": 9,
 }
 
 # Intent patterns. Ordered by specificity: the first match wins, so narrow
@@ -274,6 +280,19 @@ _INTENT: tuple[tuple[str, str], ...] = (
                 r"create (?:a |the )?(?:website|web app|landing page))\b"),
     ("business", r"\b(?:portfolio|invest|trade|revenue|business idea|"
                  r"opportunit(?:y|ies)|campaign|market)\b"),
+    # Spatial memory: object locations and spatial events. The store phrase must
+    # carry a SPATIAL preposition (on/at/in/near ...) so a plain fact like
+    # "remember my colour is blue" stays with the memory system, not here.
+    ("spatial", r"(?:\bremember (?:my |the |that )?[\w ]+? (?:is|are) "
+                r"(?:on|at|in|near|under|by|inside|beside|next to)\b|"
+                r"\bremember (?:my |the |that )?[\w ]+? moved\b|"
+                r"where (?:did you last see|is|are|'?s) (?:my |the |your )|"
+                r"\blast (?:seen|known location)\b|"
+                r"what objects|known to be in|"
+                r"\bwhat(?:'?s| is) in (?:the|this) (?:room|office|kitchen|hallway|zone)\b|"
+                r"spatial (?:event|memor)|"
+                r"\bmoved (?:from|to) (?:the|my)\b|what changed in (?:this|the) room|"
+                r"what happened (?:in|near) the )"),
     ("sports", r"\b(?:predict|forecast|who (?:will|'ll) win|win probability|"
                r"likely score|score prediction|odds of|chances of|"
                r"how will .* do|analyze .* (?:match|game|team)|"

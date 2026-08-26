@@ -846,3 +846,10 @@ from reyes_agent.tools import sports_tools as _sports_tools  # noqa: E402,F401
 
 # ZENO Career Intelligence: analysis (scoring/ATS/scam) over the paid_work engine.
 from reyes_agent.tools import career_intelligence_tools as _career_intel  # noqa: E402,F401
+
+
+# ZENO Spatial Memory (eMEM adapter): structured tools to remember where objects
+# are, recall last-known locations, and query spatial events by place/time/meaning.
+# Imported here so the shared loader registers them; the backend is optional and
+# degrades gracefully if eMEM is unavailable.
+from reyes_agent.tools import spatial_tools as _spatial_tools  # noqa: E402,F401
