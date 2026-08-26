@@ -212,6 +212,22 @@ def _run_agent_impl(
             from reyes_agent.routing import capability as _capability
 
             _route = _capability.tools_for(latest)
+            # These capability names intentionally match their lazy tool
+            # groups. Rebuild before narrowing so they are available on the
+            # one relevant turn without inflating every ordinary request.
+            _capability_groups = {
+                "charm": "charm",
+                "spatial": "spatial",
+                "builder": "build",
+            }
+            _matched_lazy_groups = {
+                _capability_groups[name]
+                for name in _route.capabilities
+                if name in _capability_groups
+            }
+            if _matched_lazy_groups:
+                enabled_groups.update(_matched_lazy_groups)
+                tools = tool_definitions(groups=enabled_groups)
             _allowed = set(_route.tools)
             _narrowed = [t for t in tools if t["name"] in _allowed]
             # Never hand back an empty toolset on a turn that had some: an
@@ -244,7 +260,20 @@ def _run_agent_impl(
     # 2026-08-11 the accidental "core" payload had reached 94 tools.  The
     # cognition decision is local and deterministic; action/memory/research
     # turns retain the compact core and can widen it on demand.
-    fast_chat = bool(decision is not None and decision.path == "FAST" and decision.modes == ("CHAT",))
+    charm_relevant = bool(_route and "charm" in _route.capabilities)
+    if not charm_relevant:
+        try:
+            from reyes_agent.charm.routing import is_charm_request
+
+            charm_relevant = is_charm_request(latest)
+        except Exception:  # noqa: BLE001 -- optional routing aid cannot break chat
+            pass
+    fast_chat = bool(
+        decision is not None
+        and decision.path == "FAST"
+        and decision.modes == ("CHAT",)
+        and not charm_relevant
+    )
     if fast_chat or not latest:
         tools = []
 

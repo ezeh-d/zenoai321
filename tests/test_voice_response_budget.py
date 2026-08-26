@@ -31,6 +31,10 @@ def test_default_tool_payload_is_actually_compact() -> None:
     assert len(core) <= 12
     assert len(json.dumps(core)) < 15_000
     assert {"enable_tools", "delegate", "open_app", "web_search", "build_project"} <= names
+    assert "defense_mode" in names
+    assert "website_project" not in names
+    builder = {item["name"] for item in tool_definitions(groups={"build"})}
+    assert "website_project" in builder
     expanded = {item["name"] for item in tool_definitions(groups={"extended"})}
     assert {"set_volume", "read_file", "browser_open", "remember"} <= expanded
 

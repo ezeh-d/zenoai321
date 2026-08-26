@@ -297,6 +297,27 @@ def test_run_tool_never_turns_a_draft_into_a_send(
     assert confirmation.list_pending() == []
 
 
+def test_reply_draft_with_nonimperative_send_word_never_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """'I can send' describes the draft's purpose; it is not a send command."""
+    calls: list[dict] = []
+    monkeypatch.setitem(TOOLS, "send_message", _test_tool("send_message", calls))
+
+    with use_action_context(
+        "Give me a smooth reply I can send her",
+        source="local_text",
+        owner_authenticated=True,
+    ):
+        result = run_tool(
+            "send_message",
+            {"platform": "whatsapp", "destination": "Ada", "message": "Hello"},
+        )
+
+    assert calls == []
+    assert "draft" in result.casefold() or "not execution" in result.casefold()
+
+
 def test_run_tool_executes_an_exact_send_without_second_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

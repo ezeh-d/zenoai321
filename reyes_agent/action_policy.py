@@ -174,9 +174,14 @@ _REQUIRED_ARGUMENTS: dict[str, tuple[str, ...]] = {
     "social_post": ("content",),
 }
 
-_DRAFT_RE = re.compile(r"\b(?:write|draft|suggest|compose|create)\b")
+_DRAFT_RE = re.compile(
+    r"\b(?:write|draft|suggest|compose|create|generate)\b|"
+    r"^\s*(?:zeno[\s,:-]+)?(?:please\s+)?give me\b"
+)
 _EXECUTION_RE = re.compile(
-    r"\b(?:send|tell|reply|forward|post|publish|submit|share)\b"
+    r"(?:^\s*(?:zeno[\s,:-]+)?|\b(?:and(?: then)?|then)\s+)"
+    r"(?:(?:can|could|would) you\s+|i (?:want|need) you to\s+)?"
+    r"(?:please\s+)?(?:send|tell|reply|forward|post|publish|submit|share|message)\b"
 )
 _MESSAGE_COMMAND_RE = re.compile(r"^\s*message\b")
 _REFERENCE_RE = re.compile(

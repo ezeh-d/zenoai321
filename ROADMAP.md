@@ -1894,3 +1894,96 @@ remain deliberately uninstalled or feature-flagged. Account tools such as
 Gmail, calendar, GitHub and Home Assistant remain unavailable until the owner
 selects and authorizes an account; ZENO does not confuse package presence with
 permission or working capability.
+
+---
+
+## Smart Autonomy Policy — COMPLETE (2026-08-26)
+
+ZENO now makes one centralized decision at the existing tool boundary instead
+of treating every effectful tool as a reason to ask twice. `ActionPolicy`
+classifies the exact requested action and expiring owner/turn context as
+`EXECUTE`, `CLARIFY`, `COUNCIL_APPROVAL`, `HIGH_IMPACT_CONFIRMATION`, or
+`DENY`. Thinking, analysis, ordinary app/browser/file/development operations,
+normal specialist delegation and an exact authenticated send command execute
+without duplicate approval. Drafting never sends. A formal full-Council call,
+ambiguous targets, financial effects, destructive/irreversible operations,
+security-critical changes and unauthenticated remote actions retain their
+appropriate gates.
+
+The policy is shared by local text, verified voice, paired-phone commands,
+background work and bridge sources through an expiring `ContextVar` turn scope.
+Authorization is fingerprinted to the exact tool arguments and cannot authorize
+later content, a different recipient, or an open-ended conversation. Existing
+permission/capability blocks, privacy restrictions and the confirmation UI were
+preserved rather than bypassed. Normal coding inspection/edit/test cycles and
+bounded safe recovery no longer stop for routine confirmation.
+
+The implementation is committed as `6b73c11` (`feat: centralize ZENO smart
+autonomy policy`). Focused policy, messaging, Council, coding, desktop and
+permission tests pass as part of the complete maintained suite described below.
+
+---
+
+## Native ZENO Charm Engine — COMPLETE WITH PROVIDER LIMITS (2026-08-26)
+
+One native, lazy Charm Engine now supplies context-aware conversation coaching
+without embedding the cloned applications as competing assistants. The three
+repositories under `integrations/` were inspected: Rizzbot contributed design
+ideas around structured modes, bounded feedback and `WAIT`/`MATCH`/`PULL_BACK`/
+`ABORT`; rizz-ai contributed context-first local analysis; RizzMa contributed
+bounded recent context, staged failure isolation and cache limits. They have no
+usable repository license files, so no source was copied and none of their
+React, Flask, Firebase, Supabase, LangChain, macOS, microphone, model-client or
+342-package application stacks was installed. ZENO added no dependency.
+
+The native subsystem supports Natural, Smooth, Sweet, Flirty, Playful, Funny,
+Witty, Romantic, Confident, Gentleman, Cheeky, Deep, Serious and Pidgin Smooth.
+Its deterministic analyzer measures reciprocity, momentum, engagement, dry
+replies, unanswered streaks, tone, refusal and discomfort. Explicit stop or
+unsafe escalation evidence blocks generation before any provider call. A single
+bounded call through ZENO's existing provider/router generates up to five
+contextual drafts; the local critic then scores naturalness, relevance,
+confidence, warmth, humor, flirt level, pressure, desperation, cringe and
+repetition and selects the strongest eligible candidate instead of trusting
+generation order.
+
+`charm_reply`, `charm_analyze`, `charm_set_mode`, `charm_status`,
+`charm_feedback` and `charm_coach` use the existing tool registry, brain,
+memory, Event Bus and voice path. Reply, opener, compliment, humor,
+storytelling, recovery, after-send, simulator and voice-coach features share the
+same engine. Callback/"Your Voice" feedback is bounded and process-local;
+durable retrieval accepts only privacy-filtered normal ZENO communication
+preferences. No private transcript is automatically written to long-term or
+eMEM spatial memory. Charm starts no server, microphone, provider client,
+database, polling loop, worker or frontend.
+
+Draft and coaching tools contain no transport path and never send a message.
+An explicit later owner command may use the normal messaging tool under Smart
+Autonomy, scoped to that exact recipient/content. Rejection, discomfort,
+coercion, harassment, deceptive impersonation and automated mass messaging are
+not supported.
+
+Charm and spatial schemas are now selected on demand by the deterministic
+capability router. This repaired a measured regression where the default model
+payload reached 27 schemas; ordinary turns are back at the enforced maximum of
+12 while both capabilities remain available on their matching turns.
+
+**Verification:** 93 focused Charm tests and 32 focused Smart Autonomy tests
+pass after independent code review. The final affected-scope verification
+(Charm, Autonomy, voice-response-budget, Website Studio routing and Defense
+Mode compatibility coverage) passes **159/159** against the latest shared
+branch. The earlier stable complete maintained ZENO suite
+passed **2,124/2,124** in 678.39 seconds on 2026-08-26. A later whole-suite run
+was deliberately not reported as final evidence because concurrent migration
+and defense-mode commits changed the checkout while it was executing.
+Compilation and repository checks are recorded in the delivery commit.
+
+**Honest limits:** live social outcome quality depends on the configured ZENO
+model provider, network and supplied conversation context; automated tests use
+injected provider responses and exercise real parsing/failure isolation without
+spending a live API call. A provider outage returns an explicit error and no
+canned fake reply. Feedback is bounded to the current process unless the owner
+explicitly saves a non-sensitive communication preference through normal ZENO
+memory. The full suite reports two non-failing third-party warnings: optional
+urllib3 SOCKS support is absent, and the separately edited eMEM integration uses
+an embedding compatibility method scheduled for rename.

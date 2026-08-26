@@ -216,7 +216,7 @@ TOOL_GROUPS: dict[str, str] = {
     # a request that has to spend a round discovering the tool is a request
     # that gets answered with an explanation instead. The follow-ups load
     # automatically the moment a build starts (see agent.py).
-    "build_add_files": "build", "build_status": "build",
+    "website_project": "build", "build_add_files": "build", "build_status": "build",
     "cancel_build": "build", "build_environment": "build",
     # Phase 2 specialists and external tool bus stay out of the default
     # provider payload. Their entry points load only for relevant turns.
@@ -286,7 +286,7 @@ TOOL_GROUPS: dict[str, str] = {
 # the existing ``enable_tools('extended')`` on-demand round.
 CORE_TOOL_NAMES = frozenset({
     "enable_tools", "delegate", "open_app", "web_search", "build_project",
-    "website_project", "learning_mode", "creator_project", "mastery_mode",
+    "learning_mode", "creator_project", "mastery_mode",
     "foodie_mode", "phase3_status", "system_health",
     # Defense/presentation mode is a one-word demo command ("defense mode") and
     # must reach the model directly -- core, like open_app.
