@@ -90,5 +90,7 @@ export function destroyVoiceVisualizer() {
   _app = null; _PIXI = null; _level = 0; _target = 0; _active = false;
 }
 
+// Exposed for honest render-cost measurement (timed synchronous renders).
+export function _debugApp() { return _app; }
 export const voiceVisualizer = { initVoiceVisualizer, destroyVoiceVisualizer, isEnabled, fps };
 try { if (typeof window !== "undefined") window.zenoVoiceVisualizer = voiceVisualizer; } catch (_) {}

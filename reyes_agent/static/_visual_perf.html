@@ -1,0 +1,83 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ZENO agent orbs + render-cost FPS</title></head>
+<body style="background:#07090f;color:#e8eef8;font:13px system-ui">
+<div id="out">running…</div>
+<div id="agents" style="position:relative;width:520px;height:160px;border:1px solid #1e2a3d;margin-top:10px"></div>
+<div id="viz" style="position:relative;width:360px;height:110px;border:1px solid #1e2a3d;margin-top:10px"></div>
+<script type="module">
+import * as bus from "./visual_events.js";
+import * as cfg from "./visual_config.js";
+import * as ao from "./agent_orbs.js";
+import * as vv from "./voice_visualizer.js";
+
+const R = [];
+const ok = (n, c) => R.push([n, !!c]);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Honest render cost: render the SAME scene N times synchronously and time it.
+// This measures GPU/renderer cost per frame independent of rAF throttling,
+// which is what a headless pane cannot free-run. FPS = 1000 / ms-per-frame.
+function renderFps(app, frames = 200) {
+  if (!app || !app.renderer) return null;
+  const stage = app.stage, r = app.renderer;
+  for (let i = 0; i < 12; i++) r.render(stage);          // warmup
+  const t0 = performance.now();
+  for (let i = 0; i < frames; i++) r.render(stage);
+  const ms = performance.now() - t0;
+  return { msPerFrame: +(ms / frames).toFixed(3), fps: Math.round(1000 / (ms / frames)) };
+}
+
+(async () => {
+  try {
+    cfg.setConfig({ agentOrbs: true, audioVisualizer: true, fpsLimit: 60 });
+
+    // --- agent orbs ---
+    const ai = await ao.initAgentOrbs(document.getElementById("agents"));
+    ok("agent orbs init (renderer=" + (ai.renderer || ai.reason) + ")", ai.enabled === true);
+    if (ai.enabled) {
+      bus.emit(bus.EVENTS.AGENT_ACTIVATED, { agent: "STARK" });
+      bus.emit(bus.EVENTS.AGENT_ACTIVATED, { agent: "ORACLE" });
+      bus.emit(bus.EVENTS.AGENT_ACTIVATED, { agent: "kate" });
+      bus.emit(bus.EVENTS.AGENT_THINKING, { agent: "STARK" });
+      await sleep(120);
+      const active = ao.activeAgents();
+      ok("3 agents active (" + active.join(",") + ")", active.length === 3);
+      bus.emit(bus.EVENTS.AGENT_ACTIVATED, { agent: "definitely_not_an_agent" });
+      ok("unknown agent ignored", ao.activeAgents().length === 3);
+
+      const arf = renderFps(ao._debugApp(), 200);
+      window.__AGENT_FPS__ = arf;
+      ok("agent-orbs render fps measured (" + (arf ? arf.fps : "n/a") + ")", arf && arf.fps > 0);
+
+      bus.emit(bus.EVENTS.AGENT_COMPLETED, { agent: "STARK" });
+      // Advance the fade deterministically (the pane doesn't free-run the
+      // ticker, so drive it: ~900ms fade => a couple of big ticks).
+      for (let i = 0; i < 4; i++) ao._debugTick(400);
+      ok("completed agent removed after fade (" + ao.activeAgents().length + " left)", ao.activeAgents().length === 2);
+    }
+
+    // --- voice visualizer ---
+    const vi = await vv.initVoiceVisualizer(document.getElementById("viz"), { bars: 28 });
+    ok("voice visualizer init (renderer=" + (vi.renderer || vi.reason) + ")", vi.enabled === true);
+    if (vi.enabled) {
+      for (let i = 0; i < 20; i++) bus.emit(bus.EVENTS.AUDIO_LEVEL, { level: 0.4 + 0.4 * Math.sin(i) });
+      const vrf = renderFps(vv._debugApp(), 200);
+      window.__VOICE_FPS__ = vrf;
+      ok("voice render fps measured (" + (vrf ? vrf.fps : "n/a") + ")", vrf && vrf.fps > 0);
+    }
+
+    // --- cleanup ---
+    ao.destroyAgentOrbs(); vv.destroyVoiceVisualizer();
+    ok("cleanup both", ao.isEnabled() === false && vv.isEnabled() === false);
+  } catch (e) { R.push(["harness threw: " + e.message, false]); }
+
+  const passed = R.filter(x => x[1]).length;
+  const af = window.__AGENT_FPS__, vf = window.__VOICE_FPS__;
+  document.getElementById("out").textContent =
+    "PERF_TEST: " + passed + "/" + R.length + " passed" +
+    " | agentFPS=" + (af ? af.fps + " (" + af.msPerFrame + "ms)" : "n/a") +
+    " | voiceFPS=" + (vf ? vf.fps + " (" + vf.msPerFrame + "ms)" : "n/a") +
+    " — " + R.map(x => (x[1] ? "PASS " : "FAIL ") + x[0]).join(" | ");
+  window.__PERF_TEST__ = { passed, total: R.length, agentFps: af, voiceFps: vf };
+})();
+</script></body></html>
