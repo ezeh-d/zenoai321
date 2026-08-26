@@ -855,3 +855,8 @@ from reyes_agent.tools import career_intelligence_tools as _career_intel  # noqa
 # Imported here so the shared loader registers them; the backend is optional and
 # degrades gracefully if eMEM is unavailable.
 from reyes_agent.tools import spatial_tools as _spatial_tools  # noqa: E402,F401
+
+
+# Defense / presentation mode: one switch that warms the brain, enters guest
+# conversation and reports readiness for a live demo/defense.
+from reyes_agent.tools import defense_tools as _defense_tools  # noqa: E402,F401

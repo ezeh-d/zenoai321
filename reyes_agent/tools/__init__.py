@@ -32,6 +32,10 @@ class Tool:
     # MODEL_PROVIDER=ollama, so local mode stays usable; everything is
     # offered again the moment a real cloud key is added.
     light: bool = False
+    # Some read-only tools handle private transcripts/drafts. Their content
+    # is returned to the active model turn but must not be duplicated into
+    # durable audit, Event Bus, span, or action-history payloads.
+    audit_private: bool = False
 
 
 TOOLS: dict[str, Tool] = {}
@@ -69,12 +73,34 @@ def _audit_safe(value: Any, *, depth: int = 0) -> Any:
     return value
 
 
+def _tool_audit_input(tool: Tool, value: dict[str, Any]) -> Any:
+    if not tool.audit_private:
+        return _audit_safe(value)
+    conversation = value.get("conversation")
+    return {
+        "private_content_redacted": True,
+        "fields": sorted(str(key) for key in value),
+        "instruction_chars": len(str(value.get("instruction") or "")),
+        "conversation_messages": len(conversation) if isinstance(conversation, (list, tuple)) else 0,
+        "mode": str(value.get("mode") or "")[:40],
+        "feature": str(value.get("feature") or "")[:40],
+        "requested_candidates": value.get("count", 0),
+    }
+
+
+def _tool_audit_result(tool: Tool, value: Any) -> Any:
+    if not tool.audit_private:
+        return _audit_safe(value)
+    return f"[PRIVATE_TOOL_RESULT {len(str(value or ''))} chars]"
+
+
 def register(
     name: str,
     description: str,
     input_schema: dict[str, Any],
     requires_confirmation: bool = False,
     light: bool = False,
+    audit_private: bool = False,
 ) -> Callable[[Callable[..., str]], Callable[..., str]]:
     def decorator(func: Callable[..., str]) -> Callable[..., str]:
         if name in TOOLS:
@@ -86,6 +112,7 @@ def register(
             func=func,
             requires_confirmation=requires_confirmation,
             light=light,
+            audit_private=audit_private,
         )
         return func
 
@@ -261,6 +288,9 @@ CORE_TOOL_NAMES = frozenset({
     "enable_tools", "delegate", "open_app", "web_search", "build_project",
     "website_project", "learning_mode", "creator_project", "mastery_mode",
     "foodie_mode", "phase3_status", "system_health",
+    # Defense/presentation mode is a one-word demo command ("defense mode") and
+    # must reach the model directly -- core, like open_app.
+    "defense_mode",
 })
 GROUP_NAMES = sorted(set(TOOL_GROUPS.values()) | {"extended"})
 
@@ -344,7 +374,7 @@ def _publish_tool_failure(tool: Tool, tool_input: dict[str, Any], error: str,
     try:
         from reyes_agent import event_bus, intelligence
 
-        safe_input = _audit_safe(tool_input)
+        safe_input = _tool_audit_input(tool, tool_input)
         intelligence.update_situation(current_task=tool.name, current_step="failed")
         event_bus.publish("tool.failed", payload={
             "tool": tool.name,
@@ -403,7 +433,7 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
     try:
         started = time.time()
         from reyes_agent.observability import span
-        with span("tool.execute", attributes={"tool": tool.name, "input": _audit_safe(tool_input)}):
+        with span("tool.execute", attributes={"tool": tool.name, "input": _tool_audit_input(tool, tool_input)}):
             result = tool.func(**tool_input)
         duration = time.time() - started
         try:
@@ -414,8 +444,8 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
                 record_latency("browser", duration)
         except Exception:  # noqa: BLE001
             pass
-        safe_input = _audit_safe(tool_input)
-        safe_result = _audit_safe(result)
+        safe_input = _tool_audit_input(tool, tool_input)
+        safe_result = _tool_audit_result(tool, result)
         outcome = classify_tool_result(result)
         audit.log("tool_result", actor="zeno", action=tool.name,
                   policy="permission_engine", outcome=outcome["outcome"],
@@ -457,7 +487,7 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
         message = f"Error: bad input for '{tool.name}': {exc}"
         audit.log("tool_error", actor="zeno", action=tool.name,
                   policy="permission_engine", outcome="failed",
-                  duration_ms=int(duration * 1000), input=_audit_safe(tool_input),
+                  duration_ms=int(duration * 1000), input=_tool_audit_input(tool, tool_input),
                   error=_audit_safe(str(exc)))
         _publish_tool_failure(tool, tool_input, message, duration)
         return message
@@ -473,7 +503,7 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
             pass
         audit.log("tool_error", actor="zeno", action=tool.name,
                   policy="permission_engine", outcome="failed",
-                  duration_ms=int(duration * 1000), input=_audit_safe(tool_input),
+                  duration_ms=int(duration * 1000), input=_tool_audit_input(tool, tool_input),
                   error=_audit_safe(str(exc)))
         _publish_tool_failure(tool, tool_input,
                               f"Error running '{tool.name}': {exc}", duration)
@@ -618,7 +648,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
             reason=decision.reason,
             fingerprint=decision.fingerprint,
             source=current_action_context().source,
-            input=_audit_safe(tool_input),
+            input=_tool_audit_input(tool, tool_input),
             confidence=confidence.reason,
         )
     except Exception:  # noqa: BLE001 -- audit cannot change the decision
@@ -648,7 +678,7 @@ def run_tool(name: str, tool_input: dict[str, Any]) -> str:
                 audit.log(
                     "remote_owner_auto_approved",
                     tool=name,
-                    input=_audit_safe(tool_input),
+                    input=_tool_audit_input(tool, tool_input),
                     reason=confirmation.auto_approve_active(),
                     fingerprint=decision.fingerprint,
                 )

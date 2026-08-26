@@ -126,6 +126,9 @@ _ACTION_VERBS = (
     "open", "launch", "start", "run", "execute", "install", "edit", "change",
     "modify", "update", "move", "rename", "delete", "remove", "preview",
     "test", "deploy", "fix", "repair", "download", "upload", "send", "close",
+    # Mode-switch commands are actions (they call a tool), not chat -- keep tools.
+    "defense mode", "defence mode", "presentation mode", "demo mode",
+    "get ready for", "activate", "standby",
 )
 
 _DEEP_MARKERS = (
