@@ -124,3 +124,6 @@ extensions/audit.jsonl
 
 # Vendored Pixi browser bundle (build artifact copied from node_modules)
 reyes_agent/static/vendor/
+
+# Isolated Codex development worktrees
+.worktrees/
