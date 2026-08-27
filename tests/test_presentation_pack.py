@@ -105,6 +105,16 @@ class TestHandoff:
 
 
 class TestOfflinePack:
+    def test_siwes_profile_carries_only_safe_supervision_facts(self):
+        profile = pack.build()["siwes_profile.json"]
+        supervision = profile["supervision"]
+
+        assert supervision["supervisor"] == "Engr. Bello"
+        assert supervision["role"] == "SIWES invigilator / supervisor"
+        assert supervision["incident_details_known"] is False
+        assert "Divine can explain" in supervision["detail_request_response"]
+        assert "do not invent" in supervision["constraints"].lower()
+
     def test_the_pack_writes_every_file(self):
         result = pack.write()
         assert result["ok"], result["failed"]

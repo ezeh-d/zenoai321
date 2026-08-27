@@ -94,6 +94,7 @@ def build() -> dict[str, Any]:
             "company_work": ["NHS job applications",
                              "interview requests and follow-ups",
                              "general computer and operational tasks"],
+            "supervision": visit.supervision_profile(),
         },
         "zeno_timeline.json": timeline.build(),
         "current_features.json": facts.feature_status(),

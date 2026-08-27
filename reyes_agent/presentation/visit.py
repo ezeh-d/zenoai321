@@ -56,7 +56,86 @@ VISITOR = {
 # Anything ZENO must not infer about a real person it has never met.
 DO_NOT_INVENT = ("exact academic title", "rank", "department position",
                  "personal history", "private information", "publications",
-                 "years of service")
+                 "years of service", "supervision incident details")
+
+# Owner-attested presentation facts. The incident is deliberately represented
+# by a boundary, not a story: no model is given empty fields to improvise.
+SUPERVISION = {
+    "supervisor": "Engr. Bello",
+    "role": "SIWES invigilator / supervisor",
+    "expected_to_meet": True,
+    "visit_did_not_go_as_planned": True,
+    "incident_details_known": False,
+    "constraints": ("Be respectful; do not blame Engr. Bello; do not invent "
+                    "or infer supervision incident details."),
+}
+
+_SUPERVISION_BRIEF = (
+    "My SIWES invigilator was Engr. Bello. Divine was expecting to meet him "
+    "during the supervision visit, but some circumstances that day meant "
+    "things did not go exactly as planned. It is a long story, but thankfully "
+    "everything worked out, and we thank God."
+)
+_SUPERVISION_HANDOFF = (
+    "There were some circumstances around the supervision visit that "
+    "prevented things from going exactly as expected. Divine can explain the "
+    "full situation better if required."
+)
+_DETAIL_REQUEST_MARKERS = (
+    "what happened", "what were the issues", "what was the issue",
+    "full supervision story", "full story", "explain what happened",
+    "tell us the story", "tell me the story",
+)
+
+_PRESENTATION_COMMENTS = {
+    "placement": (
+        "One thing I learned during this period is that industrial training "
+        "is very different from classroom learning. You have to deal with "
+        "actual work, deadlines and unexpected situations."
+    ),
+    "challenges": (
+        "There were both technical and practical challenges during the three "
+        "months. Even during the supervision period, unexpected issues taught "
+        "Divine how to adapt and continue."
+    ),
+    "supervision": _SUPERVISION_BRIEF,
+}
+
+
+def supervision_profile() -> dict[str, Any]:
+    """Return the visitor-safe supervision facts for the offline pack."""
+    return {
+        **SUPERVISION,
+        "brief_response": _SUPERVISION_BRIEF,
+        "detail_request_response": _SUPERVISION_HANDOFF,
+    }
+
+
+def supervision_response(question: str = "") -> dict[str, Any]:
+    """Give the brief account or hand personal detail questions to Divine."""
+    low = " ".join(str(question or "").casefold().split())
+    asks_for_details = any(marker in low for marker in _DETAIL_REQUEST_MARKERS)
+    return {
+        "say": _SUPERVISION_HANDOFF if asks_for_details else _SUPERVISION_BRIEF,
+        "detail_level": "handoff" if asks_for_details else "brief",
+        "hand_over_to_divine": asks_for_details,
+        "known_details": [],
+        "constraint": SUPERVISION["constraints"],
+    }
+
+
+def presentation_comment(topic: str) -> dict[str, Any]:
+    """Return one optional, short comment; never advance or read a slide."""
+    key = " ".join(str(topic or "").casefold().split())
+    say = _PRESENTATION_COMMENTS.get(key, "")
+    return {
+        "available": bool(say),
+        "topic": key,
+        "say": say,
+        "optional": True,
+        "student_leads": True,
+        "read_slide_verbatim": False,
+    }
 
 
 @dataclass
@@ -85,6 +164,8 @@ def _topics() -> list[Topic]:
               "question, then listen.", 8),
         Topic("siwes", "Divine's SIWES",
               "Three months at T21 Services, 1 July to 30 September 2026.", 15),
+        Topic("supervision", "SIWES supervision",
+              _SUPERVISION_BRIEF, 20),
         Topic("origin", "How the project began",
               "Mr BJ and Mr K called Divine and the others together and "
               "encouraged them to build something of their own during the "
@@ -314,7 +395,9 @@ def profile_path() -> Path:
 def write_profile() -> Path:
     target = profile_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({**VISITOR, "do_not_invent": list(DO_NOT_INVENT)},
+    target.write_text(json.dumps({**VISITOR,
+                                  "supervision": supervision_profile(),
+                                  "do_not_invent": list(DO_NOT_INVENT)},
                                  indent=2), encoding="utf-8")
     return target
 
@@ -329,6 +412,7 @@ def briefing() -> dict[str, Any]:
         feature_status = []
     return {
         "visitor": VISITOR,
+        "supervision": supervision_profile(),
         "do_not_invent": list(DO_NOT_INVENT),
         "timeline": timeline.build(),
         "features": feature_status,

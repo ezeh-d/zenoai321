@@ -219,6 +219,7 @@ def _run_agent_impl(
                 "charm": "charm",
                 "spatial": "spatial",
                 "builder": "build",
+                "presentation": "presentation",
             }
             _matched_lazy_groups = {
                 _capability_groups[name]
@@ -261,6 +262,7 @@ def _run_agent_impl(
     # cognition decision is local and deterministic; action/memory/research
     # turns retain the compact core and can widen it on demand.
     charm_relevant = bool(_route and "charm" in _route.capabilities)
+    presentation_relevant = bool(_route and "presentation" in _route.capabilities)
     if not charm_relevant:
         try:
             from reyes_agent.charm.routing import is_charm_request
@@ -273,6 +275,7 @@ def _run_agent_impl(
         and decision.path == "FAST"
         and decision.modes == ("CHAT",)
         and not charm_relevant
+        and not presentation_relevant
     )
     if fast_chat or not latest:
         tools = []

@@ -134,6 +134,115 @@ class TestTruthfulness:
             assert private not in blob
 
 
+class TestSupervisionExperience:
+    def test_visit_profile_persists_the_safe_supervision_boundary(
+        self, tmp_path, monkeypatch
+    ):
+        target = tmp_path / "visit.json"
+        monkeypatch.setattr(visit, "profile_path", lambda: target)
+
+        written = visit.write_profile()
+        payload = json.loads(written.read_text(encoding="utf-8"))
+
+        assert payload["supervision"]["supervisor"] == "Engr. Bello"
+        assert payload["supervision"]["incident_details_known"] is False
+
+    def test_guest_briefing_includes_the_same_safe_supervision_boundary(self):
+        supervision = visit.briefing()["supervision"]
+        assert supervision["supervisor"] == "Engr. Bello"
+        assert supervision["incident_details_known"] is False
+        assert "do not invent" in supervision["constraints"].lower()
+
+    def test_the_normal_answer_is_brief_respectful_and_non_accusatory(self):
+        result = visit.supervision_response("Who was your SIWES invigilator?")
+
+        assert result["detail_level"] == "brief"
+        assert result["hand_over_to_divine"] is False
+        assert "Engr. Bello" in result["say"]
+        assert "worked out" in result["say"].lower()
+        assert len(result["say"].split()) <= 70
+        for accusation in ("his fault", "to blame", "failed to", "refused to"):
+            assert accusation not in result["say"].lower()
+
+    @pytest.mark.parametrize("question", [
+        "What happened?",
+        "What were the issues that day?",
+        "Tell us the full supervision story.",
+    ])
+    def test_requests_for_incident_details_are_handed_to_divine(self, question):
+        result = visit.supervision_response(question)
+
+        assert result["detail_level"] == "handoff"
+        assert result["hand_over_to_divine"] is True
+        assert "Divine can explain" in result["say"]
+        assert result["known_details"] == []
+        assert "do not invent" in result["constraint"].lower()
+
+    @pytest.mark.parametrize("topic", ["placement", "challenges", "supervision"])
+    def test_story_comments_are_optional_short_and_student_led(self, topic):
+        result = visit.presentation_comment(topic)
+
+        assert result["available"] is True
+        assert result["optional"] is True
+        assert result["student_leads"] is True
+        assert result["read_slide_verbatim"] is False
+        assert 0 < len(result["say"].split()) <= 55
+
+    def test_unknown_story_topic_does_not_generate_a_comment(self):
+        result = visit.presentation_comment("private incident details")
+        assert result["available"] is False
+        assert result["say"] == ""
+
+    def test_supervision_is_a_real_visit_topic_with_safe_guidance(self):
+        from reyes_agent.tools.visit_tools import visit_topic
+
+        result = json.loads(visit_topic("supervision"))
+        assert result["topic"] == "supervision"
+        assert "Engr. Bello" in result["substance"]
+        assert result["do_not_invent_incident"] is True
+        assert result["optional_comment"]["student_leads"] is True
+
+    def test_what_happened_through_the_tool_returns_only_the_handoff(self):
+        from reyes_agent.tools.visit_tools import visit_topic
+
+        result = json.loads(visit_topic("supervision", question="What happened?"))
+        assert result["supervision"]["detail_level"] == "handoff"
+        assert result["supervision"]["hand_over_to_divine"] is True
+        assert result["substance"] == result["supervision"]["say"]
+        assert "long story" not in result["substance"].lower()
+
+    @pytest.mark.parametrize("question", [
+        "Who was your SIWES invigilator?",
+        "What happened when Engr. Bello came for supervision?",
+    ])
+    def test_supervision_questions_route_to_the_safe_topic_tool(self, question):
+        from reyes_agent.routing.capability import tools_for
+
+        route = tools_for(question)
+        assert "presentation" in route.capabilities
+        assert "visit_topic" in route.tools
+
+    def test_agent_loads_the_lazy_visit_tool_for_a_supervision_question(
+        self, monkeypatch
+    ):
+        from reyes_agent import agent
+        from reyes_agent.provider import AgentTurn
+
+        captured: list[set[str]] = []
+
+        def fake_turn(_history, *, system, tools, on_text, cancel_check, task_kind):
+            captured.append({item["name"] for item in tools})
+            on_text("Divine can explain the full situation better if required.")
+            return AgentTurn(text="Divine can explain the full situation better if required.")
+
+        monkeypatch.setattr(agent, "run_turn", fake_turn)
+        history = [{"role": "user", "content": "What happened with Engr. Bello?"}]
+        agent.run_agent(history)
+
+        assert len(captured) == 1
+        assert "visit_topic" in captured[0]
+
+
 class TestReadinessIsMeasured:
     def test_every_check_returns_a_real_verdict(self):
         result = readiness.run()

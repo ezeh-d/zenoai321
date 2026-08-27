@@ -128,7 +128,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                     "universal_tool_resolve"),
     "presentation": ("t21_services", "t21_remember", "siwes_evidence",
                      "prepare_for_visit", "start_visitor_session", "set_serious_mode",
-                     "defense_mode"),
+                     "defense_mode", "visit_topic"),
     "workflow": ("workflow_run", "workflow_teach", "workflow_confirm"),
     "voice": ("learn_my_voice", "voice_profile_status", "set_mic_level"),
     # Evidence-based forecasting + REAL fixtures/scores/standings + sports news.
@@ -312,7 +312,7 @@ _INTENT: tuple[tuple[str, str], ...] = (
             r"headlines?|what.?s (?:the )?(?:latest|new)|any .*news)\b"),
     ("files", r"\b(?:file|folder|directory|read (?:the )?\S+\.\w+|save (?:it |this )?to|"
               r"list (?:the )?(?:files|dir))\b"),
-    ("presentation", r"\b(?:siwes|evidence|portfolio|engr bello|visitor|"
+    ("presentation", r"\b(?:siwes|evidence|portfolio|engr\.? bello|invigilator|supervision|visitor|"
                      r"presentation|serious mode|ultron|t21|"
                      r"defen[cs]e mode|demo mode|get ready for (?:my |the )?defen[cs]e|"
                      r"ready for (?:my |the )?(?:defen[cs]e|demo|presentation))\b"),

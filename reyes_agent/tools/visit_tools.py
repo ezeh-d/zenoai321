@@ -73,11 +73,15 @@ def visitor_said(utterance: str) -> str:
           description=("Get the material for one topic of the visit and mark "
                        "it covered, so it is never explained twice. Topics: "
                        "siwes, origin, rename, evolution, architecture, "
-                       "agents, contribution, ai_assistance, company, python, "
+                       "supervision, agents, contribution, ai_assistance, company, python, "
                        "challenges, learned, status, future."),
           input_schema={"type": "object", "properties": {
-              "topic": {"type": "string"}}, "required": ["topic"]})
-def visit_topic(topic: str) -> str:
+              "topic": {"type": "string"},
+              "question": {"type": "string", "description": (
+                  "The visitor's exact question when asking about supervision; "
+                  "used to hand requests for incident details to Divine.")}},
+              "required": ["topic"]})
+def visit_topic(topic: str, question: str = "") -> str:
     from reyes_agent.presentation import facts, timeline, visit
 
     session = visit.session()
@@ -103,6 +107,14 @@ def visit_topic(topic: str) -> str:
         from reyes_agent.agents import identity
 
         payload["roster"] = identity.role_call()
+    story_key = "placement" if key == "siwes" else key
+    comment = visit.presentation_comment(story_key)
+    if comment["available"]:
+        payload["optional_comment"] = comment
+    if key == "supervision":
+        payload["supervision"] = visit.supervision_response(question)
+        payload["substance"] = payload["supervision"]["say"]
+        payload["do_not_invent_incident"] = True
 
     session.mark(key, found.seconds)
     pause, why = session.should_pause(found.seconds)

@@ -1987,3 +1987,30 @@ explicitly saves a non-sensitive communication preference through normal ZENO
 memory. The full suite reports two non-failing third-party warnings: optional
 urllib3 SOCKS support is absent, and the separately edited eMEM integration uses
 an embedding compatibility method scheduled for rename.
+
+---
+
+## SIWES supervision experience and student-led story mode — COMPLETE (2026-08-27)
+
+Defense/Presentation Mode now carries one structured, visitor-safe account of
+Divine's SIWES supervision experience. Engr. Bello is identified respectfully
+as the SIWES invigilator/supervisor; the stored facts say only that Divine
+expected to meet him, circumstances prevented the visit from going as planned,
+and the situation later worked out. No incident details are stored or inferred.
+If a panel member asks what happened, the deterministic response hands the
+question to Divine instead of asking a model to invent a story or assign blame.
+
+The existing topic-based presentation flow now offers brief optional comments
+for placement, challenges and supervision. Each payload explicitly keeps
+Divine as the main presenter, forbids reading slides verbatim and never advances
+the presentation automatically. The supervision boundary is shared by the live
+visitor briefing, prepared visitor profile and offline SIWES evidence pack.
+Presentation routing recognises `Engr Bello`, `Engr. Bello`, invigilator and
+supervision phrasing, lazily loads the real `visit_topic` tool, and preserves
+the ordinary zero-tool fast path for unrelated conversation.
+
+**Verification:** the new behavior completed a red-green TDD cycle. The final
+visitor, evidence-pack, Defense Mode, guest conversation, capability-routing,
+provider-payload and Charm-routing regression set passes **162/162**. Python
+compilation and repository checks are recorded in the delivery commit. One
+pre-existing non-failing eMEM API-rename warning remains.
