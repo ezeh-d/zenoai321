@@ -198,6 +198,23 @@ class SpatialMemoryService:
         with self._lock:
             return self._ensure()
 
+    def probe(self) -> bool:
+        """Cheap availability signal for readiness reports. Answers "could
+        spatial memory work?" WITHOUT constructing the store or loading the
+        embedding model (~30s cold) -- that stays lazy on first real use. If
+        already initialised, reports the real state; otherwise just checks that
+        eMEM is importable."""
+        with self._lock:
+            if self._mem is not None:
+                return True
+            if self._available is not None:
+                return self._available
+            try:
+                import importlib.util
+                return importlib.util.find_spec("emem") is not None
+            except Exception:  # noqa: BLE001 -- probe must never raise
+                return False
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             ok = self._ensure()

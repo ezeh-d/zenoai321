@@ -143,10 +143,13 @@ def readiness() -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         checks["mic"] = "OFFLINE"
 
-    # STT
+    # STT -- check that faster_whisper is INSTALLED, don't import it: the cold
+    # module import is ~25s (native libs) and a readiness probe must stay fast.
+    # The real voice pipeline imports it when it actually transcribes.
     try:
-        import faster_whisper  # noqa: F401
-        checks["stt"] = "READY"
+        import importlib.util
+        installed = importlib.util.find_spec("faster_whisper") is not None
+        checks["stt"] = _ok(installed, degraded="OPTIONAL")
     except Exception:  # noqa: BLE001
         checks["stt"] = "OPTIONAL"
 
@@ -183,10 +186,11 @@ def readiness() -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         checks["memory"] = "OFFLINE"
 
-    # Spatial memory (eMEM)
+    # Spatial memory (eMEM). Use the cheap probe(), NOT available(): a readiness
+    # check must not load the ~30s embedding model -- real use loads it lazily.
     try:
         from reyes_agent.spatial_memory import get_spatial_memory
-        checks["spatial"] = _ok(get_spatial_memory().available(), degraded="OPTIONAL")
+        checks["spatial"] = _ok(get_spatial_memory().probe(), degraded="OPTIONAL")
     except Exception:  # noqa: BLE001
         checks["spatial"] = "OPTIONAL"
 
