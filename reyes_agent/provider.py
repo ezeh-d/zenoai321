@@ -33,7 +33,11 @@ if TYPE_CHECKING:
     import openai
 
 _MAX_RETRY_ATTEMPTS = 3
-_RETRY_BASE_DELAY_S = 2.0
+# Backoff for a retryable failure (e.g. a free-tier rate-limit blip). Kept
+# short on purpose: for an interactive turn the only configured fallback is a
+# slow local model, so recovering on the FAST cloud provider a second sooner
+# beats failing over. 1.0 => waits of 1s then 2s (was 2s then 4s).
+_RETRY_BASE_DELAY_S = 1.0
 
 # CPU-bound local models pay for every token of context on every turn --
 # an unbounded history quietly makes each reply slower than the last.

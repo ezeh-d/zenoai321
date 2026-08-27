@@ -27,6 +27,29 @@ _FLAG = "defense_mode"
 
 
 # --- activation -------------------------------------------------------------
+def _warm_tool_path() -> None:
+    """Warm the parts of the tool path that are slow only on their FIRST call,
+    so the first live command (e.g. "open notepad") runs at its ~0.5s warm cost
+    instead of the ~3s cold cost. Side-effect free -- it only reads state and
+    serialises schemas; it never launches or closes anything."""
+    try:                                       # tool-schema serialisation
+        from reyes_agent.tools import tool_definitions
+        from reyes_agent.tools import CORE_TOOL_NAMES  # noqa: F401 -- import cost
+        tool_definitions(groups=set())
+    except Exception:  # noqa: BLE001
+        pass
+    try:                                       # process enumeration cache (open_app/verify)
+        import psutil
+        list(psutil.process_iter(["pid", "name"]))
+    except Exception:  # noqa: BLE001
+        pass
+    try:                                       # ctypes/user32 window enumeration
+        from reyes_agent.tools.system import _visible_windows
+        _visible_windows()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _warm_brain_async() -> None:
     def _warm() -> None:
         try:
@@ -39,6 +62,7 @@ def _warm_brain_async() -> None:
             run_agent([{"role": "user", "content": "hi"}])   # private throwaway
         except Exception:  # noqa: BLE001
             pass
+        _warm_tool_path()
     threading.Thread(target=_warm, name="zeno-defense-warm", daemon=True).start()
 
 
