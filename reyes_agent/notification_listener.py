@@ -276,11 +276,23 @@ async def _poll_once(speak_fn) -> None:
                 )
 
             notification_bus.publish({"type": "notification", "app": app_name, "text": text})
-            # Discreet by request: DON'T read the sender or the content
-            # aloud (privacy -- someone nearby could overhear). Just flag
-            # that something came in and invite a reply; the full text is
-            # in the panel notice for the user to read if they want.
-            speak_fn("Boss, you have a new message. What's your reply, sir?")
+            # The NaturalResponseEngine decides whether/how to speak and
+            # generates the words from the facts -- instead of a fixed phrase.
+            # It keeps OTPs/secrets off the speaker (privacy), stays quiet for
+            # trivia, and never says "you have a new message / what's your reply".
+            from reyes_agent.conversation import response_engine as nre
+
+            sender = ""
+            body = text
+            if ": " in text and text.split(": ", 1)[0].strip():
+                sender, body = (part.strip() for part in text.split(": ", 1))
+            decision = nre.respond(nre.Event(
+                kind="message_received", app=app_name, sender=sender,
+                message=body or text))
+            if decision.action in (nre.SPEAK, nre.ASK) and decision.speech:
+                speak_fn(decision.speech)
+            # SHOW/WAIT/QUIET/NOTHING: it's already recorded as a panel notice
+            # and in history above; ZENO deliberately stays silent.
 
 
 async def _baseline() -> None:

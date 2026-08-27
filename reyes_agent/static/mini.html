@@ -4,14 +4,23 @@
 <style>
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#dcecff;font:11px system-ui,sans-serif;cursor:grab;user-select:none}
   body.dragging{cursor:grabbing} #orb-simple{width:130px!important;height:130px!important} #orb-canvas{position:fixed;inset:0;width:100%;height:100%}
-  #music-card{display:none;position:fixed;left:8px;right:8px;bottom:6px;z-index:4;align-items:center;gap:5px;padding:4px 6px;border-radius:8px;background:rgba(5,12,26,.86);border:1px solid rgba(98,200,255,.45);font-size:9px;pointer-events:none}#music-card.show{display:flex}#music-art{width:20px;height:20px;border-radius:4px;object-fit:cover;display:none}
-  #live-view-badge{display:none;position:fixed;left:50%;top:5px;transform:translateX(-50%);z-index:9;padding:3px 8px;border-radius:999px;background:rgba(45,7,15,.92);border:1px solid rgba(255,95,109,.75);color:#ffd6dd;font:700 7px system-ui;letter-spacing:.08em;white-space:nowrap;pointer-events:none}#live-view-badge.show{display:block}
+  /* Panels spring in/out on opacity+transform (compositor-only). The CSS
+     cubic-bezier is a fallback; spring.js upgrades it to a real spring linear()
+     with the exact constants extracted from Framer Motion. */
+  #music-card{opacity:0;transform:translateY(6px) scale(.98);transition:opacity .3s cubic-bezier(.22,1,.36,1),transform .3s cubic-bezier(.22,1,.36,1);position:fixed;left:8px;right:8px;bottom:6px;z-index:4;display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:8px;background:rgba(5,12,26,.86);border:1px solid rgba(98,200,255,.45);font-size:9px;pointer-events:none;will-change:opacity,transform}#music-card.show{opacity:1;transform:none}#music-art{width:20px;height:20px;border-radius:4px;object-fit:cover;display:none}
+  #live-view-badge{opacity:0;transform:translateX(-50%) translateY(-6px);transition:opacity .3s cubic-bezier(.22,1,.36,1),transform .3s cubic-bezier(.22,1,.36,1);position:fixed;left:50%;top:5px;z-index:9;padding:3px 8px;border-radius:999px;background:rgba(45,7,15,.92);border:1px solid rgba(255,95,109,.75);color:#ffd6dd;font:700 7px system-ui;letter-spacing:.08em;white-space:nowrap;pointer-events:none;will-change:opacity,transform}#live-view-badge.show{opacity:1;transform:translateX(-50%)}
 </style></head><body><canvas id="orb-canvas"></canvas><div id="live-view-badge">PHONE LIVE VIEW</div><div id="music-card"><img id="music-art" alt=""><span id="music-text"></span></div>
+<script src="/static/spring.js"></script>
 <script type="module">
 import { initOrb } from '/static/orb.js?v=8';
 import * as voiceVAD from '/static/vad.js?v=2';
 import { createAgentPresence } from '/static/agent_presence.js';
 const orb=initOrb(document.getElementById('orb-canvas'));
+// Spring-ease the mini panels' show/hide, using the exact spring constants
+// extracted from Framer Motion (static/spring.js). Falls back to the CSS
+// cubic-bezier above if spring.js didn't load. Toggling '.show' now springs
+// opacity+transform instead of hard display:none/flex.
+try{const ZS=window.ZenoSpring;if(ZS){const s=ZS.springCSS('smooth');const tr='opacity '+s.duration+'ms '+s.easing+', transform '+s.duration+'ms '+s.easing;['music-card','live-view-badge'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.transition=tr;});}}catch(_e){}
 // This is still ONE native Mini Orb window. Specialist faces are small DOM
 // children created only for real Event Bus lifecycle events; they are never
 // separate floating windows and disappear after the real terminal event.
