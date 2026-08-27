@@ -69,11 +69,23 @@ not React, so the library can't be dropped in. The reusable *idea* is its
 Porting that ~40-line packing loop to ZENO's panel layout gives auto-tidy,
 gap-free arrangement without adopting React.
 
-### #6 Smooth panel animations (from motion)
-The `motion` checkout is **empty** (only `.git`), so nothing could be studied
-from source. The transferable principle (independent of Framer Motion) is
-**spring easing over fixed-duration CSS**: animate transform/opacity with a
-spring (stiffness ≈ 200, damping ≈ 26) or a cubic-bezier that approximates it,
-and always animate `transform`/`opacity` (compositor-only) rather than
-top/left/width. If you re-clone `motion` with its working tree, I can extract
-its exact spring constants and transition orchestration.
+### #6 Smooth panel animations (from motion) — extracted
+Re-cloned `motion` (motiondivision/motion) and read the spring source
+(`packages/motion-dom/src/animation/generators/spring.ts`). Exact
+`springDefaults`:
+
+    stiffness 100 · damping 10 · mass 1.0 · velocity 0
+    duration 800ms · bounce 0.3 (dampingRatio = 1 - bounce = 0.7) · visualDuration 0.3s
+    restSpeed 2 (0.01 granular) · restDelta 0.5 (0.005 granular)
+    minDamping 0.05 · maxDamping 1 · maxDuration 10s
+
+The library default (100/10/1) is deliberately *bouncy*; Framer Motion's
+duration/bounce API (bounce 0.3 → dampingRatio 0.7) is the smoother preset UIs
+usually want. Motion always animates `transform`/`opacity` (compositor-only),
+never top/left/width — and stops on the rest thresholds above, not a fixed
+duration.
+
+**Integrated as an additive helper:** `reyes_agent/static/spring.js` reproduces
+these exact constants and gives ZENO's panels a `springTo()` RAF animator
+(semi-implicit Euler, the same physics params) plus CSS cubic-bezier presets
+approximating the springs — opt-in, wiring nothing that already exists.
