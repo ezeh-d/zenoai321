@@ -312,6 +312,10 @@ INSTAGRAM_SCOPES = os.environ.get(
 # Graph host + version for the Instagram Login API (NOT graph.facebook.com).
 INSTAGRAM_GRAPH_BASE = os.environ.get(
     "INSTAGRAM_GRAPH_BASE", "https://graph.instagram.com").strip().rstrip("/")
+# Business Login uses TWO distinct hosts (per Meta docs): the authorization
+# WINDOW is on www.instagram.com, the token EXCHANGE is on api.instagram.com.
+INSTAGRAM_AUTHORIZE_BASE = os.environ.get(
+    "INSTAGRAM_AUTHORIZE_BASE", "https://www.instagram.com").strip().rstrip("/")
 INSTAGRAM_OAUTH_BASE = os.environ.get(
     "INSTAGRAM_OAUTH_BASE", "https://api.instagram.com").strip().rstrip("/")
 INSTAGRAM_API_VERSION = os.environ.get("INSTAGRAM_API_VERSION", "v23.0").strip()

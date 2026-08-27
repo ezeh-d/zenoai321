@@ -69,9 +69,11 @@ _GOOD = dict(
 # --------------------------------------------------------------------------
 # authorization URL
 # --------------------------------------------------------------------------
-def test_authorize_url_uses_instagram_login_endpoint_and_scopes(vault):
+def test_authorize_url_uses_business_login_window_and_scopes(vault):
+    # Business Login's authorization window is on www.instagram.com; only the
+    # token exchange is on api.instagram.com.
     url = il.authorize_url(state="s123")
-    assert url.startswith("https://api.instagram.com/oauth/authorize?")
+    assert url.startswith("https://www.instagram.com/oauth/authorize?")
     assert "client_id=APP123" in url
     assert "response_type=code" in url
     assert "instagram_business_basic" in url
@@ -79,6 +81,19 @@ def test_authorize_url_uses_instagram_login_endpoint_and_scopes(vault):
     assert "state=s123" in url
     # The old Basic Display / Facebook-login markers must be gone.
     assert "graph.facebook.com" not in url
+    assert "api.instagram.com" not in url
+
+
+def test_token_exchange_still_uses_api_host(vault, monkeypatch):
+    # The fix must NOT move the token exchange off api.instagram.com.
+    seen = {}
+
+    def capture(url, data=None):
+        seen["url"] = url
+        return _GOOD["code"]
+    monkeypatch.setattr(il, "_request", capture)
+    il.exchange_code("AUTH-CODE")
+    assert seen["url"].startswith("https://api.instagram.com/oauth/access_token")
 
 
 def test_authorize_url_errors_clearly_when_app_id_missing(monkeypatch):

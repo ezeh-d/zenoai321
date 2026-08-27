@@ -6,7 +6,7 @@ professional account in directly and returns an Instagram User access token.
 
 Verified against Meta's documentation (Aug 2026):
 
-    authorize   GET  https://api.instagram.com/oauth/authorize
+    authorize   GET  https://www.instagram.com/oauth/authorize   (Business Login)
                      ?client_id=&redirect_uri=&response_type=code&scope=&state=
     code->token POST https://api.instagram.com/oauth/access_token
                      client_id, client_secret, grant_type=authorization_code,
@@ -132,7 +132,8 @@ class _AppConfig:
     app_secret: str
     redirect_uri: str
     scopes: str
-    oauth_base: str
+    authorize_base: str   # www.instagram.com  -- the authorization window
+    oauth_base: str       # api.instagram.com  -- the code->token exchange
     graph_base: str
     version: str
 
@@ -162,6 +163,7 @@ def _app_config(*, require_secret: bool = True) -> _AppConfig:
     return _AppConfig(
         app_id=app_id, app_secret=app_secret, redirect_uri=redirect_uri,
         scopes=config.INSTAGRAM_SCOPES,
+        authorize_base=config.INSTAGRAM_AUTHORIZE_BASE,
         oauth_base=config.INSTAGRAM_OAUTH_BASE,
         graph_base=config.INSTAGRAM_GRAPH_BASE,
         version=config.INSTAGRAM_API_VERSION)
@@ -248,7 +250,10 @@ def _request(url: str, *, data: dict[str, Any] | None = None) -> dict[str, Any]:
 # OAuth steps
 # --------------------------------------------------------------------------
 def authorize_url(state: str = "") -> str:
-    """The URL the owner opens to grant ZENO access to its own account."""
+    """The URL the owner opens to grant ZENO access to its own account.
+
+    Business Login's authorization window is on www.instagram.com (NOT
+    api.instagram.com, which is only the token-exchange host)."""
     cfg = _app_config(require_secret=False)
     params = {
         "client_id": cfg.app_id,
@@ -258,7 +263,7 @@ def authorize_url(state: str = "") -> str:
     }
     if state:
         params["state"] = state
-    return f"{cfg.oauth_base}/oauth/authorize?{urllib.parse.urlencode(params)}"
+    return f"{cfg.authorize_base}/oauth/authorize?{urllib.parse.urlencode(params)}"
 
 
 def exchange_code(code: str) -> dict[str, Any]:
