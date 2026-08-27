@@ -293,6 +293,33 @@ SLACK_ALLOWED_USER_IDS = {
     if u.strip()
 }
 
+# --- Instagram, via the current "Instagram API with Instagram Login" --------
+# The App ID and redirect URI are not secret and live here; the App Secret and
+# the access token are SECRETS and are read through the credential store
+# (reyes_agent/security/secrets/manager.py), never from a committed file. The
+# access token + Instagram user id are obtained by the OAuth callback, not
+# typed in by hand. See ZENO_INSTAGRAM_SETUP.md.
+INSTAGRAM_APP_ID = os.environ.get("INSTAGRAM_APP_ID", "").strip()
+# Must match the redirect URI registered in the Meta App Dashboard EXACTLY.
+# Read from config so the temporary Cloudflare Quick Tunnel host is never
+# hard-coded in source; swap it for a stable HTTPS URL later with no code change.
+INSTAGRAM_REDIRECT_URI = os.environ.get("INSTAGRAM_REDIRECT_URI", "").strip()
+# Comma-separated scopes for the initial posting integration. Messaging and
+# comments permissions are deliberately NOT requested here.
+INSTAGRAM_SCOPES = os.environ.get(
+    "INSTAGRAM_SCOPES",
+    "instagram_business_basic,instagram_business_content_publish").strip()
+# Graph host + version for the Instagram Login API (NOT graph.facebook.com).
+INSTAGRAM_GRAPH_BASE = os.environ.get(
+    "INSTAGRAM_GRAPH_BASE", "https://graph.instagram.com").strip().rstrip("/")
+INSTAGRAM_OAUTH_BASE = os.environ.get(
+    "INSTAGRAM_OAUTH_BASE", "https://api.instagram.com").strip().rstrip("/")
+INSTAGRAM_API_VERSION = os.environ.get("INSTAGRAM_API_VERSION", "v23.0").strip()
+# Port the standalone OAuth callback service listens on (the Quick Tunnel
+# forwards to it). Bounded like the phone companion port.
+INSTAGRAM_CALLBACK_PORT = int(_bounded_env_float(
+    "INSTAGRAM_CALLBACK_PORT", 8765.0, 1024.0, 65535.0))
+
 # Tier 5 heartbeat (reyes_agent/heartbeat.py). Where to push urgent/non-quiet
 # notices -- your own Telegram chat ID with @Reyes3_boss_bot (send it a
 # message, then check https://api.telegram.org/bot<token>/getUpdates for

@@ -1,16 +1,20 @@
-"""Instagram, through the official Graph API.
+"""Instagram, through the current "Instagram API with Instagram Login".
+
+This talks to graph.instagram.com (NOT graph.facebook.com) and does not need a
+linked Facebook Page. The OAuth login, code exchange and token storage live in
+reyes_agent/social/instagram_login.py; this adapter reads the token + Instagram
+user id that flow stores and does the reading/publishing.
 
 WHAT THIS NEEDS BEFORE IT CAN DO ANYTHING (and cannot obtain by itself)
 -----------------------------------------------------------------------
     * an Instagram PROFESSIONAL account (Creator or Business)
-    * a Facebook Page linked to it
-    * a Meta app with instagram_content_publish + instagram_manage_insights
-    * a long-lived access token
+    * a Meta app configured for "Instagram API with Instagram Login" with
+      instagram_business_basic + instagram_business_content_publish
+    * an Instagram User access token (obtained by the OAuth callback)
 
-None of those can be created programmatically -- they need a human in Meta's
-console, agreeing to terms and passing app review. `auth_state()` reports
-exactly which piece is missing rather than failing at publish time with a
-confusing 400. See ZENO_INSTAGRAM_SETUP.md.
+The account + app cannot be created programmatically -- they need a human in
+Meta's console. `auth_state()` reports exactly which piece is missing rather
+than failing at publish time with a confusing 400. See ZENO_INSTAGRAM_SETUP.md.
 
 THE TWO-STEP PUBLISH IS NOT OPTIONAL
 ------------------------------------
@@ -37,20 +41,26 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from reyes_agent import config
 from reyes_agent.social import store as social_store
 from reyes_agent.social.adapters.base import (
     AUTH_REQUIRED, NOT_CONFIGURED, AuthState, PublishResult, SocialAdapter,
 )
 
-DEFAULT_API_VERSION = "v21.0"
-GRAPH = "https://graph.facebook.com"
+DEFAULT_API_VERSION = "v23.0"
+# The current "Instagram API with Instagram Login" is reached on
+# graph.instagram.com, NOT graph.facebook.com. Both are overridable via config
+# so a future migration never needs a code change here.
+GRAPH = config.INSTAGRAM_GRAPH_BASE
 
-# Meta's documented limit is 25 published posts per 24 hours per account.
-# Kept below it so ZENO never becomes the reason an account is throttled.
+# Meta's documented limit is 100 API-published posts per 24 hours per account.
+# Kept well below it so ZENO never becomes the reason an account is throttled.
 PUBLISH_LIMIT_PER_DAY = 20
 
-REQUIRED_SCOPES = ("instagram_basic", "instagram_content_publish",
-                   "instagram_manage_insights")
+# Scopes for the initial posting integration (Instagram Login). Messaging and
+# comments permissions are intentionally NOT requested here.
+REQUIRED_SCOPES = ("instagram_business_basic",
+                   "instagram_business_content_publish")
 
 # How long to wait for a Reel container to finish processing.
 CONTAINER_TIMEOUT_S = 180.0
@@ -134,7 +144,8 @@ class InstagramAPIAdapter(SocialAdapter):
                         f"be created automatically."))
         try:
             data = self._request(self.account_id, params={
-                "fields": "id,username,name,followers_count,media_count"})
+                "fields": "id,username,account_type,name,"
+                          "followers_count,media_count"})
         except Exception as exc:  # noqa: BLE001
             detail = str(exc)
             self._store.upsert_account(self.platform, token_state="INVALID",
@@ -142,10 +153,11 @@ class InstagramAPIAdapter(SocialAdapter):
             return AuthState(connected=False, state=AUTH_REQUIRED, detail=detail)
 
         self._store.upsert_account(
-            self.platform, account_id=str(data.get("id", "")),
+            self.platform, account_id=str(data.get("id") or self.account_id),
             username=str(data.get("username", "")),
             display_name=str(data.get("name", "")),
-            account_type="PROFESSIONAL", token_state="VALID",
+            account_type=str(data.get("account_type") or "PROFESSIONAL").upper(),
+            token_state="VALID",
             last_success=time.time(), last_error="", connected=1,
             scopes=list(REQUIRED_SCOPES))
         return AuthState(

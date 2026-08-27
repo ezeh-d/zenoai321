@@ -855,6 +855,27 @@ def social_summary() -> dict[str, str]:
     return {"summary": dashboard.spoken_summary()}
 
 
+@app.get("/auth/instagram/callback")
+def instagram_oauth_callback(code: str = "", error: str = "",
+                             error_description: str = "",
+                             state: str = "") -> Response:
+    """OAuth redirect target for connecting ZENO's own Instagram account.
+
+    This is the loopback path on the main app; the public Cloudflare tunnel
+    forwards to the standalone callback service instead (see
+    reyes_agent/social/instagram_callback_server.py), which is why this route
+    is not on the remote allow-list. The exchange is server-side and no token
+    is ever placed in the page or a log.
+    """
+    from reyes_agent.social import instagram_login
+    from reyes_agent.social.instagram_callback_server import _render
+
+    result = instagram_login.handle_callback(
+        code=code, error=error, error_description=error_description, state=state)
+    status, page = _render(result)
+    return Response(content=page, media_type="text/html", status_code=status)
+
+
 # --- language intelligence ---------------------------------------------
 @app.get("/api/language/status")
 def language_status_route() -> dict[str, Any]:

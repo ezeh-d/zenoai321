@@ -25,7 +25,8 @@ import time
 from typing import Any
 
 from reyes_agent.social import (
-    control, dashboard, identity as social_identity, leads as social_leads,
+    control, dashboard, identity as social_identity,
+    instagram_login, leads as social_leads,
     pipeline as social_pipeline, store as social_store,
 )
 from reyes_agent.social.adapters import all_adapters, health as adapter_health
@@ -406,10 +407,12 @@ def social_setup(platform: str, open_browser: bool = False) -> str:
     if target == social_store.INSTAGRAM:
         lines += [
             "  1. Switch the account to Professional (Creator or Business).",
-            "  2. Link it to a Facebook Page.",
-            "  3. Create a Meta app with instagram_content_publish and",
-            "     instagram_manage_insights.",
-            "  4. Set INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_BUSINESS_ACCOUNT_ID.",
+            "  2. Create a Meta app with 'Instagram API with Instagram Login'",
+            "     and the instagram_business_basic and",
+            "     instagram_business_content_publish permissions.",
+            "  3. Set INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET and",
+            "     INSTAGRAM_REDIRECT_URI, then run social_connect to log in.",
+            "  No Facebook Page is needed with Instagram Login.",
             "  See ZENO_INSTAGRAM_SETUP.md.",
         ]
     else:
@@ -423,3 +426,121 @@ def social_setup(platform: str, open_browser: bool = False) -> str:
     if state is not None:
         lines += ["", f"Current API state: {state.state} -- {state.detail}"]
     return "\n".join(lines)
+
+
+# --- Instagram connection (OAuth, Instagram Login) ----------------------
+@register(
+    "social_connect",
+    "Connect (or check/disconnect) ZENO's own Instagram professional account "
+    "via the official 'Instagram API with Instagram Login' OAuth flow. "
+    "action=start returns the authorization URL for the owner to open and "
+    "approve; action=status reports whether Instagram is connected (e.g. "
+    "'Instagram connected: @meetzeno.ai') without revealing the token; "
+    "action=disconnect forgets the stored token. ZENO never sees or types the "
+    "Instagram password -- the owner approves in Instagram's own page.",
+    {"type": "object", "properties": {
+        "platform": {"type": "string", "description": "instagram (default)"},
+        "action": {"type": "string", "enum": ["start", "status", "disconnect"],
+                   "description": "start the login, check status, or disconnect"},
+        "open_browser": {"type": "boolean",
+                         "description": "open the authorization URL in the browser"},
+    }},
+    light=True,
+)
+def social_connect(platform: str = "instagram", action: str = "status",
+                   open_browser: bool = False) -> str:
+    target = _platform(platform) or social_store.INSTAGRAM
+    if target != social_store.INSTAGRAM:
+        return "social_connect currently supports Instagram only."
+    verb = (action or "status").strip().casefold()
+
+    if verb == "disconnect":
+        return _json(instagram_login.disconnect())
+
+    if verb == "status":
+        return _json(instagram_login.connection_status())
+
+    # start: hand back the authorization URL (never auto-approve for the owner).
+    try:
+        url = instagram_login.authorize_url()
+    except instagram_login.InstagramLoginError as exc:
+        return _json(exc.as_dict())
+    opened = ""
+    if open_browser:
+        try:
+            from reyes_agent import browser_controller
+            browser_controller.open_url(url)
+            opened = "Opened the authorization page in the browser. "
+        except Exception as exc:  # noqa: BLE001
+            opened = f"Could not open the browser ({type(exc).__name__}). "
+    return _json({
+        "ok": True, "action": "start", "authorize_url": url,
+        "next": (f"{opened}Open this URL while signed in to the ZENO Instagram "
+                 "account, approve the permissions, and Meta will redirect to "
+                 "your configured callback. Then run social_connect "
+                 "action=status."),
+    })
+
+
+@register(
+    "social_publish_media",
+    "Publish ONE image or reel to Instagram right now, by public HTTPS media "
+    "URL, for an explicit owner-approved test or creator post. Instagram "
+    "fetches the media from the URL, so a local file path cannot be used. "
+    "Refuses unless owner_approved is true, and is still gated by SOCIAL_DRY_RUN "
+    "and the kill switch. Reports PUBLISHED only after asking Instagram for the "
+    "post back by id; returns the media/post id.",
+    {"type": "object", "properties": {
+        "platform": {"type": "string", "description": "instagram (default)"},
+        "image_url": {"type": "string",
+                      "description": "public https URL of the image to post"},
+        "video_url": {"type": "string",
+                      "description": "public https URL of the reel/video to post"},
+        "caption": {"type": "string", "description": "caption text (optional)"},
+        "owner_approved": {"type": "boolean",
+                           "description": "the owner explicitly approved THIS post"},
+    }, "required": ["owner_approved"]},
+    requires_confirmation=True,
+)
+def social_publish_media(platform: str = "instagram", image_url: str = "",
+                         video_url: str = "", caption: str = "",
+                         owner_approved: bool = False) -> str:
+    target = _platform(platform) or social_store.INSTAGRAM
+    if not owner_approved:
+        return ("Refused: owner_approved is false. This tool posts to the real "
+                "account, so it only runs on an explicit owner approval.")
+    media_url = (video_url or image_url or "").strip()
+    if not media_url:
+        return "Refused: give an image_url or video_url (a public https URL)."
+    if not media_url.lower().startswith("https://"):
+        return ("Refused: the media URL must be https and publicly reachable. "
+                "Instagram fetches the file from the URL; a local path cannot "
+                "be published.")
+
+    adapter = all_adapters().get(target)
+    if adapter is None:
+        return f"No adapter for {target!r}."
+
+    media_type = "reel" if video_url else "image"
+    # A record for traceability; the publish itself goes through the adapter's
+    # governed path (dry-run, kill switch, rate limit, auth, then verify).
+    store = social_store.get_store()
+    try:
+        content_id = store.create_content(
+            platform=target, title=(caption[:60] or "Instagram test post"),
+            status=social_store.APPROVED, caption=caption)
+    except Exception:  # noqa: BLE001
+        content_id = ""
+
+    item = {"content_id": content_id, "media_url": media_url,
+            "media_type": media_type, "caption": caption, "hashtags": []}
+    result = adapter.publish(item)
+    payload = result.as_dict()
+    payload["media_type"] = media_type
+    if result.status == social_store.PUBLISHED and content_id:
+        try:
+            store.update_content(content_id, status=social_store.PUBLISHED,
+                                 post_id=result.post_id, published_at=time.time())
+        except Exception:  # noqa: BLE001
+            pass
+    return _json(payload)

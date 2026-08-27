@@ -1,135 +1,143 @@
-# ZENO — Instagram Setup
+# ZENO — Instagram Setup (Instagram API with Instagram Login)
 
-## OWNER ACTION REQUIRED
+This is the **current** Meta API: ZENO logs its own Instagram professional
+account in directly and receives an Instagram User access token. There is **no
+Facebook Page** and no Basic Display. ZENO never sees or types the Instagram
+password — the owner approves in Instagram's own consent screen.
 
-ZENO cannot complete this. Not "has not yet" — **cannot**, and the parts it
-cannot do are the parts that protect the account.
+## What ZENO can and cannot do
 
-Creating an Instagram account requires entering a password, clearing a
-CAPTCHA, and confirming an email and usually a phone number. ZENO does not
-type credentials, does not answer CAPTCHAs and does not enter verification
-codes. There is no tool in the codebase that does, deliberately — a test
-(`test_setup_tool_never_offers_to_type_credentials`) asserts `social_setup`
-never offers to.
+ZENO **can**: build the authorization URL, exchange the returned code for a
+token, validate it, read the professional account, store the token securely,
+and publish an owner‑approved post.
 
-What ZENO does instead: `social_setup` opens the official page and hands you
-the exact approved values to type.
+ZENO **cannot** (by design): create the account, type the password, clear a
+CAPTCHA, or approve the OAuth consent. Those stay with the owner.
 
-```bash
-python -c "from reyes_agent.tools import TOOLS; print(TOOLS['social_setup'].func('instagram'))"
-```
+## Step 1 — Instagram account is Professional (you)
 
-## Step 1 — Create the account (you)
+Settings → **Account type and tools → Switch to professional account →
+Creator** (or Business). Content publishing does not work on a personal
+account. The ZENO account is **@meetzeno.ai**.
 
-Go to https://www.instagram.com/accounts/emailsignup/ and register with the
-Gmail you have approved for ZENO. Use the username, display name and bio that
-`social_setup` prints, so the identity stays consistent with `identity.py`.
+## Step 2 — Meta app with Instagram Login (you)
 
-## Step 2 — Switch to Professional (you)
+At https://developers.facebook.com/apps, in your app, add the
+**Instagram** product and set it up for **"Instagram API with Instagram
+Login"**. Add the two permissions this integration uses:
 
-**Settings → Account type and tools → Switch to professional account →
-Creator.**
-
-This is required. The Graph API will not publish to, or report insights for, a
-personal account. Do not enter business details that are not true — pick
-Creator, which is what ZENO actually is.
-
-## Step 3 — Link a Facebook Page (you)
-
-Instagram's publishing API is reached through a Facebook Page. Create one at
-https://www.facebook.com/pages/create, then link it under
-**Settings → Sharing to other apps → Facebook.**
-
-## Step 4 — Create a Meta app (you)
-
-At https://developers.facebook.com/apps → **Create app** → *Business*.
-
-Add the **Instagram Graph API** product and request these permissions:
-
-| permission | what it is for |
+| permission | for |
 |---|---|
-| `instagram_basic` | read the account |
-| `instagram_content_publish` | publish posts and Reels |
-| `instagram_manage_insights` | read analytics |
+| `instagram_business_basic` | read the account identity |
+| `instagram_business_content_publish` | create and publish posts/reels |
 
-Publishing permissions need **App Review** for a live app. In Development
-mode they work for accounts with a role on the app, which is enough for ZENO's
-own account.
+Messaging and comments permissions are **not** requested here.
 
-## Step 5 — Get a long-lived token (you)
+Add **@meetzeno.ai** as an Instagram Tester (App roles → Roles) and accept the
+invite from the Instagram account, so publishing works while the app is in
+development.
 
-Short-lived tokens expire in an hour. Exchange for a 60-day token:
+## Step 3 — Redirect URI (you)
+
+In the Instagram Login settings, add an **OAuth redirect URI**. For testing
+this is your Cloudflare Quick Tunnel host plus the callback path:
+
+```
+https://<your-tunnel>.trycloudflare.com/auth/instagram/callback
+```
+
+It must match `INSTAGRAM_REDIRECT_URI` (below) **exactly**. Later you can swap
+the tunnel for a stable HTTPS URL — change only the config, never code.
+
+## Step 4 — Give ZENO the app credentials
+
+**Never commit these.** `.gitignore` blocks `.env`/`.env.*`; CI fails if an env
+file is ever tracked. The App Secret belongs in the OS credential store:
 
 ```bash
-curl -s "https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=APP_ID&client_secret=APP_SECRET&fb_exchange_token=SHORT_TOKEN"
+python -c "from reyes_agent.security.secrets import manager; print(manager.put('INSTAGRAM_APP_SECRET','PASTE_SECRET_HERE'))"
 ```
 
-Then find the Instagram business account id:
+The App ID and redirect URI are configuration — put them in `.env`:
+
+```
+INSTAGRAM_APP_ID=your-instagram-app-id
+INSTAGRAM_REDIRECT_URI=https://<your-tunnel>.trycloudflare.com/auth/instagram/callback
+INSTAGRAM_SCOPES=instagram_business_basic,instagram_business_content_publish
+INSTAGRAM_API_VERSION=v23.0
+INSTAGRAM_CALLBACK_PORT=8765
+```
+
+The **access token** and **business account id** are obtained by the OAuth
+callback — you do not type them in.
+
+## Step 5 — Start the callback service
+
+The Quick Tunnel forwards to this small, single‑purpose server:
 
 ```bash
-curl -s "https://graph.facebook.com/v21.0/me/accounts?access_token=LONG_TOKEN"
-curl -s "https://graph.facebook.com/v21.0/PAGE_ID?fields=instagram_business_account&access_token=LONG_TOKEN"
+python -m reyes_agent.social.instagram_callback_server
 ```
 
-## Step 6 — Give ZENO the credentials
+It listens on `127.0.0.1:8765` and only handles `/auth/instagram/callback`.
+(It runs separately from ZENO's main app on purpose, so exposing the OAuth
+callback to the internet never exposes ZENO's control surface.)
 
-**Never commit these.** `.gitignore` blocks `.env` and `.env.*`, CI fails the
-build if an environment file is ever tracked, and gitleaks scans full history.
+## Step 6 — Connect
 
-Preferred — Windows Credential Manager, so the token never sits in a file:
+Ask ZENO to start the connection, or run the tool directly:
 
 ```bash
-python -c "from reyes_agent.security.secrets import manager; manager.set('INSTAGRAM_ACCESS_TOKEN','PASTE_HERE')"
+python -c "from reyes_agent.tools import TOOLS; print(TOOLS['social_connect'].func(action='start'))"
 ```
 
-Or in `.env` (read only if keyring has nothing):
+Open the returned **authorize_url** in a browser signed in to @meetzeno.ai and
+approve. Meta redirects to the callback; ZENO exchanges the code, upgrades to a
+60‑day token, validates it, reads the account, and stores the token in the
+credential store. The page shows: **Instagram connected: @meetzeno.ai**.
 
-```
-INSTAGRAM_ACCESS_TOKEN=
-INSTAGRAM_BUSINESS_ACCOUNT_ID=
-```
+Nothing full is ever logged — only masked status (`Token status: valid`).
 
 ## Step 7 — Verify
 
 ```bash
-python -c "from reyes_agent.social.adapters import health; print(health())"
+python -c "from reyes_agent.tools import TOOLS; print(TOOLS['social_connect'].func(action='status'))"
 ```
 
-`NOT_CONFIGURED` names the missing variable. `AUTH_REQUIRED` means the token
-was rejected — it expired, or the account is not Professional. `HEALTHY`
-shows the username and follower count, which means ZENO actually reached
-Instagram.
+`connected: true` with `username: meetzeno.ai` means ZENO actually reached
+Instagram. ZENO can now say **"Instagram connected: @meetzeno.ai."**
 
-## Step 8 — Enable, still in dry run
+## Step 8 — The first test post (only when you ask)
 
-```
-ZENO_SOCIAL_ENABLED=true
+Publishing is gated by `SOCIAL_DRY_RUN`, the kill switch, and an explicit
+`owner_approved`. Dry run is ON by default — a full dry run runs without
+sending anything. For a **real** first post, host a test image at a public
+HTTPS URL, then:
+
+```bash
+# Real send: dry run OFF, platform enabled, explicit approval.
 ZENO_SOCIAL_INSTAGRAM_ENABLED=true
-SOCIAL_DRY_RUN=true
+SOCIAL_DRY_RUN=false
 ```
 
-Prepare a post and read the approval card. Nothing is sent while dry run is
-on — that is asserted by a test, not just intended.
+```bash
+python -c "from reyes_agent.tools import TOOLS; print(TOOLS['social_publish_media'].func(platform='instagram', image_url='https://YOUR-PUBLIC-HOST/zeno-test.jpg', caption='ZENO test post', owner_approved=True))"
+```
 
-## Step 9 — The first live post
-
-Set `SOCIAL_DRY_RUN=false` only when you have read an approval card and want
-that exact post to go out. Mode stays `APPROVAL`.
+Or just say: **"ZENO, publish this test post to Instagram."** ZENO reports
+`PUBLISHED` only after asking Instagram for the post back by id, and returns the
+media/post id. If the API rejects it, ZENO reports the error — it never invents
+success.
 
 ## What will bite you
 
-**Media must be at a public HTTPS URL.** The Graph API fetches the file
-itself; it does not accept an upload from ZENO's process. A local path cannot
-be published, and the adapter says so rather than letting Meta return a
-confusing 400.
-
-**A container is not a post.** Reels are created as a container, which must
-reach `FINISHED` before publishing. The adapter polls for up to 180s and
-refuses to publish an unfinished container. This is the most common way an
-automated Instagram publisher silently produces nothing.
-
-**25 posts per 24 hours** is Meta's limit. ZENO's limiter stops at 20.
-
-**Tokens expire every 60 days.** `auth_state()` records `INVALID` and the
-health surface reports `AUTH_REQUIRED`. Nothing auto-renews — that is your
-step.
+- **Media must be a public HTTPS URL.** Instagram fetches the file itself; a
+  local Windows path cannot be published. The adapter says so up front.
+- **A container is not a post.** Reels are created as a container that must
+  reach `FINISHED` before publishing; the adapter polls and refuses to publish
+  an unfinished one — the most common way an auto‑publisher silently posts
+  nothing.
+- **Tokens last ~60 days.** `social_connect action=status` shows the state;
+  `instagram_login.refresh_long_lived_token()` renews it.
+- **Rate limit:** Meta allows 100 API publishes / 24h; ZENO's limiter stops
+  well below that.
