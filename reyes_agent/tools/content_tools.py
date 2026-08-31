@@ -92,3 +92,60 @@ def content_context() -> str:
     from reyes_agent.content import get_context
 
     return _json(get_context().snapshot())
+
+
+def _resolve(target: str) -> str:
+    import os
+    from pathlib import Path
+    from reyes_agent.content import get_context
+    raw = str(target or "it").strip().strip('"').strip("'")
+    if raw and Path(os.path.expanduser(raw)).exists():
+        return str(Path(os.path.expanduser(raw)))
+    ref = get_context().resolve(target or "it")
+    return ref.path if ref.ok else ""
+
+
+@register(
+    name="content_undo",
+    description=(
+        "Undo the last change ZENO made to a file, restoring the previous "
+        "version from an internal restore point. Works on 'it' / 'that file' / "
+        "a path. action=redo re-applies, action=revert returns to the ORIGINAL. "
+        "Fully reversible; the original is never lost."
+    ),
+    input_schema={"type": "object", "properties": {
+        "target": {"type": "string", "description": "File path or reference (default: the active file)."},
+        "action": {"type": "string", "enum": ["undo", "redo", "revert"],
+                   "description": "undo (default), redo, or revert-to-original."},
+    }},
+)
+def content_undo(target: str = "it", action: str = "undo") -> str:
+    from reyes_agent.content import get_version_manager
+    path = _resolve(target)
+    if not path:
+        return _json({"ok": False, "error": f"couldn't resolve '{target}'"})
+    vm = get_version_manager()
+    verb = (action or "undo").strip().casefold()
+    result = (vm.redo(path) if verb == "redo" else
+              vm.revert(path) if verb == "revert" else vm.undo(path))
+    return _json({**result, "path": path, "action": verb})
+
+
+@register(
+    name="content_history",
+    description=(
+        "List the saved versions/restore points of a file (id, time, note) and "
+        "which one is current. Use to answer 'can I undo?' or 'what versions "
+        "are there?'. Read-only."
+    ),
+    input_schema={"type": "object", "properties": {
+        "target": {"type": "string", "description": "File path or reference (default: the active file)."},
+    }},
+    light=True,
+)
+def content_history(target: str = "it") -> str:
+    from reyes_agent.content import get_version_manager
+    path = _resolve(target)
+    if not path:
+        return _json({"ok": False, "error": f"couldn't resolve '{target}'"})
+    return _json(get_version_manager().history(path))

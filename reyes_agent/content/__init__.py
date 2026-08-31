@@ -16,9 +16,17 @@ from reyes_agent.content.format_router import (
 from reyes_agent.content.working_context import (
     WorkingContext, get_context,
 )
+from reyes_agent.content.versioning import (
+    VersionManager, get_version_manager,
+)
+from reyes_agent.content.save import (
+    classify_save_intent, verify_write, write_verified,
+)
 
 __all__ = [
     "ContentResult", "UniversalContentEngine", "get_engine",
     "ContentFormatRouter", "FormatInfo", "detect",
     "WorkingContext", "get_context",
+    "VersionManager", "get_version_manager",
+    "write_verified", "verify_write", "classify_save_intent",
 ]
