@@ -298,7 +298,11 @@ def test_tool_audit_redaction_does_not_expose_secret_values() -> None:
     encoded = json.dumps(cleaned)
     assert "not-for-logs" not in encoded
     assert "ghp_" not in encoded
-    assert encoded.count("[REDACTED]") >= 3
+    # Count redactions form-agnostically: a content field now summarises as
+    # "[REDACTED_CONTENT N chars]" (still contains REDACTED, still hides the
+    # value) rather than a bare "[REDACTED]". All three sensitive values are
+    # redacted either way.
+    assert encoded.count("REDACTED") >= 3
 
 
 def test_execution_lifecycle_recovery_is_bounded() -> None:

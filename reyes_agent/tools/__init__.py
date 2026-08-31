@@ -54,7 +54,7 @@ def _audit_safe(value: Any, *, depth: int = 0) -> Any:
             label = str(key)
             if any(marker in label.casefold() for marker in ("password", "passwd", "secret", "token", "api_key", "apikey", "cookie", "credential", "private_key")):
                 out[label] = "[REDACTED]"
-            elif label.casefold() in {"message", "content", "body", "code", "value"} and isinstance(item, str):
+            elif label.casefold() in {"message", "content", "body", "code", "value", "text"} and isinstance(item, str):
                 # Consequential-action logs need the operation and target,
                 # not a durable second copy of messages, form values, file
                 # bodies, or source code. Length is enough for diagnostics.
@@ -86,6 +86,14 @@ def _tool_audit_input(tool: Tool, value: dict[str, Any]) -> Any:
         "feature": str(value.get("feature") or "")[:40],
         "requested_candidates": value.get("count", 0),
     }
+
+
+def diagnostic_tool_input(name: str, value: dict[str, Any]) -> Any:
+    """Return the registry's bounded audit representation for diagnostics.
+    Used by the conversation tool-transaction ledger to record a tool call
+    without ever storing a secret argument in the clear."""
+    tool = TOOLS.get(str(name))
+    return _tool_audit_input(tool, value) if tool else _audit_safe(value)
 
 
 def _tool_audit_result(tool: Tool, value: Any) -> Any:
@@ -299,6 +307,10 @@ _FAILED_RESULT_STATES = {
     "error", "failed", "failure", "blocked", "denied", "cancelled",
     "canceled", "timed_out", "timeout", "unavailable", "rejected",
 }
+# Distinct from generic failure so the conversation ledger can tell a cancel or
+# timeout apart from a real error (Codex's conversation-coordinator thread).
+_CANCELLED_RESULT_STATES = {"cancelled", "canceled"}
+_TIMED_OUT_RESULT_STATES = {"timed_out", "timeout", "timed out"}
 _WAITING_RESULT_STATES = {
     "pending", "queued", "waiting", "waiting_for_input",
     "waiting_for_confirmation", "accepted",
@@ -326,6 +338,10 @@ def classify_tool_result(result: Any) -> dict[str, Any]:
     has_evidence = False
     if isinstance(parsed, dict):
         state = str(parsed.get("state") or parsed.get("status") or parsed.get("outcome") or "").strip().casefold()
+        if state in _CANCELLED_RESULT_STATES:
+            return {"outcome": "cancelled", "verification_state": "cancelled", "state": state}
+        if state in _TIMED_OUT_RESULT_STATES:
+            return {"outcome": "timed_out", "verification_state": "timed_out", "state": state}
         if parsed.get("ok") is False or parsed.get("success") is False or state in _FAILED_RESULT_STATES:
             from reyes_agent import failures
             info = failures.explain(text_value)
@@ -339,6 +355,10 @@ def classify_tool_result(result: Any) -> dict[str, Any]:
         verified = verified or (parsed.get("ok") is True and has_evidence)
 
     lowered = text_value.casefold()
+    if lowered.startswith(("cancelled", "canceled")):
+        return {"outcome": "cancelled", "verification_state": "cancelled", "state": state}
+    if lowered.startswith(("timed out", "timeout")):
+        return {"outcome": "timed_out", "verification_state": "timed_out", "state": state}
     if any(lowered.startswith(prefix) for prefix in (
         "error", "failed", "failure", "blocked", "denied", "refused",
         "unavailable", "timed out", "timeout", "browser error", "couldn't",
@@ -352,6 +372,7 @@ def classify_tool_result(result: Any) -> dict[str, Any]:
                 "retryable": info["retryable"], "recovery": info["recovery"]}
     if any(lowered.startswith(prefix) for prefix in (
         "queued", "pending", "waiting", "accepted for", "approval required",
+        "clarification needed",
     )):
         return {"outcome": "waiting", "verification_state": "pending", "state": state}
     # Existing file/build/browser executors include a concrete verification
