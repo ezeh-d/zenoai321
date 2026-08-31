@@ -14,6 +14,7 @@ from collections.abc import Callable
 from reyes_agent import config
 from reyes_agent.provider import ProviderError, run_turn
 from reyes_agent.tools import TOOLS, run_tool, tool_definitions
+from reyes_agent.conversation import turn_wiring
 from reyes_agent.tools.memory import system_prompt_block
 
 # A tool round is one "model asks for a tool -> we run it -> feed result
@@ -533,6 +534,10 @@ def _run_agent_impl(
     # rather than reporting "stuck in a loop". Misrouting costs a little
     # speed, never correctness -- see cognition.py.
     round_index = 0
+    # Bounded conversation coordinator + tool-transaction ledger. Additive and
+    # fully defensive: it records turn/session context and correlated tool
+    # outcomes, and can never affect the reply (see conversation/turn_wiring.py).
+    turn_wiring.begin(turn_id, utterance=str(latest or ""), source="local_text")
     while round_index < max_rounds:
         round_index += 1
         if round_index == max_rounds and max_rounds < MAX_TOOL_ROUNDS:
@@ -602,6 +607,7 @@ def _run_agent_impl(
                 humour.record_reply(latest, turn.text)
             except Exception:  # noqa: BLE001
                 pass
+            turn_wiring.finish(turn_id)
             return
 
         history.append(
@@ -678,6 +684,8 @@ def _run_agent_impl(
                     tc = pending.pop(handle)
                     result = handle.result()
                     results[tc.id] = result
+                    turn_wiring.tool_planned(turn_id, tc.id, tc.name, tc.input)
+                    turn_wiring.tool_finished(turn_id, tc.id, result)
                     if trace is not None:
                         trace.observed(tc.name, result, results.get(f"__autonomy__{tc.id}", {}))  # type: ignore[arg-type]
                     if on_tool_result:
@@ -702,7 +710,9 @@ def _run_agent_impl(
                         trace.enter(Stage.EXECUTE, tool=tc.name)
                     except Exception:
                         pass
+                turn_wiring.tool_planned(turn_id, tc.id, tc.name, tc.input)
                 result = run_tool(tc.name, tc.input)
+                turn_wiring.tool_finished(turn_id, tc.id, result)
                 # Widen the toolset for the remainder of this turn. Done
                 # here rather than inside the tool because the tool list is
                 # rebuilt per round by this loop.
