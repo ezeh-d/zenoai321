@@ -22,6 +22,9 @@ from reyes_agent.content.versioning import (
 from reyes_agent.content.save import (
     classify_save_intent, verify_write, write_verified,
 )
+from reyes_agent.content.tables import (
+    Table, extract_tables, save_table, to_csv, to_json, to_markdown,
+)
 
 __all__ = [
     "ContentResult", "UniversalContentEngine", "get_engine",
@@ -29,4 +32,5 @@ __all__ = [
     "WorkingContext", "get_context",
     "VersionManager", "get_version_manager",
     "write_verified", "verify_write", "classify_save_intent",
+    "Table", "extract_tables", "save_table", "to_csv", "to_json", "to_markdown",
 ]

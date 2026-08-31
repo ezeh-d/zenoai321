@@ -149,3 +149,51 @@ def content_history(target: str = "it") -> str:
     if not path:
         return _json({"ok": False, "error": f"couldn't resolve '{target}'"})
     return _json(get_version_manager().history(path))
+
+
+@register(
+    name="content_tables",
+    description=(
+        "Extract the tables from a spreadsheet, CSV or PDF into STRUCTURED data "
+        "(headers + rows, with the sheet/page they came from), and optionally "
+        "convert or save them. Use for 'extract this table', 'send that table to "
+        "Excel', 'turn it into CSV/JSON/Markdown'. Give save_as (e.g. "
+        "out.xlsx / out.csv) to write one table, or format to just return it in "
+        "that shape. Never fabricates a table -- says so honestly when none exist."
+    ),
+    input_schema={"type": "object", "properties": {
+        "target": {"type": "string", "description": "File path or reference."},
+        "index": {"type": "integer", "description": "Which table (0-based) to convert/save. Default 0."},
+        "format": {"type": "string", "enum": ["csv", "json", "markdown"],
+                   "description": "Return this table in this text shape."},
+        "save_as": {"type": "string",
+                    "description": "Write the chosen table here (.csv/.json/.md/.xlsx), verified."},
+    }, "required": ["target"]},
+)
+def content_tables(target: str, index: int = 0, format: str = "",
+                   save_as: str = "") -> str:
+    from reyes_agent.content import tables as tbl
+    path = _resolve(target)
+    if not path:
+        return _json({"ok": False, "error": f"couldn't resolve '{target}'"})
+    result = tbl.extract_tables(path)
+    if not result.get("ok") or not result.get("tables"):
+        return _json(result)
+    items = result["tables"]
+    idx = max(0, min(int(index or 0), len(items) - 1))
+    chosen = items[idx]
+    if save_as:
+        saved = tbl.save_table(chosen, save_as)
+        return _json({"ok": saved["ok"], "extracted": len(items),
+                      "saved": saved, "chosen_index": idx})
+    if format:
+        conv = {"csv": tbl.to_csv, "json": tbl.to_json,
+                "markdown": tbl.to_markdown}.get(format.lower())
+        if conv:
+            return _json({"ok": True, "extracted": len(items), "chosen_index": idx,
+                          "format": format, "table": conv(chosen),
+                          "location": chosen.get("location", "")})
+    return _json({"ok": True, "count": len(items),
+                  "tables": [{"location": t["location"], "row_count": t["row_count"],
+                              "col_count": t["col_count"], "headers": t["headers"][:12],
+                              "preview": t["rows"][:5]} for t in items]})
