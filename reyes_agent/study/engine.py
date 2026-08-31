@@ -184,7 +184,19 @@ class StudyEngine:
                     import numpy as np
                     np.save(self._docs_dir / f"{_source_id(str(p))}.npy", vecs)
                 self._update_catalog(p, record)
+                # Best-effort: seed the concept graph so "what concepts did you
+                # find?" and prerequisite checks work after studying. Deterministic
+                # and guarded -- it never breaks the study itself.
+                concepts_found = 0
+                try:
+                    from reyes_agent.study.concepts import get_concept_graph
+                    sample = " ".join(c.text for c in chunks[:60])[:40000]
+                    seeded = get_concept_graph().ingest_text(sample, source=str(p))
+                    concepts_found = seeded.get("concepts_added", 0)
+                except Exception:  # noqa: BLE001
+                    pass
                 return {"ok": True, "source": str(p), "name": p.name,
+                        "concepts_found": concepts_found,
                         "engine": engine, "chunks": len(chunks),
                         "pages": record["pages"], "embedded": embedded,
                         "note": ("indexed with semantic embeddings" if embedded

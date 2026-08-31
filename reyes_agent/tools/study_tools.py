@@ -106,3 +106,91 @@ def study_forget(target: str) -> str:
     from reyes_agent.study import get_study_engine
     path = _resolve(target) or str(target)
     return _json(get_study_engine().forget(path))
+
+
+@register(
+    name="study_report",
+    description=(
+        "How much has been learned in a course: honest progress %, and how many "
+        "topics are mastered / practiced / understood / still learning / need "
+        "revision. Numbers come from tracked evidence, never invented. Use for "
+        "'how much have I learned?' / 'what's my progress?'."
+    ),
+    input_schema={"type": "object", "properties": {
+        "course": {"type": "string", "description": "Course name (default: general)."},
+    }},
+    light=True,
+)
+def study_report(course: str = "") -> str:
+    from reyes_agent.study import get_mastery_tracker
+    return _json(get_mastery_tracker().report(course=course))
+
+
+@register(
+    name="study_weak_areas",
+    description=(
+        "The topics the owner is weakest in (needs-revision first, then still-"
+        "learning), so ZENO can target them. Use for 'what am I weak in?' / "
+        "'test my weak areas'."
+    ),
+    input_schema={"type": "object", "properties": {
+        "course": {"type": "string", "description": "Course name (default: general)."},
+    }},
+    light=True,
+)
+def study_weak_areas(course: str = "") -> str:
+    from reyes_agent.study import get_mastery_tracker
+    return _json({"ok": True, "weak": get_mastery_tracker().weak_topics(course=course)})
+
+
+@register(
+    name="study_mastery_update",
+    description=(
+        "Record real evidence of learning so mastery stays honest: event=introduce "
+        "(first seen), studied (covered it), or answer (with correct true/false). "
+        "Mastery is only reached after sustained correct answers across sessions, "
+        "never one lucky answer. Call after teaching a topic or grading an answer."
+    ),
+    input_schema={"type": "object", "properties": {
+        "topic": {"type": "string"},
+        "event": {"type": "string", "enum": ["introduce", "studied", "answer"]},
+        "correct": {"type": "boolean", "description": "for event=answer"},
+        "course": {"type": "string"},
+    }, "required": ["topic", "event"]},
+)
+def study_mastery_update(topic: str, event: str, correct: bool = False,
+                         course: str = "") -> str:
+    from reyes_agent.study import get_mastery_tracker
+    m = get_mastery_tracker()
+    ev = (event or "").strip().lower()
+    if ev == "answer":
+        return _json(m.answered(topic, correct=bool(correct), course=course))
+    if ev == "studied":
+        return _json(m.studied(topic, course=course))
+    return _json(m.introduce(topic, course=course))
+
+
+@register(
+    name="concept_prerequisites",
+    description=(
+        "The prerequisite chain for a concept (what must be understood first), "
+        "and which prerequisites the owner is MISSING given what they already "
+        "know. Use before teaching an advanced topic so ZENO doesn't skip the "
+        "foundations. Reads the concept graph built while studying."
+    ),
+    input_schema={"type": "object", "properties": {
+        "concept": {"type": "string"},
+        "known": {"type": "array", "items": {"type": "string"},
+                  "description": "concepts the owner already knows (optional)."},
+        "course": {"type": "string"},
+    }, "required": ["concept"]},
+    light=True,
+)
+def concept_prerequisites(concept: str, known: list | None = None,
+                          course: str = "") -> str:
+    from reyes_agent.study import get_concept_graph
+    g = get_concept_graph()
+    return _json({"ok": True, "concept": concept,
+                  "prerequisites": g.prerequisites(concept, course=course),
+                  "missing": g.missing_prerequisites(concept, known or [], course=course),
+                  "relations": g.relations_of(concept, course=course)})
