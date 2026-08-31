@@ -79,7 +79,8 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                 "read_screen_text", "take_screenshot", "open_path",
                 "media_control", "set_volume"),
     "files": ("read_file", "write_project_file", "list_dir", "list_project_files",
-              "read_document", "open_path", "move_file"),
+              "read_document", "content_open", "content_inspect", "content_context",
+              "open_path", "move_file"),
     "files_destructive": ("delete_file",),
     "coding": ("write_project_file", "read_file", "list_project_files",
                "build_project", "run_command", "website_project",
@@ -464,6 +465,23 @@ def tools_for(message: str, *, expand: bool = False) -> Route:
     started = time.perf_counter()
     request_id = f"r{int(time.time() * 1000) % 10_000_000}"
     capabilities, confidence, reason = classify(message)
+
+    # Semantic fallback (#3): when the fast regex triggers matched nothing, a
+    # paraphrase may still carry a clear intent ("get spotify going"). Consult
+    # the embedding-based intent router -- additive, gated (ZENO_INTENT_ROUTER),
+    # and fully guarded: it degrades to the regex result on any error or when
+    # the model isn't present, and only runs on the uncertain case so the
+    # common path stays regex-fast.
+    if not capabilities:
+        try:
+            from reyes_agent.routing.intent_router import get_intent_router
+            match = get_intent_router().classify(message)
+            if match and match.capability in CAPABILITIES:
+                capabilities = (match.capability,)
+                confidence = max(confidence, round(float(match.confidence), 3))
+                reason = f"{reason or 'no trigger'}; semantic:{match.intent}"
+        except Exception:  # noqa: BLE001 -- routing must never break on the fallback
+            pass
 
     names: list[str] = list(ESSENTIAL)
     for capability in capabilities:
