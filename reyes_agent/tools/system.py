@@ -834,6 +834,8 @@ def send_telegram_message(message: str) -> str:
 # other desktop-control tools -- so the shared tool loader registers them without
 # a second edit to tools/__init__.py.
 from reyes_agent.tools import hands_tools as _hands_tools  # noqa: E402,F401
+# Universal Content Engine tools (open/inspect/context) register the same way.
+from reyes_agent.tools import content_tools as _content_tools  # noqa: E402,F401
 
 
 # ZENO Live News: the multi-source, de-duplicated, recency+quality-ranked news
