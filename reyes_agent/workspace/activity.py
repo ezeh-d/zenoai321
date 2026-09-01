@@ -177,3 +177,13 @@ class ActivityProjector:
             self._expire()
             return [item.as_dict() for item in sorted(
                 self._records.values(), key=lambda value: (-value.updated_at, -value.revision))]
+
+    def dismiss(self, activity_id: str) -> bool:
+        key = safe_text(activity_id, 80)
+        with self._lock:
+            removed = self._records.pop(key, None)
+            if removed is None:
+                return False
+            self._keys = {item_key: item_id for item_key, item_id in self._keys.items()
+                          if item_id != key}
+            return True

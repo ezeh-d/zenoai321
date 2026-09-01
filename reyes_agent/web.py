@@ -59,6 +59,10 @@ async def _lifespan(_application: FastAPI):
 
 app = FastAPI(title=config.ASSISTANT_NAME, lifespan=_lifespan)
 
+from reyes_agent.workspace.api import create_router as _create_workspace_router
+
+app.include_router(_create_workspace_router())
+
 # --- remote access (optional, off unless configured) ---------------------
 # CORS did not exist anywhere in this app before now, which was fine while
 # the phone page was same-origin. The planned split -- app.zenoassitant.com
@@ -1256,6 +1260,13 @@ def _open_turn(message: str, requested_id: str = "", *, kind: str = "typed") -> 
         if kind == "typed":
             latency.mark(turn_id, "stt_final")
         conversation_state.enter("UNDERSTANDING", source="web", turn_id=turn_id)
+        try:
+            from reyes_agent.workspace import get_workspace_service
+
+            get_workspace_service(start=True).route_request(
+                message, correlation_id=turn_id, source_surface="desktop")
+        except Exception:  # noqa: BLE001 -- presentation never blocks a conversation
+            pass
         return turn_id
     except Exception:  # noqa: BLE001 -- diagnostics never block a conversation
         return requested_id or ""
@@ -2403,6 +2414,13 @@ def mini_status() -> dict[str, Any]:
         live_desktop = live_desktop_node.status()
     except Exception:
         live_desktop = {"active": False, "session_id": "", "mode": ""}
+    try:
+        from reyes_agent.workspace import get_workspace_service
+
+        workspace = get_workspace_service().mini_snapshot()
+    except Exception:  # noqa: BLE001 -- compact projection is best effort
+        workspace = {"revision": 0, "activity": None, "active_count": 0,
+                     "primary_panel": ""}
     return {
         "task": task,
         "queue_depth": workers.get("queue_depth", 0),
@@ -2411,6 +2429,7 @@ def mini_status() -> dict[str, Any]:
         "summoned_agents": summoned_agents,
         "workflow": workflow,
         "live_desktop": live_desktop,
+        "workspace": workspace,
     }
 
 

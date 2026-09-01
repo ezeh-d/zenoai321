@@ -12,6 +12,7 @@ from reyes_agent.workspace.history import HistoryProjector
 from reyes_agent.workspace.intent_router import PanelIntentRouter
 from reyes_agent.workspace.manager import RevisionClock, WorkspaceManager
 from reyes_agent.workspace.models import PresentationMode, PresentationPlan
+from reyes_agent.workspace.search import WorkspaceSearch
 from reyes_agent.workspace.tool_health import ToolHealthManager
 
 
@@ -27,6 +28,11 @@ class WorkspaceService:
         self.activities = ActivityProjector(self.revisions)
         self.history = HistoryProjector(self.revisions)
         self.health = ToolHealthManager(revisions=self.revisions)
+        self.search = WorkspaceSearch(
+            panels=self.panels,
+            commands=self.commands,
+            history_provider=lambda: self.history.snapshot(limit=100),
+        )
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._feed: Any = None
@@ -110,6 +116,41 @@ class WorkspaceService:
             "history": self.history.snapshot(),
             "health": self.health.snapshot(),
         }
+
+    def mini_snapshot(self) -> dict[str, Any]:
+        activities = self.activities.snapshot()
+        panels = self.manager.get_active_panels()
+        return {
+            "revision": self.revisions.current(),
+            "activity": activities[0] if activities else None,
+            "active_count": len(activities),
+            "primary_panel": panels[0].panel_id if panels else "",
+        }
+
+    def panel_action(self, panel_id: str, action: str,
+                     context: dict[str, Any] | None = None,
+                     correlation_id: str = "", position: str = "") -> dict[str, Any]:
+        operations = {
+            "show": lambda: self.manager.show_panel(
+                panel_id, context, correlation_id=correlation_id),
+            "hide": lambda: self.manager.hide_panel(panel_id),
+            "toggle": lambda: self.manager.toggle_panel(panel_id),
+            "minimize": lambda: self.manager.minimize_panel(panel_id),
+            "expand": lambda: self.manager.expand_panel(panel_id),
+            "focus": lambda: self.manager.focus_panel(panel_id),
+            "dock": lambda: self.manager.dock_panel(panel_id, position),
+            "close": lambda: self.manager.close_panel(panel_id),
+        }
+        operation = operations.get(str(action or "").casefold())
+        if operation is None:
+            raise ValueError("unsupported panel action")
+        record = operation()
+        if record is None:
+            raise KeyError(f"unknown or inactive panel '{panel_id}'")
+        return record.as_dict()
+
+    def dismiss_activity(self, activity_id: str) -> bool:
+        return self.activities.dismiss(activity_id)
 
     def _consume_loop(self) -> None:
         while not self._stop.is_set():
