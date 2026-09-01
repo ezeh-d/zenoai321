@@ -130,4 +130,3 @@ def create_router(*, service: Any = None) -> APIRouter:
                 "search_health": current_service().search.health()}
 
     return router
-

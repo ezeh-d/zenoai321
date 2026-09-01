@@ -77,4 +77,3 @@ def test_search_never_indexes_file_contents_secret_history_or_locations() -> Non
     assert any(row["kind"] == "action" and row["action"] == "start_file_search"
                for row in file_rows)
     assert "path" not in search.health()["sources"]
-

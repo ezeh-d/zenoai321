@@ -195,4 +195,3 @@ class WorkspaceSearch:
             "sources": ["panels", "commands", "tools", "agents", "settings", "history"],
             "documents": sum(self._counts.values()),
         }
-
