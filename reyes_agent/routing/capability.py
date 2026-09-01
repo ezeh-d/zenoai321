@@ -82,6 +82,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
               "read_document", "content_open", "content_inspect", "content_context",
               "study_document", "study_ask", "study_status", "study_report",
               "study_weak_areas", "concept_prerequisites", "content_tables",
+              "content_convert",
               "open_path", "move_file"),
     "files_destructive": ("delete_file",),
     "coding": ("write_project_file", "read_file", "list_project_files",

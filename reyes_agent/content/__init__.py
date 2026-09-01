@@ -25,6 +25,10 @@ from reyes_agent.content.save import (
 from reyes_agent.content.tables import (
     Table, extract_tables, save_table, to_csv, to_json, to_markdown,
 )
+# Import only the helper by name; keep the `convert` MODULE unshadowed so
+# `reyes_agent.content.convert` stays importable as a module (callers use
+# reyes_agent.content.convert.convert(...)).
+from reyes_agent.content.convert import available_conversions
 
 __all__ = [
     "ContentResult", "UniversalContentEngine", "get_engine",
@@ -33,4 +37,5 @@ __all__ = [
     "VersionManager", "get_version_manager",
     "write_verified", "verify_write", "classify_save_intent",
     "Table", "extract_tables", "save_table", "to_csv", "to_json", "to_markdown",
+    "available_conversions",
 ]

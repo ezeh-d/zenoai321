@@ -197,3 +197,27 @@ def content_tables(target: str, index: int = 0, format: str = "",
                   "tables": [{"location": t["location"], "row_count": t["row_count"],
                               "col_count": t["col_count"], "headers": t["headers"][:12],
                               "preview": t["rows"][:5]} for t in items]})
+
+
+@register(
+    name="content_convert",
+    description=(
+        "Convert a file to another format (the target format comes from the "
+        "destination's extension). Handles CSV<->XLSX, image->PDF, text/Markdown"
+        "->DOCX, DOCX->text, Markdown->HTML directly, and Office->PDF via headless "
+        "LibreOffice when installed. Verifies the result and reports honestly if a "
+        "conversion pair isn't supported or a tool is missing -- it never fakes a "
+        "converted file. Use for 'turn this into a PDF', 'convert to CSV', 'make "
+        "this a Word doc'."
+    ),
+    input_schema={"type": "object", "properties": {
+        "target": {"type": "string", "description": "Source file path or reference."},
+        "dest": {"type": "string", "description": "Destination path incl. the new extension (e.g. report.pdf)."},
+    }, "required": ["target", "dest"]},
+)
+def content_convert(target: str, dest: str) -> str:
+    from reyes_agent.content import convert as convert_mod
+    path = _resolve(target)
+    if not path:
+        return _json({"ok": False, "error": f"couldn't resolve '{target}'"})
+    return _json(convert_mod.convert(path, dest))
