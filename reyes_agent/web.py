@@ -34,7 +34,8 @@ from typing import Any
 
 from fastapi import (Body, Cookie, Depends, FastAPI, File, Form, HTTPException, Request,
                      UploadFile, WebSocket, WebSocketDisconnect)
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse,
+                               Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -739,6 +740,69 @@ def media_art(app_id: str = "") -> Response:
         raise HTTPException(404, f"art unavailable: {exc}") from exc
     return Response(content=data, media_type=mime,
                     headers={"Cache-Control": "max-age=30"})
+
+
+# --- Spotify account linking (OAuth PKCE, one click) ---------------------
+@app.get("/api/media/spotify/status")
+def spotify_status() -> dict[str, Any]:
+    """Whether Spotify is configured (a client id is set) and connected."""
+    from reyes_agent.media.spotify import get_spotify_client
+
+    return get_spotify_client().status()
+
+
+@app.get("/api/media/spotify/connect")
+def spotify_connect():
+    """Start the PKCE flow and bounce the browser to Spotify's consent page.
+    One click: open this route and approve; the callback finishes linking."""
+    from reyes_agent.media.spotify import get_spotify_client
+
+    res = get_spotify_client().begin_auth()
+    if not res.get("ok"):
+        # No client id yet -> a short page telling the owner what to set.
+        html = (
+            "<!doctype html><meta charset='utf-8'>"
+            "<style>body{font:15px system-ui;background:#08121a;color:#dff6ff;"
+            "padding:40px;max-width:640px;margin:auto}code{color:#40c4ff}</style>"
+            "<h2>Spotify isn't configured yet</h2>"
+            f"<p>{res.get('detail','')}</p>"
+            "<p>Create an app at "
+            "<code>developer.spotify.com/dashboard</code>, add the redirect URI "
+            "<code>http://127.0.0.1:8765/api/media/spotify/callback</code>, then "
+            "set <code>SPOTIFY_CLIENT_ID</code> in your .env and restart.</p>"
+            "<p>No client secret is needed (PKCE).</p>")
+        return Response(content=html, media_type="text/html", status_code=400)
+    return RedirectResponse(res["authorize_url"], status_code=302)
+
+
+@app.get("/api/media/spotify/callback")
+def spotify_callback(code: str = "", state: str = "", error: str = "") -> Response:
+    """Spotify redirects here after the owner approves. Exchanges the code for
+    tokens (cached outside the repo) and shows a small done page."""
+    from reyes_agent.media.spotify import get_spotify_client
+
+    def _page(title: str, msg: str, ok: bool) -> Response:
+        color = "#39d98a" if ok else "#ff6b6b"
+        html = (
+            "<!doctype html><meta charset='utf-8'>"
+            "<style>body{font:15px system-ui;background:#08121a;color:#dff6ff;"
+            "padding:40px;max-width:560px;margin:auto;text-align:center}"
+            f"h2{{color:{color}}}</style>"
+            f"<h2>{title}</h2><p>{msg}</p>"
+            "<p style='opacity:.6'>You can close this tab and return to ZENO.</p>"
+            "<script>setTimeout(()=>window.close(),2500)</script>")
+        return Response(content=html, media_type="text/html",
+                        status_code=200 if ok else 400)
+
+    if error:
+        return _page("Spotify link cancelled", f"Spotify returned: {error}", False)
+    if not code:
+        return _page("Missing authorization code", "No code was returned.", False)
+    res = get_spotify_client().complete_auth(code, state or None)
+    if res.get("ok"):
+        return _page("Spotify connected ✓",
+                     "ZENO can now search and play songs by name.", True)
+    return _page("Couldn't finish linking", res.get("detail", "Unknown error."), False)
 
 
 @app.get("/api/voices/diagnose")

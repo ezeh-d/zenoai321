@@ -343,6 +343,47 @@ def test_snapshot_degrades_when_gsmtc_unavailable(monkeypatch):
     assert snaps == [] and current is None
 
 
+# --- Spotify PKCE client (network mocked) ----------------------------------
+def test_spotify_begin_auth_builds_a_pkce_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "abc123")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))     # isolate token cache
+    from reyes_agent.media.spotify import SpotifyClient
+    c = SpotifyClient()
+    assert c.available() is True and c.connected() is False
+    res = c.begin_auth()
+    assert res["ok"]
+    url = res["authorize_url"]
+    assert "code_challenge_method=S256" in url and "code_challenge=" in url
+    assert "client_id=abc123" in url and "response_type=code" in url
+    assert "code_challenge=abc123" not in url              # challenge != verifier
+
+
+def test_spotify_complete_auth_stores_and_connects(monkeypatch, tmp_path):
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "abc123")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    from reyes_agent.media.spotify import SpotifyClient
+    c = SpotifyClient()
+    c.begin_auth()                                         # sets the verifier
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"access_token": "tok", "expires_in": 3600, "refresh_token": "ref"}
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: FakeResp())
+    res = c.complete_auth("thecode", None)
+    assert res["ok"] and c.connected() is True
+
+
+def test_spotify_ops_guarded_until_connected(monkeypatch, tmp_path):
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "abc123")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    from reyes_agent.media.spotify import SpotifyClient
+    c = SpotifyClient()
+    r = c.play_query("some song")
+    assert r["ok"] is False and "connect" in r["detail"].lower()
+
+
 def test_volume_nudge_is_relative_to_current_level(monkeypatch):
     mgr = M.MediaManager()
     monkeypatch.setattr(mgr._audio, "get_master_volume", lambda: 0.40)

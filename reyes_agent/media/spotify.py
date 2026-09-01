@@ -36,7 +36,10 @@ from typing import Any
 _AUTH_BASE = "https://accounts.spotify.com/authorize"
 _TOKEN_URL = "https://accounts.spotify.com/api/token"
 _API = "https://api.spotify.com/v1"
-_DEFAULT_REDIRECT = "http://127.0.0.1:8766/callback"
+# The desktop web surface (web.py) binds 127.0.0.1:8765 and hosts the callback
+# route, so linking is one click with no extra server. Register this EXACT URI
+# in the Spotify app dashboard.
+_DEFAULT_REDIRECT = "http://127.0.0.1:8765/api/media/spotify/callback"
 _DEFAULT_SCOPES = ("user-read-playback-state user-modify-playback-state "
                    "user-read-currently-playing")
 
