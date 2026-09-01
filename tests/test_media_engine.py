@@ -114,6 +114,7 @@ def two_sessions(monkeypatch):
              _snap("chrome.exe", status="paused", title="Video", artist="")]
     monkeypatch.setattr(S, "snapshot_sessions", lambda: (snaps, "Spotify.exe"))
     monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S, "fetch_album_art", lambda *a, **k: "")  # no real GSMTC
     return snaps
 
 
@@ -152,6 +153,7 @@ def test_transport_command_dispatches_and_emits(monkeypatch):
     snaps = [_snap("Spotify.exe", status="playing")]
     monkeypatch.setattr(S, "snapshot_sessions", lambda: (snaps, "Spotify.exe"))
     monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S, "fetch_album_art", lambda *a, **k: "")
     calls = {}
 
     def fake_control(verb, *, app_id=None, position_s=0.0):
@@ -258,3 +260,66 @@ def test_live_watcher_refcount_starts_and_stops_poller(monkeypatch):
     assert mgr._poll_thread is not None      # one watcher still holds it
     mgr.remove_live_watcher()
     assert mgr._poll_refs == 0               # last watcher gone -> poller released
+
+
+# --- resilience: the media-key safety net + degradation --------------------
+def test_windows_adapter_uses_gsmtc_when_it_succeeds(monkeypatch):
+    from reyes_agent.media.adapters import WindowsMediaAdapter
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S, "control_session", lambda *a, **k: True)
+    a = WindowsMediaAdapter()
+    monkeypatch.setattr(a, "_media_key_fallback",
+                        lambda verb: {"ok": False, "detail": "must not be called"})
+    res = a.command("pause", app_id="Spotify.exe")
+    assert res["ok"] and res["method"] == "gsmtc"
+
+
+def test_windows_adapter_falls_back_to_media_keys_when_gsmtc_rejects(monkeypatch):
+    from reyes_agent.media.adapters import WindowsMediaAdapter
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S, "control_session", lambda *a, **k: False)   # OS said no
+    a = WindowsMediaAdapter()
+    called = {}
+
+    def fake_fb(verb):
+        called["verb"] = verb
+        return {"ok": True, "detail": "media key", "method": "media_key"}
+    monkeypatch.setattr(a, "_media_key_fallback", fake_fb)
+    res = a.command("pause", app_id="Spotify.exe")
+    assert called["verb"] == "pause" and res["ok"]
+
+
+def test_windows_adapter_uses_media_keys_when_gsmtc_absent(monkeypatch):
+    from reyes_agent.media.adapters import WindowsMediaAdapter
+    monkeypatch.setattr(S, "available", lambda: False)   # no winsdk at all
+    a = WindowsMediaAdapter()
+    called = {}
+
+    def fake_fb(verb):
+        called["verb"] = verb
+        return {"ok": True}
+    monkeypatch.setattr(a, "_media_key_fallback", fake_fb)
+    a.command("next")
+    assert called["verb"] == "next"
+
+
+def test_seek_has_no_media_key_and_degrades(monkeypatch):
+    from reyes_agent.media.adapters import WindowsMediaAdapter
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S, "control_session", lambda *a, **k: False)
+    res = WindowsMediaAdapter().command("seek", position_s=30)
+    assert res["ok"] is False           # nothing accepted it; no key for seek
+
+
+def test_app_volume_without_pycaw_degrades(monkeypatch):
+    from reyes_agent.media.adapters import SystemAudioAdapter
+    a = SystemAudioAdapter()
+    monkeypatch.setattr(a, "available", lambda: False)
+    res = a.set_app_volume("Spotify.exe", 0.5)
+    assert res["ok"] is False and "pycaw" in res["detail"]
+
+
+def test_snapshot_degrades_when_gsmtc_unavailable(monkeypatch):
+    monkeypatch.setattr(S, "available", lambda: False)
+    snaps, current = S.snapshot_sessions()
+    assert snaps == [] and current is None
