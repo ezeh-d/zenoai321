@@ -25,26 +25,106 @@ class TTSError(Exception):
     """Raised when speech can't be synthesized or played."""
 
 
-def speak(text: str, stop_event: threading.Event) -> None:
-    text = text.strip()
+# Per-backend capability matrix. A caller (and graceful degradation) can ask
+# what a backend actually supports rather than assuming parity.
+_CAPABILITIES: dict[str, dict[str, bool]] = {
+    "sapi": {"streaming": False, "prosody": True, "rate": True, "pitch": True,
+             "volume": True, "emotion": False, "voice_selection": True,
+             "cancellation": True},
+    "piper": {"streaming": True, "prosody": True, "rate": True, "pitch": False,
+              "volume": False, "emotion": False, "voice_selection": True,
+              "cancellation": True},
+    "elevenlabs": {"streaming": True, "prosody": True, "rate": True,
+                   "pitch": False, "volume": False, "emotion": True,
+                   "voice_selection": True, "cancellation": True},
+}
+_NO_CAPS = {k: False for k in
+            ("streaming", "prosody", "rate", "pitch", "volume", "emotion",
+             "voice_selection", "cancellation")}
+
+
+def capabilities(provider: str | None = None) -> dict[str, bool]:
+    """What the TTS backend can actually do -- so features degrade gracefully
+    instead of crashing or pretending."""
+    return dict(_CAPABILITIES.get(provider or config.TTS_PROVIDER, _NO_CAPS))
+
+
+def speak(text: str, stop_event: threading.Event, *,
+          delivery: dict | None = None) -> None:
+    """Speak `text` on this machine, interruptibly. The text is first made
+    speakable (no raw markdown/URLs/code) and spoken sentence-by-sentence so
+    the first clause is heard fast; `delivery` (from conversation.delivery.
+    delivery_for) applies subtle prosody where the backend supports it."""
+    from reyes_agent.voice.speech_prep import prepare_for_speech
+
+    text = prepare_for_speech(text).strip()
     if not text:
         return
-    if config.TTS_PROVIDER == "sapi":
-        _speak_sapi(text, stop_event)
-    elif config.TTS_PROVIDER == "elevenlabs":
+    for clause in _clauses(text):
+        if stop_event.is_set():
+            return
+        _speak_one(clause, stop_event, delivery)
+
+
+def speak_stream(text_iter, stop_event: threading.Event, *,
+                 delivery: dict | None = None) -> None:
+    """Speak a GROWING text stream (LLM tokens) clause-by-clause: TTS starts on
+    sentence 1 while later sentences are still arriving. Honors stop_event
+    between and within clauses (barge-in)."""
+    from reyes_agent.conversation.delivery import SentenceStreamer
+    from reyes_agent.voice.speech_prep import prepare_for_speech
+
+    streamer = SentenceStreamer()
+
+    def say(raw: str) -> bool:
+        clause = prepare_for_speech(raw).strip()
+        if clause and not stop_event.is_set():
+            _speak_one(clause, stop_event, delivery)
+        return not stop_event.is_set()
+
+    try:
+        for delta in text_iter:
+            if stop_event.is_set():
+                return
+            for clause in streamer.feed(str(delta or "")):
+                if not say(clause):
+                    return
+        say(streamer.flush())
+    except Exception as exc:  # noqa: BLE001
+        raise TTSError(str(exc)) from exc
+
+
+def _clauses(text: str) -> list[str]:
+    """Split a full reply into speakable clauses (low time-to-first-audio)."""
+    try:
+        from reyes_agent.conversation.delivery import SentenceStreamer
+        streamer = SentenceStreamer()
+        out = streamer.feed(text)
+        tail = streamer.flush()
+        if tail:
+            out.append(tail)
+        return out or [text]
+    except Exception:  # noqa: BLE001
+        return [text]
+
+
+def _speak_one(text: str, stop_event: threading.Event,
+               delivery: dict | None = None) -> None:
+    """One clause through the configured backend, with SAPI as the final
+    fallback so a provider failure never makes ZENO mute."""
+    provider = config.TTS_PROVIDER
+    if provider == "sapi":
+        _speak_sapi(text, stop_event, delivery)
+    elif provider == "elevenlabs":
         try:
-            _speak_elevenlabs(text, stop_event)
+            _speak_elevenlabs(text, stop_event, delivery)
         except TTSError:
-            # Provider failure must not make ZENO mute. Heavy local engines
-            # remain lazy and SAPI is the final proven Windows fallback.
             from reyes_agent.voice.tts_router import speak_fallback
             speak_fallback(text, stop_event)
-    elif config.TTS_PROVIDER == "piper":
+    elif provider == "piper":
         try:
-            _speak_piper(text, stop_event)
+            _speak_piper(text, stop_event, delivery)
         except TTSError:
-            # Same rule: a missing model or a load failure must not silence
-            # ZENO. SAPI is always there.
             from reyes_agent.voice.tts_router import speak_fallback
             speak_fallback(text, stop_event)
     else:
@@ -72,9 +152,20 @@ def _get_sapi_voice():
     return _sapi_voice
 
 
-def _speak_sapi(text: str, stop_event: threading.Event) -> None:
+def _speak_sapi(text: str, stop_event: threading.Event,
+                delivery: dict | None = None) -> None:
     voice = _get_sapi_voice()
+    prev_rate = None
     try:
+        if delivery:
+            # SAPI Rate is -10..10; keep the mapping SUBTLE (rate 0.9-1.1 ->
+            # about -2..+2). Restored afterwards so it never drifts.
+            try:
+                prev_rate = voice.Rate
+                voice.Rate = max(-3, min(3, int(round(
+                    (float(delivery.get("rate", 1.0)) - 1.0) * 20))))
+            except Exception:  # noqa: BLE001
+                prev_rate = None
         voice.Speak(text, _SVSFlagsAsync)
         # WaitUntilDone(ms) returns False while still speaking -- poll it
         # instead of Status.RunningState, which can read stale immediately
@@ -85,6 +176,12 @@ def _speak_sapi(text: str, stop_event: threading.Event) -> None:
                 break
     except Exception as exc:  # noqa: BLE001
         raise TTSError(str(exc)) from exc
+    finally:
+        if prev_rate is not None:
+            try:
+                voice.Rate = prev_rate
+            except Exception:  # noqa: BLE001
+                pass
 
 
 # --- ElevenLabs ------------------------------------------------------------
@@ -172,7 +269,25 @@ def piper_ready() -> bool:
                 and find_spec("piper") is not None)
 
 
-def _speak_piper(text: str, stop_event: threading.Event) -> None:
+def _piper_synthesize(voice, text: str, delivery: dict | None):
+    """Iterate synthesis chunks, applying rate via length_scale when this Piper
+    build supports it (higher rate -> shorter length_scale -> faster). Degrades
+    to plain synthesis on any older/lacking API."""
+    if delivery:
+        try:
+            rate = max(0.5, min(2.0, float(delivery.get("rate", 1.0))))
+            length_scale = round(1.0 / rate, 3)
+            if abs(length_scale - 1.0) > 0.01:
+                from piper import SynthesisConfig
+                return voice.synthesize(
+                    text, syn_config=SynthesisConfig(length_scale=length_scale))
+        except Exception:  # noqa: BLE001 -- unsupported here; plain synthesis
+            pass
+    return voice.synthesize(text)
+
+
+def _speak_piper(text: str, stop_event: threading.Event,
+                 delivery: dict | None = None) -> None:
     """Synthesise locally and stream to the speakers, stoppable mid-sentence."""
     import sounddevice as sd
 
@@ -181,7 +296,7 @@ def _speak_piper(text: str, stop_event: threading.Event) -> None:
     out = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16")
     out.start()
     try:
-        for chunk in voice.synthesize(text):
+        for chunk in _piper_synthesize(voice, text, delivery):
             if stop_event.is_set():
                 break
             data = getattr(chunk, "audio_int16_bytes", None)
@@ -211,17 +326,24 @@ def synthesize_wav_bytes(text: str) -> bytes:
     return buf.getvalue()
 
 
-def _speak_elevenlabs(text: str, stop_event: threading.Event) -> None:
+def _speak_elevenlabs(text: str, stop_event: threading.Event,
+                      delivery: dict | None = None) -> None:
     import sounddevice as sd
 
     client = _get_elevenlabs_client()
+    stream_kwargs: dict = dict(
+        voice_id=config.ELEVENLABS_VOICE_ID, text=text,
+        model_id=config.ELEVENLABS_MODEL, output_format="pcm_24000")
+    if delivery:
+        try:
+            # `speed` is a documented ElevenLabs voice setting; if the chosen
+            # model rejects it the outer except degrades to the SAPI fallback.
+            stream_kwargs["voice_settings"] = {
+                "speed": max(0.7, min(1.2, float(delivery.get("rate", 1.0))))}
+        except Exception:  # noqa: BLE001
+            stream_kwargs.pop("voice_settings", None)
     try:
-        audio_stream = client.text_to_speech.stream(
-            voice_id=config.ELEVENLABS_VOICE_ID,
-            text=text,
-            model_id=config.ELEVENLABS_MODEL,
-            output_format="pcm_24000",
-        )
+        audio_stream = client.text_to_speech.stream(**stream_kwargs)
         out = sd.RawOutputStream(samplerate=_EL_SAMPLE_RATE, channels=1, dtype="int16")
         out.start()
         try:

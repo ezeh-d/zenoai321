@@ -274,7 +274,8 @@ _speech_lock = threading.Lock()
 _playback_stop = threading.Event()
 
 
-def _speak_now(text: str, agent: str, stop_event: threading.Event) -> None:
+def _speak_now(text: str, agent: str, stop_event: threading.Event,
+               delivery: dict | None = None) -> None:
     """Server-side playback in the agent's voice.
 
     Streams PCM straight to sounddevice, mirroring the proven
@@ -282,20 +283,31 @@ def _speak_now(text: str, agent: str, stop_event: threading.Event) -> None:
     `synthesize()` can't be used here because nothing in this environment
     decodes MP3 to PCM, and sounddevice needs PCM. So: the browser/HTTP
     path gets caching (that's where repeated lines actually happen), and
-    this path gets the per-agent voice without it.
+    this path gets the per-agent voice without it. Text is made speakable
+    (no raw markdown/URLs) and `delivery` adds subtle speed where supported.
     """
     import sounddevice as sd
 
+    from reyes_agent.voice.speech_prep import prepare_for_speech
     from reyes_agent.voice.tts import _EL_SAMPLE_RATE, _get_elevenlabs_client
 
+    text = prepare_for_speech(text).strip()
+    if not text:
+        return
     profile = get_profile(agent)
     client = _get_elevenlabs_client()
+    settings = {"stability": profile.stability, "similarity_boost": profile.similarity}
+    if delivery:
+        try:
+            settings["speed"] = max(0.7, min(1.2, float(delivery.get("rate", 1.0))))
+        except Exception:  # noqa: BLE001
+            pass
     stream = client.text_to_speech.stream(
         voice_id=profile.voice_id,
         text=text,
         model_id=config.ELEVENLABS_MODEL,
         output_format="pcm_24000",
-        voice_settings={"stability": profile.stability, "similarity_boost": profile.similarity},
+        voice_settings=settings,
     )
     out = sd.RawOutputStream(samplerate=_EL_SAMPLE_RATE, channels=1, dtype="int16")
     out.start()
@@ -336,7 +348,7 @@ def _run_queue() -> None:
         if item is None:
             _speech_q.task_done()
             break
-        kind, payload, agent = item
+        kind, payload, agent, delivery = item
         try:
             # A queued, later response begins only after any barge-in stopped
             # the previous item and the queue was drained.
@@ -352,7 +364,7 @@ def _run_queue() -> None:
             if kind == "cached":
                 _play_cached_now(payload, _playback_stop)
             else:
-                _speak_now(payload, agent, _playback_stop)
+                _speak_now(payload, agent, _playback_stop, delivery)
         except Exception:  # noqa: BLE001
             pass
         finally:
@@ -367,7 +379,8 @@ def _run_queue() -> None:
             _speech_q.task_done()
 
 
-def speak_queued(text: str, agent: str = "zeno") -> None:
+def speak_queued(text: str, agent: str = "zeno", *,
+                 delivery: dict | None = None) -> None:
     global _worker
     if not text:
         return
@@ -376,7 +389,7 @@ def speak_queued(text: str, agent: str = "zeno") -> None:
             _worker = threading.Thread(target=_run_queue, daemon=True, name="zeno-speech")
             _worker.start()
         try:
-            _speech_q.put_nowait(("text", text, agent))
+            _speech_q.put_nowait(("text", text, agent, delivery))
         except queue.Full:
             # Live announcements are disposable under pressure; the durable notice
             # remains visible in the panel and the UI must stay responsive.
@@ -393,7 +406,7 @@ def speak_cached_queued(audio: bytes, agent: str = "zeno") -> None:
             _worker = threading.Thread(target=_run_queue, daemon=True, name="zeno-speech")
             _worker.start()
         try:
-            _speech_q.put_nowait(("cached", bytes(audio), agent))
+            _speech_q.put_nowait(("cached", bytes(audio), agent, None))
         except queue.Full:
             return
 
