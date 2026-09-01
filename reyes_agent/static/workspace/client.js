@@ -4,7 +4,6 @@ function clone(value) {
   if (typeof structuredClone === 'function') return structuredClone(value);
   return JSON.parse(JSON.stringify(value ?? {}));
 }
-
 function upsert(rows, record, key) {
   const current = Array.isArray(rows) ? rows.slice() : [];
   const value = record?.[key];
@@ -73,4 +72,3 @@ export class WorkspaceRevisionBuffer {
     return true;
   }
 }
-

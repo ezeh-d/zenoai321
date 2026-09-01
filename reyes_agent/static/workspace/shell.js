@@ -6,7 +6,6 @@ function element(documentRef, tag, className = '', text = '') {
   if (text) node.textContent = text;
   return node;
 }
-
 function stateLabel(value) {
   return String(value || '').replaceAll('_', ' ').toLowerCase();
 }
@@ -268,4 +267,3 @@ export function createWorkspaceShell({ fetchImpl = globalThis.fetch?.bind(global
 
   return { hydrate, consumeEvent, panelAction, search, executeSearchResult, dispose };
 }
-
