@@ -634,6 +634,113 @@ def rollcall(full: bool = False) -> list[dict[str, Any]]:
     return voice_manager.roll_call_sequence(full=full)
 
 
+# --- Universal Media Intelligence: live panel + real-time stream ---------
+class MediaCommandRequest(BaseModel):
+    action: str
+    reference: str | None = None
+    level: float | None = None
+    position_s: float | None = None
+    query: str | None = None
+
+
+@app.get("/api/media/panel")
+def media_panel_state() -> dict[str, Any]:
+    """The live media panel: active session (art/title/artist/progress), every
+    known source, and the compact mini-card for the corner widget."""
+    from reyes_agent.media import get_media_manager
+
+    st = get_media_manager().state(with_art=True)
+    return {"ok": True, **st.to_dict()}
+
+
+@app.post("/api/media/command")
+def media_do(req: MediaCommandRequest) -> dict[str, Any]:
+    """Drive playback from the UI -- play/pause/next/previous/seek/volume/
+    status. Closes the loop: UI -> OS -> state -> event -> UI."""
+    from reyes_agent.media import get_media_manager
+
+    return get_media_manager().command(
+        req.action, reference=req.reference, level=req.level,
+        position_s=req.position_s, query=req.query)
+
+
+@app.get("/api/media/stream")
+def media_stream() -> StreamingResponse:
+    """Server-sent media events -- the panel updates the instant playback
+    changes (including a track changed inside Spotify itself), no polling on
+    the client. Emits an initial snapshot, then live events; a lightweight
+    server poller runs only while at least one client is connected."""
+    import queue as _queue
+
+    from reyes_agent.media import get_media_manager
+    from reyes_agent.media.events import get_event_bus
+
+    mgr = get_media_manager()
+    q: _queue.Queue = _queue.Queue(maxsize=64)
+
+    def _sink(evt) -> None:
+        try:
+            q.put_nowait(evt.to_dict())
+        except _queue.Full:
+            pass
+
+    off = get_event_bus().subscribe(_sink)
+    mgr.add_live_watcher()
+
+    def gen():
+        try:
+            yield (f"data: {json.dumps({'type': 'state', 'payload': mgr.state(with_art=True).to_dict()})}\n\n")
+            while True:
+                try:
+                    item = q.get(timeout=15.0)
+                    yield f"data: {json.dumps(item)}\n\n"
+                except _queue.Empty:
+                    yield ": keep-alive\n\n"
+        finally:
+            off()
+            mgr.remove_live_watcher()
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/media/art")
+def media_art(app_id: str = "") -> Response:
+    """Serve a session's cached album art (the panel can't load a local path).
+
+    Defaults to the active session. 404 when there's no art (the client then
+    shows a placeholder)."""
+    import os as _os
+
+    from reyes_agent.media import get_media_manager
+    from reyes_agent.media import sessions as _ms
+
+    st = get_media_manager().state()
+    target = None
+    for s in st.sessions:
+        if (app_id and s.get("app_id") == app_id) or (not app_id and s is (st.active)):
+            target = s
+            break
+    if target is None:
+        target = st.active
+    if not target:
+        raise HTTPException(404, "no media session")
+    path = _ms.fetch_album_art(target.get("app_id", ""), target.get("title", ""),
+                               target.get("artist", ""))
+    if not path or not _os.path.exists(path):
+        raise HTTPException(404, "no album art")
+    ext = _os.path.splitext(path)[1].lower()
+    mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".webp": "image/webp", ".gif": "image/gif"}.get(ext, "application/octet-stream")
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError as exc:
+        raise HTTPException(404, f"art unavailable: {exc}") from exc
+    return Response(content=data, media_type=mime,
+                    headers={"Cache-Control": "max-age=30"})
+
+
 @app.get("/api/voices/diagnose")
 def voices_diagnose() -> dict[str, Any]:
     """Voice diagnostics, including a real check that each configured id

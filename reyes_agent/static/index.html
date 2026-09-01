@@ -5616,5 +5616,14 @@ setInterval(() => { const c = document.getElementById('ultron-clock');
     new Date().toLocaleDateString(); }, 1000);
 </script>
 
+<!-- Live media mini-card: what's playing + controls, real-time via SSE.
+     Isolated module so a load failure can't affect the rest of the HUD. -->
+<script type="module">
+  try {
+    const { initMediaPanel } = await import("/static/media_panel.js?v=1");
+    initMediaPanel();
+  } catch (_e) { /* media panel is optional; never block the HUD */ }
+</script>
+
 </body>
 </html>

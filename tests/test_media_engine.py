@@ -221,3 +221,40 @@ def test_speak_duck_gate_off_is_a_noop(monkeypatch):
     assert duck_for_speech() is False
     assert ac.duck_depth() == 0
     os.environ["ZENO_DUCK_ON_SPEAK"] = "1"   # restore for other tests
+
+
+# --- live poller (external changes -> events) ------------------------------
+def test_poll_tick_emits_only_on_track_change(monkeypatch):
+    box = {"snaps": [_snap("Spotify.exe", title="A")]}
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S, "snapshot_sessions",
+                        lambda: (box["snaps"], "Spotify.exe"))
+    monkeypatch.setattr(S, "fetch_album_art", lambda *a, **k: "")
+
+    mgr = M.MediaManager()
+    events = []
+    mgr._bus.subscribe(lambda e: events.append(e.type))
+
+    assert mgr.poll_tick() is True          # first tick sets the baseline
+    baseline = len(events)
+    assert mgr.poll_tick() is False         # same track -> nothing emitted
+    assert len(events) == baseline
+    box["snaps"] = [_snap("Spotify.exe", title="B")]
+    assert mgr.poll_tick() is True          # track changed -> emit
+    assert E.TRACK_CHANGED in events
+
+
+def test_live_watcher_refcount_starts_and_stops_poller(monkeypatch):
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S, "snapshot_sessions", lambda: ([], None))
+    mgr = M.MediaManager()
+    mgr._poll_interval = 0.05
+    assert mgr._poll_thread is None
+    mgr.add_live_watcher()
+    mgr.add_live_watcher()                  # second watcher, same thread
+    assert mgr._poll_thread is not None and mgr._poll_thread.is_alive()
+    assert mgr.status()["live_watchers"] == 2
+    mgr.remove_live_watcher()
+    assert mgr._poll_thread is not None      # one watcher still holds it
+    mgr.remove_live_watcher()
+    assert mgr._poll_refs == 0               # last watcher gone -> poller released

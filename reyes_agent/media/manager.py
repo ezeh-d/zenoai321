@@ -52,6 +52,12 @@ class MediaManager:
         self._audio = SystemAudioAdapter()
         self._spotify = SpotifyAdapter()
         self._bus = _events.get_event_bus()
+        # live poller (runs only while a UI is watching)
+        self._poll_lock = threading.Lock()
+        self._poll_thread: threading.Thread | None = None
+        self._poll_stop = threading.Event()
+        self._poll_refs = 0
+        self._poll_interval = 1.5
 
     # -- state -------------------------------------------------------------
     def state(self, *, with_art: bool = False) -> _events.MediaPanelState:
@@ -252,6 +258,48 @@ class MediaManager:
                     "target": app_id, "state": st.to_dict()})
         return out
 
+    # -- live polling (external changes -> events, only while watched) -----
+    def poll_tick(self) -> bool:
+        """Snapshot once; emit only if the active track changed. Returns True
+        if it emitted. This is how a track changed *in Spotify itself* reaches
+        the panel without the user touching ZENO."""
+        st = self.state()
+        active = st.active or {}
+        key = f"{active.get('app_id')}|{active.get('title')}|{active.get('artist')}"
+        with self._lock:
+            changed = key != self._last_track_key
+        if not changed:
+            return False
+        st = self.state(with_art=True)   # only fetch art when something changed
+        self._emit_if_changed(st)
+        return True
+
+    def _poll_loop(self) -> None:
+        while not self._poll_stop.wait(self._poll_interval):
+            try:
+                self.poll_tick()
+            except Exception:  # noqa: BLE001 -- polling never crashes the app
+                continue
+
+    def add_live_watcher(self) -> None:
+        """A UI started watching -> ensure the poller runs."""
+        with self._poll_lock:
+            self._poll_refs += 1
+            if self._poll_thread is not None and self._poll_thread.is_alive():
+                return
+            self._poll_stop.clear()
+            self._poll_thread = threading.Thread(
+                target=self._poll_loop, name="zeno-media-poll", daemon=True)
+            self._poll_thread.start()
+
+    def remove_live_watcher(self) -> None:
+        """A UI stopped watching -> stop the poller when the last one leaves."""
+        with self._poll_lock:
+            self._poll_refs = max(0, self._poll_refs - 1)
+            if self._poll_refs == 0:
+                self._poll_stop.set()
+                self._poll_thread = None
+
     def status(self) -> dict[str, Any]:
         return {
             "sessions_available": _sessions.available(),
@@ -259,12 +307,45 @@ class MediaManager:
             "spotify_available": self._spotify.available(),
             "spotify_connected": self._spotify.connected(),
             "subscribers": self._bus.subscriber_count(),
+            "live_watchers": self._poll_refs,
             "last_app_id": self._last_app_id,
         }
 
 
 _manager: MediaManager | None = None
 _manager_lock = threading.Lock()
+_bridge_installed = False
+
+
+def _install_event_bus_bridge(mgr: "MediaManager") -> None:
+    """Forward media events onto the app-wide event_bus so the existing UI
+    consumers (the desktop HUD, the companion web UI) react to media changes
+    through the same pipeline they already use for `agent.speaking` etc.
+
+    Installed only on the shared singleton (not on directly-constructed
+    instances in tests), and fully guarded -- a missing event_bus never
+    breaks media control.
+    """
+    global _bridge_installed
+    if _bridge_installed:
+        return
+    try:
+        from reyes_agent import event_bus
+    except Exception:  # noqa: BLE001
+        return
+
+    def _forward(evt) -> None:
+        try:
+            event_bus.publish(f"media.{evt.type}", evt.payload,
+                              source="media_manager")
+        except Exception:  # noqa: BLE001 -- UI telemetry never breaks playback
+            pass
+
+    try:
+        mgr._bus.subscribe(_forward)
+        _bridge_installed = True
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def get_media_manager() -> MediaManager:
@@ -273,4 +354,5 @@ def get_media_manager() -> MediaManager:
         with _manager_lock:
             if _manager is None:
                 _manager = MediaManager()
+                _install_event_bus_bridge(_manager)
     return _manager
