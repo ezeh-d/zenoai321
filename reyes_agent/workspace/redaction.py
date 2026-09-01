@@ -23,6 +23,9 @@ _SECRET_VALUE = re.compile(
     r"(?:\bbearer\s+[a-z0-9._~+/=-]+|\bsk-(?:proj-)?[a-z0-9_-]{6,})",
     re.IGNORECASE,
 )
+_INLINE_SECRET = re.compile(
+    r"(?i)\b(?:token|secret|password|api[_-]?key|authorization)\s*[:=]\s*\S+"
+)
 _CONTROLS = re.compile(r"[\x00-\x1f\x7f]+")
 _WHITESPACE = re.compile(r"\s+")
 
@@ -38,6 +41,14 @@ def safe_text(value: object, limit: int = 300) -> str:
         text = type(value).__name__
     text = _WHITESPACE.sub(" ", _CONTROLS.sub(" ", text)).strip()
     return text[:maximum]
+
+
+def redact_text(value: object, limit: int = 300) -> str:
+    """Bound text and replace inline credential-like fragments."""
+    text = safe_text(value, min(max(int(limit), 0), 5_000))
+    text = _INLINE_SECRET.sub("[redacted]", text)
+    text = _SECRET_VALUE.sub("[redacted]", text)
+    return text[:max(0, int(limit))]
 
 
 def _denied_key(key: object) -> bool:
