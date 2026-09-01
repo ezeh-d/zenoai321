@@ -104,3 +104,53 @@ def test_activity_view_updates_event_state_without_auto_opening() -> None:
     assert "show()" not in refresh
     assert "overlay.classList.contains('open')" in consume
 
+
+def test_mini_reuses_status_fetch_and_click_requests_current_activity() -> None:
+    mini = (STATIC / "mini.html").read_text(encoding="utf-8")
+
+    assert mini.count("/api/mini-status") == 1
+    assert "/api/workspace/panels/activity/show" in mini
+    assert "workspace.current_activity" in mini
+    assert "source:'mini'" in mini
+
+
+def test_phone_websocket_reconnect_is_single_bounded_and_rehydrates() -> None:
+    phone = (STATIC / "phone.html").read_text(encoding="utf-8")
+    reconnect = phone[phone.index("function connectEvents"):
+                      phone.index("async function enrollBiometric")]
+
+    assert "wsReconnectTimer" in reconnect
+    assert "Math.min(30000" in reconnect
+    assert "refreshAll()" in reconnect
+    assert "if(wsReconnectTimer)" in reconnect
+    assert "wsReconnectAttempts=0" in reconnect
+
+
+def test_owner_activity_prefers_compact_workspace_and_preserves_fallback() -> None:
+    from reyes_agent.remote_access.cloud_api import _owner_activity_entries
+
+    class _Workspace:
+        def phone_snapshot(self):
+            return {"activities": [{
+                "activity_id": "a-1", "category": "files", "status": "RUNNING",
+                "title": "Finding documents", "updated_at": 12.5,
+                "tool_input": {"token": "must-not-appear"},
+            }]}
+
+    fallback_calls = []
+    projected = _owner_activity_entries(
+        10, workspace_service=_Workspace(),
+        fallback=lambda limit: fallback_calls.append(limit) or [{"event": "device"}],
+    )
+    empty = _owner_activity_entries(
+        3, workspace_service=type("Empty", (), {"phone_snapshot": lambda self: {"activities": []}})(),
+        fallback=lambda limit: [{"event": "device", "limit": limit}],
+    )
+
+    assert projected == [{
+        "event": "workspace_files", "summary": "Finding documents",
+        "outcome": "running", "state": "RUNNING", "at": 12.5,
+    }]
+    assert fallback_calls == []
+    assert empty == [{"event": "device", "limit": 3}]
+    assert "must-not-appear" not in repr(projected)

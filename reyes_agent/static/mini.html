@@ -31,22 +31,27 @@ const agentPresence=createAgentPresence({container:document.body,mode:'mini'});
 function applyMiniEyeSettings(settings){if(orb.setEyeTracking)orb.setEyeTracking({enabled:!!settings.cursor_eye_tracking,fps:settings.eye_tracking_fps||'auto',performanceMode:settings.performance_mode||'auto'});}
 fetch('/api/performance-features/settings').then(r=>r.ok?r.json():null).then(data=>{if(data)applyMiniEyeSettings(data.settings||{});}).catch(()=>{});
 function api(){return window.pywebview&&window.pywebview.api;}
-function openDashboard(){
+async function openDashboard(){
   // There must be one capture owner at a time.  The native host publishes a
   // matching lifecycle event, and restores this listener after the dashboard
   // is hidden again.
   stopWakeListener();
+  try{await fetch('/api/workspace/panels/activity/show',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({context:{source:'mini'}})});}catch(_e){}
   const a=api();if(a&&a.show_dashboard)a.show_dashboard();else location.href='/';
 }
+let conversationVisualState='',conversationVisualUntil=0;
+function holdConversationVisual(state,duration=4000){conversationVisualState=state;conversationVisualUntil=Date.now()+duration;orb.setState(state);}
 async function refresh(){
-  try{const data=await(await fetch('/api/mini-status')).json(),task=data.task||{},progress=task.progress||{},workflow=data.workflow||{},mode=workflow.mode||'NORMAL';
+  try{const data=await(await fetch('/api/mini-status')).json(),task=data.task||{},progress=task.progress||{},workflow=data.workflow||{},mode=workflow.mode||'NORMAL',workspace=data.workspace||{},current=workspace.current_activity||null;
     setMiniLiveView(!!data.live_desktop?.active,data.live_desktop?.mode||'');
     const elapsed=task.run_ms?` · ${Math.floor(task.run_ms/1000)}s`:'';
     const agent=data.agents&&data.agents[0]?` · ${data.agents[0]}`:'';
-    const text=task.name?`${task.name} · ${progress.stage||'working'}${elapsed}${agent}`:'ZENO · idle';
+    const text=task.name?`${task.name} · ${progress.stage||'working'}${elapsed}${agent}`:current?`${current.title||'ZENO activity'} · ${String(current.status||'working').toLowerCase()}`:'ZENO · idle';
     document.title=text;
     const stage=String(progress.stage||'').toLowerCase();
-    if(mode==='WORKFLOW_FAILED'||mode==='WORKFLOW_CANCELLED')orb.setState('error');
+    const activityState={PENDING:'acting',RUNNING:'acting',WAITING:'waiting',SUCCEEDED:'success',FAILED:'error',CANCELLED:'waiting'}[String(current?.status||'').toUpperCase()]||'';
+    if(Date.now()<conversationVisualUntil&&conversationVisualState)orb.setState(conversationVisualState);
+    else if(mode==='WORKFLOW_FAILED'||mode==='WORKFLOW_CANCELLED')orb.setState('error');
     else if(mode==='WORKFLOW_COMPLETED')orb.setState('success');
     else if(mode==='WORKFLOW_WAITING_FOR_INPUT'||mode==='WORKFLOW_WAITING_FOR_CONFIRMATION')orb.setState('waiting');
     else if(mode==='WORKFLOW_RUNNING')orb.setState('acting');
@@ -57,6 +62,7 @@ async function refresh(){
     else if(/think|reason|process/.test(stage))orb.setState('thinking');
     else if(/wait|queue/.test(stage)||(!task.name&&data.queue_depth))orb.setState('waiting');
     else if(task.name||data.active_count||data.agents?.length)orb.setState('acting');
+    else if(activityState)orb.setState(activityState);
     else orb.setState('idle');
     // The endpoint is only a late-connection bootstrap. Live transitions
     // below are driven by the Event Bus, not a polling animation.
@@ -78,6 +84,11 @@ if(window.EventSource){
     if(update.type==='wake.detected')void playCachedWakeAck(update);
     if(update.type==='live_desktop.started'||update.type==='live_desktop.connecting')setMiniLiveView(true,update.payload?.mode||'');
     if(update.type==='live_desktop.ended')setMiniLiveView(false);
+    if(update.type==='conversation.state'){
+      const state=String(update.payload?.state||'').toUpperCase();
+      if(state==='SPEAKING'||state==='ADVISORY')holdConversationVisual('speaking');
+      else if(state==='LISTENING')holdConversationVisual('listening');
+    }
     // The dashboard's native close/minimize event is the handoff point for
     // the single microphone stream.  Delay only the reacquire, so the hidden
     // dashboard has time to release its track first; this never shows a new
@@ -100,7 +111,7 @@ function flushMove(){
 document.addEventListener('mousedown',e=>{const a=api();if(!a)return;dragging=true;moved=false;startX=e.screenX;startY=e.screenY;document.body.classList.add('dragging');if(a.begin_orb_drag)a.begin_orb_drag(e.screenX,e.screenY,window.outerWidth||210).catch(()=>{});});
 document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX-startX,dy=e.screenY-startY;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;queuedMove={screenX:e.screenX,screenY:e.screenY};requestAnimationFrame(flushMove);});
 document.addEventListener('mouseup',()=>{if(!dragging)return;dragging=false;document.body.classList.remove('dragging');const a=api();if(a){const end=a.end_orb_drag||a.snap_orb;if(end)Promise.resolve(end.call(a)).catch(()=>{});}});
-document.addEventListener('click',()=>{if(!moved)openDashboard();});
+document.addEventListener('click',()=>{if(!moved)void openDashboard();});
 window.addEventListener('pywebviewready',()=>{const a=api();if(a&&a.restore_orb_position)a.restore_orb_position().catch(()=>{});});
 // One awaited heartbeat per second proves that WebView messages are crossing
 // into the Python host. It is never tied to animation frames and cannot

@@ -2433,7 +2433,7 @@ def mini_status() -> dict[str, Any]:
 
         workspace = get_workspace_service().mini_snapshot()
     except Exception:  # noqa: BLE001 -- compact projection is best effort
-        workspace = {"revision": 0, "activity": None, "active_count": 0,
+        workspace = {"revision": 0, "current_activity": None, "active_count": 0,
                      "primary_panel": ""}
     return {
         "task": task,

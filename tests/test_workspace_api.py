@@ -155,7 +155,7 @@ def test_real_service_exposes_bounded_mini_snapshot() -> None:
     finally:
         service.health.close()
 
-    assert set(compact) == {"revision", "activity", "active_count", "primary_panel"}
+    assert set(compact) == {"revision", "current_activity", "active_count", "primary_panel"}
     assert compact["active_count"] == 0
 
 
@@ -168,10 +168,27 @@ def test_mini_status_includes_workspace_projection(monkeypatch) -> None:
 
     class _Workspace:
         def mini_snapshot(self):
-            return {"revision": 4, "activity": None, "active_count": 0,
+            return {"revision": 4, "current_activity": None, "active_count": 0,
                     "primary_panel": ""}
 
     monkeypatch.setattr(kernel, "get_kernel", lambda: _Kernel())
     monkeypatch.setattr(workspace, "get_workspace_service", lambda **kwargs: _Workspace())
 
     assert web.mini_status()["workspace"]["revision"] == 4
+
+
+def test_phone_snapshot_contains_only_compact_activity_fields() -> None:
+    service = WorkspaceService(bus=object())
+    try:
+        service.activities.consume({
+            "type": "tool.started", "source": "tools", "correlation_id": "turn-phone",
+            "payload": {"tool": "read_status", "detail": "bounded detail"},
+        })
+        compact = service.phone_snapshot()
+    finally:
+        service.health.close()
+
+    assert compact["revision"] > 0
+    assert len(compact["activities"]) == 1
+    assert set(compact["activities"][0]) == {
+        "activity_id", "category", "status", "title", "updated_at"}

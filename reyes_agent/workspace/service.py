@@ -129,9 +129,22 @@ class WorkspaceService:
         panels = self.manager.get_active_panels()
         return {
             "revision": self.revisions.current(),
-            "activity": activities[0] if activities else None,
+            "current_activity": activities[0] if activities else None,
             "active_count": len(activities),
             "primary_panel": panels[0].panel_id if panels else "",
+        }
+
+    def phone_snapshot(self) -> dict[str, Any]:
+        activities = self.activities.snapshot()
+        return {
+            "revision": self.revisions.current(),
+            "activities": [{
+                "activity_id": item.get("activity_id", ""),
+                "category": item.get("category", ""),
+                "status": item.get("status", ""),
+                "title": item.get("title", ""),
+                "updated_at": item.get("updated_at", 0.0),
+            } for item in activities[:25]],
         }
 
     def panel_action(self, panel_id: str, action: str,
