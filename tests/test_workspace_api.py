@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from reyes_agent.workspace.api import create_router
+from reyes_agent.workspace.models import PanelState
 from reyes_agent.workspace.service import WorkspaceService
 
 
@@ -192,3 +193,26 @@ def test_phone_snapshot_contains_only_compact_activity_fields() -> None:
     assert len(compact["activities"]) == 1
     assert set(compact["activities"][0]) == {
         "activity_id", "category", "status", "title", "updated_at"}
+
+
+def test_malformed_events_and_rapid_panel_commands_remain_bounded() -> None:
+    service = WorkspaceService(bus=object())
+    try:
+        for event in (None, {}, {"type": 7},
+                      {"type": "tool.failed", "payload": object()}):
+            service.consume_event(event)
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            list(pool.map(
+                lambda index: service.panel_action(
+                    "activity", "toggle", {}, str(index), ""),
+                range(200),
+            ))
+        snapshot = service.snapshot()
+    finally:
+        service.health.close()
+
+    assert len(snapshot["panels"]) == 1
+    assert snapshot["panels"][0]["state"] in {state.value for state in PanelState}

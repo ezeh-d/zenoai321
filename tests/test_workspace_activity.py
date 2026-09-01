@@ -191,3 +191,26 @@ def test_service_routes_request_consumes_one_feed_and_stops_cleanly() -> None:
     assert snapshot["activities"][0]["correlation_id"] == "turn-9"
     assert any(kind == "workspace.activity.changed" for kind, *_ in bus.published)
     assert service.running is False
+
+
+def test_request_tool_activity_panel_and_snapshot_share_revision_and_correlation() -> None:
+    bus = _Bus()
+    service = WorkspaceService(bus=bus)
+    try:
+        plan = service.route_request("find my CV", "turn-e2e", "desktop")
+        service.consume_event({
+            "type": "tool.returned", "source": "tools", "correlation_id": "turn-e2e",
+            "payload": {"tool": "search_files", "result": "CV.pdf"},
+        })
+        snapshot = service.snapshot()
+    finally:
+        service.health.close()
+
+    published_revisions = [payload["revision"] for _, payload, _, _ in bus.published
+                           if isinstance(payload.get("revision"), int)]
+    assert plan.primary_panel == "files"
+    assert any(panel["panel_id"] == "files" and panel["correlation_id"] == "turn-e2e"
+               for panel in snapshot["panels"])
+    assert any(activity["correlation_id"] == "turn-e2e"
+               for activity in snapshot["activities"])
+    assert snapshot["revision"] == max(published_revisions)

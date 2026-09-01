@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from reyes_agent.circuit_breaker import CircuitBreaker, OPEN
 from reyes_agent.workspace import get_workspace_service
 from reyes_agent.workspace.manager import RevisionClock
 from reyes_agent.workspace.models import ToolHealthState
@@ -219,3 +220,27 @@ def test_capability_status_tool_prefers_dynamic_health(monkeypatch) -> None:
 
     assert result["status"] == "AVAILABLE"
     assert result["tools"][0]["name"] == "slack_send"
+
+
+def test_probe_failure_attempts_one_recovery_then_opens_injected_circuit() -> None:
+    attempts = []
+    breaker = CircuitBreaker(failure_threshold=1, cooldown_s=60)
+    probes = HealthProbeRegistry()
+    probes.register(HealthProbe(
+        name="recoverable_browser",
+        category="browser",
+        check=lambda: attempts.append("probe") or {"ok": False, "error": "offline"},
+        recover=lambda: attempts.append("recover") or {"ok": False, "error": "offline"},
+        timeout_s=0.2,
+    ))
+    manager = ToolHealthManager(probes=probes, breaker=breaker)
+    try:
+        first = manager.check("recoverable_browser", force=True)
+        second = manager.check("recoverable_browser", force=True)
+    finally:
+        manager.close()
+
+    assert attempts == ["probe", "recover"]
+    assert first.status is ToolHealthState.ERROR
+    assert second.status is ToolHealthState.UNAVAILABLE
+    assert breaker.state("recoverable_browser") == OPEN

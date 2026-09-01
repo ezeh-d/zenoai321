@@ -30,6 +30,7 @@ class ToolHealthManager:
         *,
         adapters: Iterable[Any] | None = None,
         probes: HealthProbeRegistry | None = None,
+        breaker: Any = None,
         revisions: RevisionClock | None = None,
         ttl_s: float = 30.0,
         max_workers: int = 4,
@@ -37,6 +38,11 @@ class ToolHealthManager:
     ) -> None:
         self.revisions = revisions or RevisionClock()
         self.probes = probes or HealthProbeRegistry()
+        if breaker is None:
+            from reyes_agent.circuit_breaker import get_breaker
+
+            breaker = get_breaker()
+        self._breaker = breaker
         self._adapter_map = None if adapters is None else {
             str(adapter.metadata().name).casefold(): adapter for adapter in adapters}
         self._ttl_s = max(1.0, min(float(ttl_s), 300.0))
@@ -177,17 +183,12 @@ class ToolHealthManager:
                 name, ToolHealthState.DISCONNECTED, adapter=adapter, reason=reason,
                 suggested_repair="Reconnect the required device or service.",
                 evidence_source="configuration")
-        try:
-            from reyes_agent import circuit_breaker
-
-            if circuit_breaker.is_open(name):
-                return self._record(
-                    name, ToolHealthState.UNAVAILABLE, adapter=adapter,
-                    reason="Recent failures opened the circuit breaker.",
-                    suggested_repair="Wait for the bounded recovery probe.",
-                    evidence_source="circuit_breaker")
-        except Exception:
-            pass
+        if self._breaker.is_open(name):
+            return self._record(
+                name, ToolHealthState.UNAVAILABLE, adapter=adapter,
+                reason="Recent failures opened the circuit breaker.",
+                suggested_repair="Wait for the bounded recovery probe.",
+                evidence_source="circuit_breaker")
         return self._record(
             name, ToolHealthState.DEGRADED, adapter=adapter,
             reason="Registered, but not recently verified by a safe operation.",
@@ -200,6 +201,13 @@ class ToolHealthManager:
             result = raw if isinstance(raw, dict) else {"ok": False, "error": "invalid probe result"}
         except Exception as exc:
             result = {"ok": False, "error": type(exc).__name__}
+        if result.get("ok") is not True and probe.recover is not None:
+            try:
+                recovered = probe.recover()
+                result = (recovered if isinstance(recovered, dict) else
+                          {"ok": False, "error": "invalid recovery result"})
+            except Exception as exc:
+                result = {"ok": False, "error": type(exc).__name__}
         with self._lock:
             if (name, generation) in self._timed_out:
                 return self._cache[name]
@@ -225,6 +233,10 @@ class ToolHealthManager:
         else:
             status, reason, repair = ToolHealthState.ERROR, safe_text(result.get("error") or "Health operation failed.", 500), safe_text(result.get("suggested_repair") or "Inspect the provider status and retry safely.", 300)
         now = self._clock()
+        if status is ToolHealthState.AVAILABLE:
+            self._breaker.record(name, True)
+        elif status in {ToolHealthState.ERROR, ToolHealthState.UNAVAILABLE}:
+            self._breaker.record(name, False)
         return self._record(
             name, status, probe=probe,
             reason=reason, initialized=bool(result.get("initialized", result.get("ok") is True)),
@@ -249,6 +261,12 @@ class ToolHealthManager:
             probe = self.probes.get(key)
             if probe is None:
                 return self._adapter_record(key)
+            if not self._breaker.allow(key):
+                return self._record(
+                    key, ToolHealthState.UNAVAILABLE, probe=probe,
+                    reason="Recent failures opened the circuit breaker.",
+                    suggested_repair="Wait for the bounded recovery probe.",
+                    evidence_source="circuit_breaker")
             future = self._inflight.get(key)
             if future is None:
                 generation = self._generation.get(key, 0) + 1
@@ -263,6 +281,7 @@ class ToolHealthManager:
         except TimeoutError:
             with self._lock:
                 self._timed_out.add((key, generation))
+            self._breaker.record(key, False)
             return self._record(
                 key, ToolHealthState.ERROR, probe=probe,
                 reason="The safe health operation timed out.", error_code="HEALTH_TIMEOUT",
@@ -276,6 +295,7 @@ class ToolHealthManager:
     def observe_execution(self, name: str, ok: bool, latency_ms: float = 0.0,
                           error_code: str = "") -> HealthRecord:
         key = str(name or "").strip().casefold()
+        self._breaker.record(key, bool(ok))
         adapter = self._adapter(key)
         now = self._clock()
         with self._lock:
