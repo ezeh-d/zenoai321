@@ -111,11 +111,31 @@ class Decision:
     needed_wake_word: bool
     reason: str
     window_s_left: float = 0.0
+    # The transcript looks syntactically unfinished ("open spotify and"): the
+    # caller MAY keep listening rather than answer a half-sentence (#semantic
+    # turn detection). Additive -- old callers simply ignore it.
+    incomplete: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {"accept": self.accept, "needed_wake_word": self.needed_wake_word,
-                "reason": self.reason,
+                "reason": self.reason, "incomplete": self.incomplete,
                 "window_s_left": round(self.window_s_left, 1)}
+
+
+def _looks_incomplete(text: str) -> bool:
+    try:
+        from reyes_agent.conversation.realtime import is_turn_complete
+        return not is_turn_complete(text)["complete"]
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _is_backchannel(text: str) -> bool:
+    try:
+        from reyes_agent.conversation.realtime import classify_utterance, BACKCHANNEL
+        return classify_utterance(text, zeno_speaking=False)["type"] == BACKCHANNEL
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def open_window(*, source: str = "reply", visit: bool = False) -> None:
@@ -165,7 +185,8 @@ def consider(transcript: str, *, wake_matched: bool,
     if wake_matched:
         # A named address re-opens the window regardless of its state.
         open_window(source="wake word", visit=visit)
-        return Decision(True, True, "addressed by name", seconds_left())
+        return Decision(True, True, "addressed by name", seconds_left(),
+                        incomplete=_looks_incomplete(text))
 
     if not is_open():
         return Decision(False, True,
@@ -176,10 +197,16 @@ def consider(transcript: str, *, wake_matched: bool,
                         f"too short to be a follow-up ({len(text)} chars)",
                         seconds_left())
 
+    # A bare acknowledgement inside an open window ("mhm", "okay", "right") is
+    # the owner listening, not a new command -- don't answer it.
+    if _is_backchannel(text):
+        return Decision(False, False, "backchannel, not a command",
+                        seconds_left())
+
     # A real follow-up. Extend, so a conversation does not expire mid-flow.
     open_window(source="follow-up", visit=visit)
     return Decision(True, False, "follow-up inside the conversation window",
-                    seconds_left())
+                    seconds_left(), incomplete=_looks_incomplete(text))
 
 
 def interrupted(source: str = "phone") -> dict[str, Any]:

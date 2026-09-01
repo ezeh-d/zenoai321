@@ -1363,11 +1363,22 @@ def _mark_fast_reply(turn_id: str) -> None:
         pass
 
 
+def _record_latency(stage: str, t0: float) -> None:
+    """Feed the conversation latency recorder (p50/p95/p99). Best-effort;
+    instrumentation must never affect a turn."""
+    try:
+        from reyes_agent.conversation.latency_metrics import get_latency_recorder
+        get_latency_recorder().record(stage, (time.perf_counter() - t0) * 1000.0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _conversation_turn(
     context, message: str, callbacks: dict[str, Any] | None = None,
     voice_identity: dict[str, Any] | None = None, turn_id: str = "",
 ) -> dict[str, Any]:
     """One serialized mutable-history turn, always executed by the worker pool."""
+    _lat_t0 = time.perf_counter()
     from reyes_agent.agent import run_agent
     from reyes_agent.memory_manager import trim_history
     from reyes_agent.performance_monitor import measure
@@ -1493,6 +1504,7 @@ def _conversation_turn(
                     realtime_session.touch(turn=True)
                 except Exception:
                     pass
+            _record_latency("full_task", _lat_t0)
             return {"reply": reply, "tool_calls": tool_calls}
     finally:
         _lock.release()
