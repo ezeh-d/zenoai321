@@ -39,6 +39,12 @@ def correlation(correlation_id: str, request_summary: str = "") -> Iterator[None
 def current_correlation() -> str:
     return _correlation_id.get()
 
+
+def get_workspace_service(*, start: bool = False):
+    from reyes_agent.workspace.service import get_workspace_service as get_service
+
+    return get_service(start=start)
+
 __all__ = [
     "ActivityRecord",
     "ActivityStatus",
@@ -53,4 +59,5 @@ __all__ = [
     "ToolHealthState",
     "correlation",
     "current_correlation",
+    "get_workspace_service",
 ]

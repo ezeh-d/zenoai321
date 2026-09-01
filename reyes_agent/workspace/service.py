@@ -12,6 +12,7 @@ from reyes_agent.workspace.history import HistoryProjector
 from reyes_agent.workspace.intent_router import PanelIntentRouter
 from reyes_agent.workspace.manager import RevisionClock, WorkspaceManager
 from reyes_agent.workspace.models import PresentationMode, PresentationPlan
+from reyes_agent.workspace.tool_health import ToolHealthManager
 
 
 class WorkspaceService:
@@ -25,6 +26,7 @@ class WorkspaceService:
         self.router = PanelIntentRouter(self.panels)
         self.activities = ActivityProjector(self.revisions)
         self.history = HistoryProjector(self.revisions)
+        self.health = ToolHealthManager(revisions=self.revisions)
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._feed: Any = None
@@ -80,6 +82,22 @@ class WorkspaceService:
         if history is not None:
             self._publish("workspace.history.changed", {
                 "revision": history.revision, "history": history.as_dict()}, history.task_id)
+        raw = event if isinstance(event, dict) else (
+            event.as_dict() if callable(getattr(event, "as_dict", None)) else {})
+        event_type = str(raw.get("type") or "") if isinstance(raw, dict) else ""
+        payload = raw.get("payload") if isinstance(raw, dict) else {}
+        if event_type in {"tool.returned", "tool.completed", "tool.succeeded", "tool.failed"} and isinstance(payload, dict):
+            name = str(payload.get("tool") or "")
+            if name:
+                record = self.health.observe_execution(
+                    name,
+                    event_type != "tool.failed",
+                    float(payload.get("duration_ms") or 0.0),
+                    str(payload.get("error_category") or ""),
+                )
+                self._publish("workspace.health.changed", {
+                    "revision": record.revision, "health": record.as_dict()},
+                    str(raw.get("correlation_id") or ""))
 
     def snapshot(self) -> dict[str, Any]:
         panel_state = self.manager.snapshot()
@@ -90,7 +108,7 @@ class WorkspaceService:
             "commands": [item.as_dict() for item in self.commands.all()],
             "activities": self.activities.snapshot(),
             "history": self.history.snapshot(),
-            "health": [],
+            "health": self.health.snapshot(),
         }
 
     def _consume_loop(self) -> None:
@@ -136,3 +154,18 @@ class WorkspaceService:
         with self._lock:
             self._thread = None
             self._feed = None
+
+
+_service: WorkspaceService | None = None
+_service_lock = threading.Lock()
+
+
+def get_workspace_service(*, start: bool = False) -> WorkspaceService:
+    global _service
+    with _service_lock:
+        if _service is None:
+            _service = WorkspaceService()
+        service = _service
+    if start:
+        service.start()
+    return service

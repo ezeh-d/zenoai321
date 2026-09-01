@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import threading
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from reyes_agent.workspace.models import CommandDefinition, PanelDefinition
 
@@ -76,3 +78,42 @@ class CommandRegistry:
     def unregister(self, command_id: str) -> bool:
         with self._lock:
             return self._definitions.pop(str(command_id or "").strip().casefold(), None) is not None
+
+
+@dataclass(frozen=True)
+class HealthProbe:
+    name: str
+    category: str
+    check: Callable[[], dict[str, Any]]
+    supported_operations: tuple[str, ...] = ()
+    dependencies: tuple[str, ...] = ()
+    permissions_required: tuple[str, ...] = ()
+    timeout_s: float = 2.0
+    recover: Callable[[], dict[str, Any]] | None = None
+
+
+class HealthProbeRegistry:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._probes: dict[str, HealthProbe] = {}
+
+    def register(self, probe: HealthProbe) -> HealthProbe:
+        if not isinstance(probe, HealthProbe):
+            raise TypeError("health probe required")
+        name = str(probe.name or "").strip().casefold()
+        if not name or not callable(probe.check):
+            raise ValueError("health probe needs a name and callable check")
+        with self._lock:
+            existing = self._probes.get(name)
+            if existing is not None and existing != probe:
+                raise ValueError(f"duplicate health probe '{name}'")
+            self._probes[name] = probe
+        return probe
+
+    def get(self, name: str) -> HealthProbe | None:
+        with self._lock:
+            return self._probes.get(str(name or "").strip().casefold())
+
+    def all(self) -> list[HealthProbe]:
+        with self._lock:
+            return sorted(self._probes.values(), key=lambda item: item.name)
