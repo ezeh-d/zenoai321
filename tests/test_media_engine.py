@@ -246,6 +246,24 @@ def test_poll_tick_emits_only_on_track_change(monkeypatch):
     assert E.TRACK_CHANGED in events
 
 
+def test_poll_tick_emits_when_a_source_appears(monkeypatch):
+    box = {"snaps": [_snap("Spotify.exe", title="A")]}
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S, "snapshot_sessions",
+                        lambda: (box["snaps"], "Spotify.exe"))
+    monkeypatch.setattr(S, "fetch_album_art", lambda *a, **k: "")
+    mgr = M.MediaManager()
+    events = []
+    mgr._bus.subscribe(lambda e: events.append(e.type))
+    mgr.poll_tick()                          # baseline
+    events.clear()
+    # a YouTube tab joins -- same active track, but the session set changed
+    box["snaps"] = [_snap("Spotify.exe", title="A"),
+                    _snap("chrome.exe", title="Vid", status="paused")]
+    assert mgr.poll_tick() is True
+    assert E.SESSIONS_CHANGED in events
+
+
 def test_live_watcher_refcount_starts_and_stops_poller(monkeypatch):
     monkeypatch.setattr(S, "available", lambda: True)
     monkeypatch.setattr(S, "snapshot_sessions", lambda: ([], None))

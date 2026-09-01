@@ -48,6 +48,7 @@ class MediaManager:
         self._lock = threading.RLock()
         self._last_app_id: str | None = None
         self._last_track_key: str | None = None
+        self._last_app_ids: frozenset[str] = frozenset()   # for session add/remove
         self._win = WindowsMediaAdapter()
         self._audio = SystemAudioAdapter()
         self._spotify = SpotifyAdapter()
@@ -264,18 +265,24 @@ class MediaManager:
 
     # -- live polling (external changes -> events, only while watched) -----
     def poll_tick(self) -> bool:
-        """Snapshot once; emit only if the active track changed. Returns True
-        if it emitted. This is how a track changed *in Spotify itself* reaches
-        the panel without the user touching ZENO."""
+        """Snapshot once; emit if the active track changed OR a source appeared/
+        disappeared. Returns True if it emitted. This is how a track changed
+        *in Spotify itself*, or a YouTube tab starting, reaches the panel
+        without the user touching ZENO."""
         st = self.state()
         active = st.active or {}
         key = f"{active.get('app_id')}|{active.get('title')}|{active.get('artist')}"
+        ids = frozenset(s.get("app_id") for s in st.sessions)
         with self._lock:
-            changed = key != self._last_track_key
-        if not changed:
+            track_changed = key != self._last_track_key
+            sessions_changed = ids != self._last_app_ids
+            self._last_app_ids = ids
+        if not (track_changed or sessions_changed):
             return False
         st = self.state(with_art=True)   # only fetch art when something changed
-        self._emit_if_changed(st)
+        if sessions_changed:
+            self._bus.publish(_events.SESSIONS_CHANGED, {"sessions": st.sessions})
+        self._emit_if_changed(st)        # TRACK_CHANGED (if changed) + STATE
         return True
 
     def _poll_loop(self) -> None:
