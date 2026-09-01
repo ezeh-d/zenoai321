@@ -171,6 +171,59 @@ def study_mastery_update(topic: str, event: str, correct: bool = False,
 
 
 @register(
+    name="quiz_generate",
+    description=(
+        "Generate quiz questions from studied material for active recall: cloze "
+        "(fill-the-blank from a real passage, with citation), definition, and "
+        "multiple-choice. Returns the questions AND their answers (so ZENO can "
+        "grade). Present the questions to the owner one at a time, then grade "
+        "each with quiz_evaluate. Use for 'quiz me', 'make 10 questions', 'test "
+        "me on this'."
+    ),
+    input_schema={"type": "object", "properties": {
+        "source": {"type": "string", "description": "Restrict to one studied file (optional)."},
+        "course": {"type": "string", "description": "Course name for the concept graph (optional)."},
+        "count": {"type": "integer", "description": "How many questions (default 5)."},
+        "kinds": {"type": "string", "description": "Comma list of cloze,definition,mcq (default all)."},
+    }},
+)
+def quiz_generate(source: str = "", course: str = "", count: int = 5,
+                  kinds: str = "") -> str:
+    from reyes_agent.study import get_quiz_engine
+    src = _resolve(source) if source else ""
+    kind_list = [k.strip() for k in kinds.split(",") if k.strip()] or None
+    return _json(get_quiz_engine().generate(
+        source=src, course=course, count=max(1, min(int(count or 5), 30)),
+        kinds=kind_list))
+
+
+@register(
+    name="quiz_evaluate",
+    description=(
+        "Grade the owner's answer to a quiz question honestly -- says what was "
+        "right and what was missing, not just 'correct' -- and records the result "
+        "in the mastery model (one lucky answer is still not mastery). Pass the "
+        "question's kind + expected answer (from quiz_generate) and the owner's "
+        "answer."
+    ),
+    input_schema={"type": "object", "properties": {
+        "kind": {"type": "string", "enum": ["cloze", "definition", "mcq", "short"]},
+        "expected": {"type": "string", "description": "The correct answer from quiz_generate."},
+        "user_answer": {"type": "string", "description": "What the owner answered."},
+        "topic": {"type": "string", "description": "The question's topic (feeds mastery)."},
+        "course": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "string"}, "description": "MCQ options (optional)."},
+    }, "required": ["kind", "expected", "user_answer"]},
+)
+def quiz_evaluate(kind: str, expected: str, user_answer: str, topic: str = "",
+                  course: str = "", options: list | None = None) -> str:
+    from reyes_agent.study import get_quiz_engine
+    return _json(get_quiz_engine().evaluate(
+        kind=kind, expected=expected, user_answer=user_answer,
+        options=options or [], topic=topic, course=course))
+
+
+@register(
     name="concept_prerequisites",
     description=(
         "The prerequisite chain for a concept (what must be understood first), "

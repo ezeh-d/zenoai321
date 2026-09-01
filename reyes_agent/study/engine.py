@@ -251,6 +251,22 @@ class StudyEngine:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:200]}
 
+    def sample_chunks(self, *, source: str = "", limit: int = 20) -> list[dict[str, Any]]:
+        """Studied passages with their citations -- used by the quiz engine to
+        build questions from real material. Read-only, never raises."""
+        try:
+            with self._lock:
+                out: list[dict[str, Any]] = []
+                for rec, _vecs in self._records(source):
+                    for chunk in rec["chunks"]:
+                        out.append({"text": chunk["text"], "source": rec["source"],
+                                    "page": chunk.get("page"), "idx": chunk["idx"]})
+                        if len(out) >= max(1, int(limit)):
+                            return out
+                return out
+        except Exception:  # noqa: BLE001
+            return []
+
     # -- catalog / lifecycle ----------------------------------------------
     def catalog(self) -> dict[str, Any]:
         cat = self._load_catalog()

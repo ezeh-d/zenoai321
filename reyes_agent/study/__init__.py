@@ -18,7 +18,11 @@ from reyes_agent.study.mastery import (
 from reyes_agent.study.concepts import (
     ConceptGraph, get_concept_graph,
 )
+from reyes_agent.study.quiz import (
+    QuizEngine, Question, Verdict, get_quiz_engine,
+)
 
 __all__ = ["Chunk", "Citation", "StudyEngine", "get_study_engine",
            "MasteryTracker", "get_mastery_tracker",
-           "ConceptGraph", "get_concept_graph"]
+           "ConceptGraph", "get_concept_graph",
+           "QuizEngine", "Question", "Verdict", "get_quiz_engine"]
