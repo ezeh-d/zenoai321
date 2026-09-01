@@ -68,7 +68,11 @@ function build() {
       <button class="prev" title="Previous">⏮</button>
       <button class="play" title="Play/Pause">⏯</button>
       <button class="next" title="Next">⏭</button>
-    </div>`;
+    </div>
+    <a class="connect" href="/api/media/spotify/connect" target="_blank"
+       rel="noopener" style="display:none;font-size:10.5px;color:#1db954;
+       text-align:center;margin-top:6px;text-decoration:none;opacity:.9;">
+       ♫ Connect Spotify for search &amp; play</a>`;
   document.body.appendChild(card);
 
   els = {
@@ -147,6 +151,18 @@ function onEvent(msg) {
   // playback_changed / volume_changed arrive as a following state push too
 }
 
+async function refreshSpotifyConnect() {
+  const e = build();
+  const link = e.card.querySelector(".connect");
+  if (!link) return;
+  try {
+    const s = await (await fetch(apiUrl("/api/media/spotify/status"))).json();
+    // offer the entry point whenever Spotify isn't linked yet; the /connect
+    // route either bounces to Spotify (client id set) or explains what to set
+    link.style.display = s.connected ? "none" : "block";
+  } catch (_e) { link.style.display = "none"; }
+}
+
 export function initMediaPanel() {
   if (source) return;                      // idempotent
   build();
@@ -157,6 +173,7 @@ export function initMediaPanel() {
   } catch (_e) { /* SSE unsupported -> panel stays hidden */ }
   // local progress animation between server pushes
   if (!anim) anim = setInterval(tick, 500);
+  refreshSpotifyConnect();                 // show "Connect Spotify" if unlinked
 }
 
 export function stopMediaPanel() {

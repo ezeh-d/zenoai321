@@ -21,6 +21,10 @@ from PySide6.QtWidgets import (
 
 from gui.ai_core import AICore
 from gui.hud_panel import HudPanel
+try:
+    from gui.media_card import MediaCard
+except Exception:  # noqa: BLE001 -- media card is optional; never block the HUD
+    MediaCard = None
 from gui.theme import (
     BACKGROUND,
     BACKGROUND_ALT,
@@ -705,6 +709,15 @@ class ReyesMainWindow(QMainWindow):
             auto_start_monitor=True
         )
 
+        # Live media mini-card -- same engine as the web HUD. Optional: any
+        # construction failure leaves it None and the HUD is unaffected.
+        self.media_card = None
+        if MediaCard is not None:
+            try:
+                self.media_card = MediaCard()
+            except Exception:  # noqa: BLE001
+                self.media_card = None
+
         self.listen_button = CoreButton(
             "ACTIVATE VOICE",
             accent=SUCCESS,
@@ -843,6 +856,9 @@ class ReyesMainWindow(QMainWindow):
         center_layout.addWidget(
             self.transcript_panel
         )
+
+        if self.media_card is not None:
+            center_layout.addWidget(self.media_card)
 
         content_layout = QHBoxLayout()
 
@@ -1487,6 +1503,9 @@ class ReyesMainWindow(QMainWindow):
         )
 
         self.hud_panel.stop_monitoring()
+
+        if self.media_card is not None:
+            self.media_card.stop()
 
         self.wake_word_controller.shutdown(
             wait_timeout_seconds=1.0
