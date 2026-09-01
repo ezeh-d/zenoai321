@@ -7,7 +7,7 @@ frontend, or tool execution path.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Iterator
 
 from reyes_agent.workspace.models import (
@@ -29,11 +29,19 @@ _correlation_id: ContextVar[str] = ContextVar("zeno_workspace_correlation", defa
 
 @contextmanager
 def correlation(correlation_id: str, request_summary: str = "") -> Iterator[None]:
-    correlation_token = _correlation_id.set(str(correlation_id or "")[:80])
+    correlation_token = bind_correlation(correlation_id)
     try:
         yield
     finally:
-        _correlation_id.reset(correlation_token)
+        reset_correlation(correlation_token)
+
+
+def bind_correlation(correlation_id: str) -> Token[str]:
+    return _correlation_id.set(str(correlation_id or "")[:80])
+
+
+def reset_correlation(token: Token[str]) -> None:
+    _correlation_id.reset(token)
 
 
 def current_correlation() -> str:
@@ -57,7 +65,9 @@ __all__ = [
     "PresentationMode",
     "PresentationPlan",
     "ToolHealthState",
+    "bind_correlation",
     "correlation",
     "current_correlation",
     "get_workspace_service",
+    "reset_correlation",
 ]

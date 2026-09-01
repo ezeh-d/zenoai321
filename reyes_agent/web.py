@@ -1425,6 +1425,13 @@ def _conversation_turn(
         intelligence = None
     while not _lock.acquire(timeout=0.1):
         context.check_cancelled()
+    correlation_token = None
+    try:
+        from reyes_agent.workspace import bind_correlation
+
+        correlation_token = bind_correlation(turn_id)
+    except Exception:  # noqa: BLE001 -- correlation is observability-only
+        pass
     try:
         context.progress("planning")
         # An unknown voice gets a clean, non-persistent conversation instead
@@ -1518,6 +1525,13 @@ def _conversation_turn(
             _record_latency("full_task", _lat_t0)
             return {"reply": reply, "tool_calls": tool_calls}
     finally:
+        if correlation_token is not None:
+            try:
+                from reyes_agent.workspace import reset_correlation
+
+                reset_correlation(correlation_token)
+            except Exception:  # noqa: BLE001 -- lock release must always happen
+                pass
         _lock.release()
         if wake_engine is not None:
             try:

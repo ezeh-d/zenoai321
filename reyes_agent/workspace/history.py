@@ -4,13 +4,105 @@ from __future__ import annotations
 
 import threading
 import time
+from copy import deepcopy
 from collections import OrderedDict
+from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any, Callable
 
 from reyes_agent.workspace.manager import RevisionClock
 from reyes_agent.workspace.models import HistoryRecord
 from reyes_agent.workspace.redaction import redact_text, safe_text, sanitize_mapping
+
+
+@dataclass
+class RetryHandle:
+    task_id: str
+    tool_name: str
+    raw_input: dict[str, Any]
+    created_at: float
+    expires_at: float
+
+    def zeroize(self) -> None:
+        self.raw_input.clear()
+
+
+class RetryStore:
+    """Private, process-local retry material; never part of a public snapshot."""
+
+    def __init__(self, *, max_handles: int = 20, ttl_s: float = 600.0,
+                 clock: Callable[[], float] = time.time) -> None:
+        self._max_handles = max(1, min(int(max_handles), 20))
+        self._ttl_s = max(1.0, min(float(ttl_s), 600.0))
+        self._clock = clock
+        self._lock = threading.RLock()
+        self._handles: OrderedDict[str, RetryHandle] = OrderedDict()
+        self._refusals: OrderedDict[str, tuple[str, float]] = OrderedDict()
+
+    def _purge(self) -> None:
+        now = self._clock()
+        for task_id in [key for key, item in self._handles.items()
+                        if item.expires_at <= now]:
+            self._handles.pop(task_id).zeroize()
+        for task_id in [key for key, (_, expiry) in self._refusals.items()
+                        if expiry <= now]:
+            self._refusals.pop(task_id, None)
+
+    def _trim(self) -> None:
+        while len(self._handles) + len(self._refusals) > self._max_handles:
+            handle_id = next(iter(self._handles), "")
+            refusal_id = next(iter(self._refusals), "")
+            if handle_id and (not refusal_id or
+                              self._handles[handle_id].created_at <= self._refusals[refusal_id][1] - self._ttl_s):
+                self._handles.pop(handle_id).zeroize()
+            elif refusal_id:
+                self._refusals.pop(refusal_id, None)
+
+    def put(self, task_id: str, tool_name: str, raw_input: dict[str, Any]) -> RetryHandle:
+        now = self._clock()
+        handle = RetryHandle(task_id, tool_name, deepcopy(raw_input), now, now + self._ttl_s)
+        with self._lock:
+            self._purge()
+            previous = self._handles.pop(task_id, None)
+            if previous is not None:
+                previous.zeroize()
+            self._refusals.pop(task_id, None)
+            self._handles[task_id] = handle
+            self._trim()
+        return handle
+
+    def refuse(self, task_id: str, state: str) -> None:
+        with self._lock:
+            self._purge()
+            previous = self._handles.pop(task_id, None)
+            if previous is not None:
+                previous.zeroize()
+            self._refusals[task_id] = (safe_text(state, 80), self._clock() + self._ttl_s)
+            self._refusals.move_to_end(task_id)
+            self._trim()
+
+    def get(self, task_id: str) -> RetryHandle | None:
+        with self._lock:
+            self._purge()
+            handle = self._handles.get(task_id)
+            if handle is not None:
+                self._handles.move_to_end(task_id)
+            return handle
+
+    def refusal(self, task_id: str) -> str:
+        with self._lock:
+            self._purge()
+            value = self._refusals.get(task_id)
+            return value[0] if value else ""
+
+    def remove(self, task_id: str) -> bool:
+        with self._lock:
+            handle = self._handles.pop(task_id, None)
+            self._refusals.pop(task_id, None)
+            if handle is None:
+                return False
+            handle.zeroize()
+            return True
 
 
 class HistoryProjector:
@@ -120,3 +212,7 @@ class HistoryProjector:
             rows = list(self._records.values())[-count:]
             rows.reverse()
             return [item.as_dict() for item in rows]
+
+    def get(self, task_id: str) -> HistoryRecord | None:
+        with self._lock:
+            return self._records.get(safe_text(task_id, 80))

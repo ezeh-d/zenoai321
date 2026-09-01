@@ -394,8 +394,10 @@ def _publish_tool_failure(tool: Tool, tool_input: dict[str, Any], error: str,
                           duration: float) -> None:
     try:
         from reyes_agent import event_bus, intelligence
+        from reyes_agent.workspace import current_correlation, get_workspace_service
 
         safe_input = _tool_audit_input(tool, tool_input)
+        outcome = classify_tool_result(error)
         intelligence.update_situation(current_task=tool.name, current_step="failed")
         event_bus.publish("tool.failed", payload={
             "tool": tool.name,
@@ -404,7 +406,11 @@ def _publish_tool_failure(tool: Tool, tool_input: dict[str, Any], error: str,
             "duration_ms": int(max(0.0, duration) * 1000),
             "outcome": "failed",
             "verification_state": "failed",
-        }, source="tools")
+            "error_category": outcome.get("error_category", ""),
+            "retryable": bool(outcome.get("retryable")),
+        }, source="tools", correlation_id=current_correlation())
+        get_workspace_service().observe_tool_execution(
+            tool.name, tool_input, outcome, int(max(0.0, duration) * 1000))
     except Exception:  # noqa: BLE001 -- failure reporting cannot mask cause
         pass
 
@@ -489,6 +495,13 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
         # happened, not a second copy of every file ZENO ever read.
         from reyes_agent import event_bus
 
+        try:
+            from reyes_agent.workspace import current_correlation
+
+            correlation_id = current_correlation()
+        except Exception:  # noqa: BLE001 -- correlation cannot alter execution
+            correlation_id = ""
+
         event_bus.publish(
             f"tool.{outcome['outcome']}",
             payload={
@@ -501,7 +514,15 @@ def execute_tool(tool: Tool, tool_input: dict[str, Any]) -> str:
                 "error_category": outcome.get("error_category", ""),
             },
             source="tools",
+            correlation_id=correlation_id,
         )
+        try:
+            from reyes_agent.workspace import get_workspace_service
+
+            get_workspace_service().observe_tool_execution(
+                tool.name, tool_input, outcome, int(duration * 1000))
+        except Exception:  # noqa: BLE001 -- workspace telemetry cannot alter a tool result
+            pass
         return result
     except TypeError as exc:
         duration = time.time() - started
