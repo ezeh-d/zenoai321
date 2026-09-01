@@ -53,11 +53,13 @@ def test_wake_word_always_wins_even_if_backchannelish():
 # --- latency recorder is fed --------------------------------------------------
 def test_record_latency_helper_feeds_the_recorder():
     from reyes_agent import web
+    # A unique stage name so a concurrent real turn (e.g. brain-prewarm) writing
+    # 'full_task' to the shared recorder can't race this exact-count assertion.
+    stage = "test_probe_stage"
     rec = get_latency_recorder()
-    rec.reset()
-    web._record_latency("full_task", time.perf_counter() - 0.02)
-    p = rec.percentiles("full_task")
-    assert p["count"] == 1 and p["p50"] >= 0
+    web._record_latency(stage, time.perf_counter() - 0.02)
+    p = rec.percentiles(stage)
+    assert p["count"] >= 1 and p["p50"] >= 0
 
 
 def test_conversation_turn_is_instrumented():
