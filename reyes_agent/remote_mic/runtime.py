@@ -103,6 +103,13 @@ class RemoteTurnConsumer:
         self._started = 0.0
         self._busy = False
         self._handler: CommandHandler | None = None
+        # Per-session turn accumulation (semantic turn detection). Instance-owned
+        # so one mic session's half-sentence never leaks into another's turn.
+        try:
+            from reyes_agent.conversation.realtime import TurnAccumulator
+            self._turn_acc = TurnAccumulator()
+        except Exception:  # noqa: BLE001
+            self._turn_acc = None
         # Streaming transcription runs ALONGSIDE the existing segmenter
         # rather than replacing it. The VAD still decides where a turn
         # begins and ends -- that logic works and is what wake-word handling
@@ -423,6 +430,24 @@ class RemoteTurnConsumer:
                         })
                         command = heard.english
                 except Exception:  # noqa: BLE001 -- language never breaks a turn
+                    pass
+
+                # Semantic turn accumulation: an unfinished sentence ("open
+                # spotify and") is held and merged with the next clip rather
+                # than answered as half a command. Fully guarded -- any error
+                # falls through to normal single-clip dispatch.
+                try:
+                    acc = (self._turn_acc.feed(command) if self._turn_acc is not None
+                           else {"commit": True, "text": command})
+                    if not acc.get("commit", True):
+                        self._emit("remote_mic.turn_incomplete",
+                                   {"held": acc.get("text", "")[:80],
+                                    "reason": acc.get("reason", "")})
+                        with self._lock:
+                            self._busy = False
+                        return {"accepted": True, "waiting_for_completion": True}
+                    command = acc.get("text") or command
+                except Exception:  # noqa: BLE001 -- accumulation never breaks a turn
                     pass
 
                 turn_id = f"remote-{int(time.time() * 1000)}"

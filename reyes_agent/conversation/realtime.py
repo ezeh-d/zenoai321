@@ -197,9 +197,80 @@ class MicroAck:
         return choice
 
 
+class TurnAccumulator:
+    """Merge a syntactically-incomplete transcript with the next one, so
+    "open spotify and" [short pause] "play jazz" becomes ONE turn instead of two
+    half-commands. A grace window bounds the wait: a continuation within it is
+    merged; a longer gap means the fragment was abandoned, so it's dropped rather
+    than glued onto an unrelated later sentence. Injectable clock for tests.
+    """
+
+    def __init__(self, *, grace_s: float = 2.0, max_chars: int = 400,
+                 now: Any = None) -> None:
+        self._grace_s = float(grace_s)
+        self._max_chars = int(max_chars)
+        self._pending = ""
+        self._since = 0.0
+        self._now = now or _monotonic
+        self._lock = threading.Lock()
+
+    def feed(self, transcript: str, *, now: float | None = None) -> dict[str, Any]:
+        """Return {commit, text, reason}. commit False means 'keep listening'."""
+        t = now if now is not None else self._now()
+        text = str(transcript or "").strip()
+        with self._lock:
+            if not text:
+                return {"commit": False, "text": self._pending, "reason": "empty"}
+            if self._pending and (t - self._since) <= self._grace_s:
+                combined = f"{self._pending} {text}".strip()
+            else:
+                if self._pending:                       # stale -> abandon it
+                    dropped, self._pending = self._pending, ""
+                    if _turn_incomplete(text) and len(text) < self._max_chars:
+                        self._pending, self._since = text, t
+                        return {"commit": False, "text": text,
+                                "reason": f"new turn (dropped stale '{dropped[:30]}')"}
+                    return {"commit": True, "text": text,
+                            "reason": f"complete (dropped stale '{dropped[:30]}')"}
+                combined = text
+            if _turn_incomplete(combined) and len(combined) < self._max_chars:
+                self._pending = combined
+                if not self._since or (t - self._since) > self._grace_s:
+                    self._since = t
+                return {"commit": False, "text": combined, "reason": "incomplete -- waiting"}
+            self._pending, self._since = "", 0.0
+            return {"commit": True, "text": combined, "reason": "complete"}
+
+    def flush(self, *, now: float | None = None) -> dict[str, Any]:
+        """Commit whatever is pending (call on mic idle so a fragment the owner
+        did mean isn't stranded)."""
+        with self._lock:
+            if self._pending:
+                text, self._pending, self._since = self._pending, "", 0.0
+                return {"commit": True, "text": text, "reason": "flushed on idle"}
+            return {"commit": False, "text": "", "reason": "nothing pending"}
+
+    def pending(self) -> str:
+        return self._pending
+
+
+def _turn_incomplete(text: str) -> bool:
+    return not is_turn_complete(text)["complete"]
+
+
+def _monotonic() -> float:
+    import time
+    return time.monotonic()
+
+
 _micro = MicroAck()
 _partial = PartialIntentEngine()
 _backchannel = BackchannelDetector()
+_accumulator = TurnAccumulator()
+
+
+def get_turn_accumulator() -> TurnAccumulator:
+    return _accumulator
 
 
 def micro_ack(situation: str = "ack", *, visual_shown: bool = False) -> str:
