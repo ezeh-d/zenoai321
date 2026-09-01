@@ -375,20 +375,28 @@ export function createLiveActivityView() {
   function consumeEvent(update) {
     const type = String(update?.type || ''); const payload = update?.payload || {};
     if (type === 'build.task' && payload.task) {
-      tasks.set(payload.task.task_id, payload.task); activeId = payload.task.task_id; activeKind = 'task'; show(); return true;
+      tasks.set(payload.task.task_id, payload.task); activeId = payload.task.task_id; activeKind = 'task';
+      if (overlay.classList.contains('open')) render();
+      return true;
     }
     if (type === 'project.activity' && payload.project) {
-      projects.set(payload.project.id, payload.project); activeId = payload.project.id; activeKind = 'project'; show(); return true;
+      projects.set(payload.project.id, payload.project); activeId = payload.project.id; activeKind = 'project';
+      if (overlay.classList.contains('open')) render();
+      return true;
     }
     if (type === 'ui.workspace_code' && payload.project) {
       const project = [...projects.values()].find(item => item.name === payload.project);
-      if (project) { project.preview = { file: payload.file || '', content: payload.content || '' }; project.files = payload.files || project.files; render(); }
+      if (project) {
+        project.preview = { file: payload.file || '', content: payload.content || '' };
+        project.files = payload.files || project.files;
+        if (overlay.classList.contains('open')) render();
+      }
       return !!project;
     }
     if (type.startsWith('website.') && payload.location) {
       const existing = websiteProjects.get(payload.location) || {};
       websiteProjects.set(payload.location, { ...existing, ...payload });
-      if (activeKind === 'website') render();
+      if (activeKind === 'website' && overlay.classList.contains('open')) render();
       return true;
     }
     return false;
@@ -407,9 +415,10 @@ export function createLiveActivityView() {
       for (const task of taskData.tasks || []) tasks.set(task.task_id, task);
       for (const site of websiteData.projects || []) websiteProjects.set(site.location, site);
       const runningTask = [...tasks.values()].find(t => !DONE_STATES.includes(t.current_status));
-      if (runningTask) { activeId = runningTask.task_id; activeKind = 'task'; show(); return; }
+      if (runningTask) { activeId = runningTask.task_id; activeKind = 'task'; }
       const pending = [...projects.values()].find(project => !['COMPLETED', 'FAILED'].includes(project.state));
-      if (pending) { activeId = pending.id; activeKind = 'project'; show(); } else render();
+      if (!runningTask && pending) { activeId = pending.id; activeKind = 'project'; }
+      if (overlay.classList.contains('open')) render();
     } catch (_) { /* The activity panel remains dormant if the local API is unavailable. */ }
   }
 

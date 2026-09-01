@@ -49,6 +49,40 @@ from reyes_agent.remote_access import (android_pairing, attachment_store,
 router = APIRouter(prefix="/api/owner", tags=["owner"])
 logger = logging.getLogger(__name__)
 
+
+def _owner_activity_entries(limit: int, *, workspace_service: Any = None,
+                            fallback: Any = None) -> list[dict[str, Any]]:
+    """Prefer compact local workspace evidence, retaining cloud/device fallback."""
+    count = max(1, min(int(limit), 100))
+    try:
+        if workspace_service is None:
+            from reyes_agent.workspace import get_workspace_service
+
+            workspace_service = get_workspace_service()
+        compact = workspace_service.phone_snapshot()
+        activities = compact.get("activities", []) if isinstance(compact, dict) else []
+        entries = []
+        for item in activities[:count]:
+            if not isinstance(item, dict):
+                continue
+            category = str(item.get("category") or "activity")[:40].casefold()
+            category = "_".join(category.replace("-", " ").split()) or "activity"
+            status = str(item.get("status") or "")[:40].upper()
+            entries.append({
+                "event": f"workspace_{category}",
+                "summary": str(item.get("title") or "ZENO activity")[:240],
+                "outcome": status.casefold(),
+                "state": status,
+                "at": float(item.get("updated_at") or 0.0),
+            })
+        if entries:
+            return entries
+    except Exception:  # local workspace is optional in a cloud gateway process
+        pass
+    if fallback is not None:
+        return list(fallback(count))
+    return device_link.get_link().activity(limit=count)
+
 # Actions the desktop agent is willing to perform. The browser may name only
 # these. An action outside this set is refused before it reaches a queue --
 # so a compromised frontend cannot invent "run_shell".
@@ -1092,7 +1126,7 @@ def register(app) -> None:
 
     @protected.get("/activity")
     def activity(limit: int = 100) -> dict[str, Any]:
-        return {"entries": device_link.get_link().activity(limit=limit)}
+        return {"entries": _owner_activity_entries(limit)}
 
     # Unauthenticated routes first (login must work before a session exists),
     # then everything else behind the dependency.

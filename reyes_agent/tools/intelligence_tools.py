@@ -201,6 +201,14 @@ def health_center() -> str:
 )
 def capability_status(capability: str = "") -> str:
     if capability.strip():
+        try:
+            from reyes_agent.workspace import get_workspace_service
+
+            dynamic = get_workspace_service().health.capability_summary(capability)
+            if dynamic.get("tools"):
+                return json.dumps(dynamic)
+        except Exception:
+            pass
         result = intelligence.capability(capability)
         return json.dumps(result or {"capability": capability, "status": "UNAVAILABLE", "detail": "No registered capability by that name."})
     return json.dumps(intelligence.capabilities())
