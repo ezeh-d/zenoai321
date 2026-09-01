@@ -60,6 +60,15 @@ def speak(text: str, stop_event: threading.Event, *,
     text = prepare_for_speech(text).strip()
     if not text:
         return
+    if delivery is None:
+        # Meaning-based prosody by default so it's actually applied across the
+        # whole runtime -- urgent wording speaks a touch quicker, normal stays
+        # neutral. Callers may still pass an explicit delivery.
+        try:
+            from reyes_agent.conversation.delivery import delivery_for
+            delivery = delivery_for(text=text)
+        except Exception:  # noqa: BLE001
+            delivery = None
     for clause in _clauses(text):
         if stop_event.is_set():
             return

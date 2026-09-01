@@ -63,6 +63,18 @@ def test_speak_strips_markdown_and_chunks_into_sentences(spoken):
     assert all(d == {"rate": 1.0, "style": "neutral"} for _, d in spoken)
 
 
+def test_speak_applies_default_prosody_from_the_text(spoken):
+    # no explicit delivery -> speak() infers it from meaning (urgent wording)
+    tts.speak("Hurry, the disk is critically full right now.", threading.Event())
+    assert spoken and spoken[0][1] is not None
+    assert spoken[0][1].get("style") == "urgent"
+
+
+def test_explicit_delivery_overrides_the_default(spoken):
+    tts.speak("Anything.", threading.Event(), delivery={"rate": 1.0, "style": "casual"})
+    assert all(d == {"rate": 1.0, "style": "casual"} for _, d in spoken)
+
+
 def test_speak_stops_on_a_set_event_before_speaking(spoken):
     ev = threading.Event(); ev.set()
     tts.speak("Anything here.", ev)
