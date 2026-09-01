@@ -272,6 +272,10 @@ _speech_q: queue.Queue = queue.Queue(maxsize=100)
 _worker: threading.Thread | None = None
 _speech_lock = threading.Lock()
 _playback_stop = threading.Event()
+# Whether this speech burst has ducked the music. Ducked once when a burst
+# starts speaking and restored when the queue drains, so the music doesn't bob
+# between back-to-back queued clauses.
+_speech_ducked = False
 
 
 def _speak_now(text: str, agent: str, stop_event: threading.Event,
@@ -353,6 +357,17 @@ def _run_queue() -> None:
             # A queued, later response begins only after any barge-in stopped
             # the previous item and the queue was drained.
             _playback_stop.clear()
+            # Lower other apps' audio while ZENO speaks -- once per burst, so the
+            # music stays down across queued clauses (restored when the queue
+            # drains, below). Composes with the mic-capture duck via refcount.
+            global _speech_ducked
+            if not _speech_ducked:
+                try:
+                    from reyes_agent.media.ducking import duck_for_speech
+                    duck_for_speech()
+                    _speech_ducked = True
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 from reyes_agent import event_bus
 
@@ -376,6 +391,13 @@ def _run_queue() -> None:
                                   source="voice_manager")
             except Exception:  # noqa: BLE001
                 pass
+            # End of the burst (nothing more queued) -> let the music back up.
+            if _speech_ducked and _speech_q.empty():
+                try:
+                    from reyes_agent.media.ducking import unduck_after_speech
+                    unduck_after_speech()
+                finally:
+                    _speech_ducked = False
             _speech_q.task_done()
 
 
@@ -455,6 +477,17 @@ def shutdown() -> None:
     with _speech_lock:
         if _worker is worker:
             _worker = None
+    # The worker has stopped; if a burst was mid-flight when we shut down, make
+    # sure the speech duck is released so the music isn't left lowered.
+    global _speech_ducked
+    if _speech_ducked:
+        try:
+            from reyes_agent.media.ducking import unduck_after_speech
+            unduck_after_speech()
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            _speech_ducked = False
 
 
 # --- introductions ------------------------------------------------------

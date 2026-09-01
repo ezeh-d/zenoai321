@@ -58,9 +58,10 @@ _DEFAULT_ROUTES: tuple[Route, ...] = (
     Route("open_app", "desktop", (
         "open chrome", "launch spotify", "fire up notepad", "get calculator going",
         "start the browser", "bring up the settings app", "run the terminal")),
-    Route("play_media", "desktop", (
+    Route("play_media", "media", (
         "play some music", "pause the song", "skip this track", "turn it up",
-        "next song please", "resume playback", "put on some afrobeats")),
+        "next song please", "resume playback", "put on some afrobeats",
+        "what's playing", "turn spotify down", "what song is this")),
     Route("open_content", "files", (
         "look at this file", "open that pdf", "read this document for me",
         "what is this file", "open the spreadsheet", "check this word document",

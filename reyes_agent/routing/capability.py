@@ -86,6 +86,12 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
     "study": ("study_document", "study_ask", "study_status", "study_report",
               "study_weak_areas", "study_forget", "study_mastery_update",
               "concept_prerequisites", "quiz_generate", "quiz_evaluate"),
+    # Universal Media Intelligence: know & control what's playing (GSMTC),
+    # per-app volume, and named-song play. media_control/set_volume stay as the
+    # blunt fallbacks; open_app lets "play spotify" launch it if it's closed.
+    "media": ("media_now_playing", "media_command", "media_play_song",
+              "media_set_app_volume", "media_panel", "media_control",
+              "set_volume", "open_app"),
     "files_destructive": ("delete_file",),
     "coding": ("write_project_file", "read_file", "list_project_files",
                "build_project", "run_command", "website_project",
@@ -153,7 +159,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
 # 105-schema payload. Checked by a regression test.
 BUDGETS: dict[str, int] = {
     "conversation": 3, "utility": 12, "memory": 16, "web": 8, "browser": 14,
-    "desktop": 12, "files": 14, "study": 12, "files_destructive": 4, "coding": 14,
+    "desktop": 12, "files": 14, "study": 12, "media": 10, "files_destructive": 4, "coding": 14,
     "vision": 10, "agents": 8, "council": 6, "communication": 8,
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 10, "missions": 8,
@@ -321,6 +327,18 @@ _INTENT: tuple[tuple[str, str], ...] = (
     ("study", r"\b(?:study|learn|teach me|quiz|flash ?cards?|revise|revision|"
               r"exam|what did you learn|prerequisite|concept map|"
               r"understand (?:this|the) (?:course|textbook|topic|chapter))\b"),
+    ("media", r"(?:"
+              r"what'?s? (?:playing|this song|the song)|now playing|"
+              r"this (?:song|track)|the current (?:song|track)|"
+              r"pause (?:it|the (?:music|song|track|video))|^pause$|"
+              r"resume (?:the )?(?:music|song|playback|it)|unpause|"
+              r"skip (?:this|the (?:song|track))|next (?:track|song)|"
+              r"previous (?:track|song)|"
+              r"play (?:some )?(?:music|spotify|the next|it)\b|"
+              r"play\b.+\bby\b|put on (?:some )?(?:music|afrobeats|a song|\w+)|"
+              r"turn (?:it|the music|spotify|the song|the volume) (?:up|down)|"
+              r"(?:un)?mute (?:the )?(?:music|spotify)|\bspotify\b"
+              r")"),
     ("presentation", r"\b(?:siwes|evidence|portfolio|engr\.? bello|invigilator|supervision|visitor|"
                      r"presentation|serious mode|ultron|t21|"
                      r"defen[cs]e mode|demo mode|get ready for (?:my |the )?defen[cs]e|"

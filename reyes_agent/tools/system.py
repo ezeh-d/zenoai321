@@ -838,6 +838,8 @@ from reyes_agent.tools import hands_tools as _hands_tools  # noqa: E402,F401
 from reyes_agent.tools import content_tools as _content_tools  # noqa: E402,F401
 # Universal Learning Engine tools (study/ask/status/forget).
 from reyes_agent.tools import study_tools as _study_tools  # noqa: E402,F401
+# Universal Media Intelligence tools (now-playing/command/app-volume/panel).
+from reyes_agent.tools import media_tools as _media_tools  # noqa: E402,F401
 
 
 # ZENO Live News: the multi-source, de-duplicated, recency+quality-ranked news
