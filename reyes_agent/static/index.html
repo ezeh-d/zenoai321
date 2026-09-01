@@ -313,6 +313,7 @@
     #composer { margin: 0 12px 16px 12px; }
   }
 </style>
+  <link rel="stylesheet" href="/static/workspace/styles.css?v=1">
 </head>
 <body>
 <style>
@@ -1714,6 +1715,20 @@ explainBtn.addEventListener('click', () => {
 // --- Command Palette: Ctrl+Space or Ctrl+K. Every entry is either a
 // direct client-side UI action, or a real message sent through runTurn()
 // -- nothing here bypasses the normal agent/tool/confirmation pipeline.
+let zenoWorkspaceShell = null;
+const workspaceShellReady = import('/static/workspace/shell.js?v=1')
+  .then(({ createWorkspaceShell }) => {
+    zenoWorkspaceShell = createWorkspaceShell({
+      fetchImpl: (...args) => fetch(...args), documentRef: document,
+    });
+    window.zenoWorkspace = zenoWorkspaceShell;
+    void zenoWorkspaceShell.hydrate();
+    return zenoWorkspaceShell;
+  })
+  .catch((error) => {
+    console.warn('Workspace shell unavailable:', error);
+    return null;
+  });
 const cmdkOverlay = document.getElementById('cmdk-overlay');
 const cmdkInput = document.getElementById('cmdk-input');
 const cmdkList = document.getElementById('cmdk-list');
@@ -1767,9 +1782,13 @@ const COMMANDS = [
 ];
 let cmdkSel = 0;
 let cmdkFiltered = COMMANDS;
+let workspaceRemoteCommands = [];
+let workspaceSearchAbort = null;
+let workspaceSearchSequence = 0;
 function cmdkRender() {
   const q = cmdkInput.value.trim().toLowerCase();
-  cmdkFiltered = q ? COMMANDS.filter((c) => c.label.toLowerCase().includes(q)) : COMMANDS;
+  const localCommands = q ? COMMANDS.filter((c) => c.label.toLowerCase().includes(q)) : COMMANDS;
+  cmdkFiltered = q ? [...localCommands, ...workspaceRemoteCommands] : localCommands;
   cmdkSel = Math.min(cmdkSel, Math.max(0, cmdkFiltered.length - 1));
   if (!cmdkFiltered.length) {
     cmdkList.innerHTML = '<div id="cmdk-empty">No matching command.</div>';
@@ -1782,6 +1801,36 @@ function cmdkRender() {
     el.addEventListener('click', () => { cmdkSel = Number(el.dataset.i); cmdkRun(); });
   });
 }
+async function cmdkSearchWorkspace() {
+  const query = cmdkInput.value.trim();
+  const sequence = ++workspaceSearchSequence;
+  workspaceSearchAbort?.abort();
+  workspaceSearchAbort = null;
+  if (query.length < 2) {
+    workspaceRemoteCommands = [];
+    cmdkRender();
+    return;
+  }
+  const controller = new AbortController();
+  workspaceSearchAbort = controller;
+  try {
+    const shell = await workspaceShellReady;
+    if (!shell || sequence !== workspaceSearchSequence) return;
+    const results = await shell.search(query, { signal: controller.signal });
+    if (sequence !== workspaceSearchSequence) return;
+    workspaceRemoteCommands = results.map((result) => ({
+      label: result.title || result.target || 'Workspace result',
+      hint: String(result.kind || 'workspace').replaceAll('_', ' '),
+      run: () => void shell.executeSearchResult(result),
+    }));
+    cmdkRender();
+  } catch (error) {
+    if (error?.name !== 'AbortError' && sequence === workspaceSearchSequence) {
+      workspaceRemoteCommands = [];
+      cmdkRender();
+    }
+  }
+}
 function cmdkRun() {
   const cmd = cmdkFiltered[cmdkSel];
   cmdkClose();
@@ -1791,13 +1840,21 @@ function cmdkOpen() {
   cmdkOverlay.classList.add('open');
   cmdkInput.value = '';
   cmdkSel = 0;
+  workspaceRemoteCommands = [];
   cmdkRender();
   setTimeout(() => cmdkInput.focus(), 0);
 }
 function cmdkClose() {
+  workspaceSearchAbort?.abort();
+  workspaceSearchAbort = null;
   cmdkOverlay.classList.remove('open');
 }
-cmdkInput.addEventListener('input', () => { cmdkSel = 0; cmdkRender(); });
+cmdkInput.addEventListener('input', () => {
+  cmdkSel = 0;
+  workspaceRemoteCommands = [];
+  cmdkRender();
+  void cmdkSearchWorkspace();
+});
 cmdkInput.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown') { e.preventDefault(); cmdkSel = Math.min(cmdkSel + 1, cmdkFiltered.length - 1); cmdkRender(); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); cmdkSel = Math.max(cmdkSel - 1, 0); cmdkRender(); }
@@ -5361,12 +5418,16 @@ fetch('/api/live-desktop/status').then(response => response.ok ? response.json()
 // dashboard fetches initial state once, then refreshes only affected areas.
 if (window.EventSource) {
   const dashboardEvents = new EventSource('/api/events/stream');
+  dashboardEvents.onopen = () => {
+    void workspaceShellReady.then((shell) => shell?.hydrate());
+  };
   dashboardEvents.onmessage = (event) => {
     let update;
     try { update = JSON.parse(event.data); } catch (e) { return; }
     recordFrontendMessage();
     lastEvent = update;
     const type = update.type || '';
+    void workspaceShellReady.then((shell) => shell?.consumeEvent(update));
     if (type.startsWith('mission.')) refreshMissions();
     if (type === 'performance.features_changed') applyFeatureSettings(update.payload || {});
     if (type === 'dream.state_changed' && featureEls.dreamStatus) {
