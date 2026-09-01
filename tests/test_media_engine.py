@@ -323,3 +323,14 @@ def test_snapshot_degrades_when_gsmtc_unavailable(monkeypatch):
     monkeypatch.setattr(S, "available", lambda: False)
     snaps, current = S.snapshot_sessions()
     assert snaps == [] and current is None
+
+
+def test_volume_nudge_is_relative_to_current_level(monkeypatch):
+    mgr = M.MediaManager()
+    monkeypatch.setattr(mgr._audio, "get_master_volume", lambda: 0.40)
+    captured = {}
+    monkeypatch.setattr(mgr._audio, "set_master_volume",
+                        lambda lvl: captured.update(level=lvl) or {"ok": True, "detail": "set"})
+    out = mgr.command("louder")            # +0.15 from the real 0.40
+    assert abs(out["level"] - 0.55) < 1e-6
+    assert abs(captured["level"] - 0.55) < 1e-6

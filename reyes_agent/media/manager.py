@@ -212,9 +212,13 @@ class MediaManager:
             target_app = app_id
 
         if delta is not None:
-            # nudge relative to the app's current or master; simplest correct
-            # behaviour: nudge master unless an app was named.
-            base = 0.5 if level is None else level
+            # nudge relative to the REAL current master volume, so "turn it up"
+            # actually steps from where it is (falls back to 0.5 if unreadable).
+            if level is None:
+                current = self._audio.get_master_volume()
+                base = current if current is not None else 0.5
+            else:
+                base = level
             level = max(0.0, min(1.0, base + delta))
 
         if level is None:

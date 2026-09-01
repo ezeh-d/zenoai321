@@ -141,6 +141,18 @@ class SystemAudioAdapter:
         return _result(True, f"{want} volume -> {int(level * 100)}%",
                        matched=matched, observed=observed)
 
+    def get_master_volume(self) -> float | None:
+        """Current system master volume (0.0-1.0), or None if unreadable.
+        Lets relative nudges ('turn it up') work from the REAL level."""
+        if not self.available():
+            return None
+        try:
+            from pycaw.pycaw import AudioUtilities
+            vol = AudioUtilities.GetSpeakers().EndpointVolume
+            return round(float(vol.GetMasterVolumeLevelScalar()), 3)
+        except Exception:  # noqa: BLE001
+            return None
+
     def set_master_volume(self, level: float) -> dict[str, Any]:
         """System master volume via the existing verified tool (no duplication)."""
         level = max(0.0, min(1.0, float(level)))
