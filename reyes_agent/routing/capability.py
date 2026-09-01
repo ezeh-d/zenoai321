@@ -81,11 +81,11 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                 "media_control", "set_volume"),
     "files": ("read_file", "write_project_file", "list_dir", "list_project_files",
               "read_document", "content_open", "content_inspect", "content_context",
-              "study_document", "study_ask", "study_status", "study_report",
-              "study_weak_areas", "concept_prerequisites", "quiz_generate",
-              "quiz_evaluate", "study_forget", "study_mastery_update",
               "content_tables", "content_convert", "content_undo",
               "content_history", "open_path", "move_file"),
+    "study": ("study_document", "study_ask", "study_status", "study_report",
+              "study_weak_areas", "study_forget", "study_mastery_update",
+              "concept_prerequisites", "quiz_generate", "quiz_evaluate"),
     "files_destructive": ("delete_file",),
     "coding": ("write_project_file", "read_file", "list_project_files",
                "build_project", "run_command", "website_project",
@@ -153,7 +153,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
 # 105-schema payload. Checked by a regression test.
 BUDGETS: dict[str, int] = {
     "conversation": 3, "utility": 12, "memory": 16, "web": 8, "browser": 14,
-    "desktop": 12, "files": 24, "files_destructive": 4, "coding": 14,
+    "desktop": 12, "files": 14, "study": 12, "files_destructive": 4, "coding": 14,
     "vision": 10, "agents": 8, "council": 6, "communication": 8,
     "business": 10, "career": 10, "paid_work": 10, "client_work": 10,
     "builder": 10, "creative": 10, "missions": 8,
@@ -318,6 +318,9 @@ _INTENT: tuple[tuple[str, str], ...] = (
             r"headlines?|what.?s (?:the )?(?:latest|new)|any .*news)\b"),
     ("files", r"\b(?:file|folder|directory|read (?:the )?\S+\.\w+|save (?:it |this )?to|"
               r"list (?:the )?(?:files|dir))\b"),
+    ("study", r"\b(?:study|learn|teach me|quiz|flash ?cards?|revise|revision|"
+              r"exam|what did you learn|prerequisite|concept map|"
+              r"understand (?:this|the) (?:course|textbook|topic|chapter))\b"),
     ("presentation", r"\b(?:siwes|evidence|portfolio|engr\.? bello|invigilator|supervision|visitor|"
                      r"presentation|serious mode|ultron|t21|"
                      r"defen[cs]e mode|demo mode|get ready for (?:my |the )?defen[cs]e|"

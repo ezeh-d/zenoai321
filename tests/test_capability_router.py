@@ -106,6 +106,49 @@ class TestIntentRouting:
         assert route.exposed <= len(cap.ESSENTIAL)
 
 
+class TestStudyIsItsOwnCapability:
+    """Study/quiz/concept tools were split out of the overgrown `files`
+    capability into a dedicated `study` capability -- so learning intents
+    route to the right, smaller tool set and file intents don't drag the
+    study machinery along."""
+
+    STUDY_TOOLS = ("study_document", "study_ask", "study_status", "study_report",
+                   "study_weak_areas", "study_forget", "study_mastery_update",
+                   "concept_prerequisites", "quiz_generate", "quiz_evaluate")
+
+    def test_study_capability_holds_the_learning_tools(self):
+        assert set(cap.CAPABILITIES["study"]) == set(self.STUDY_TOOLS)
+
+    def test_files_no_longer_carries_study_tools(self):
+        leaked = [t for t in cap.CAPABILITIES["files"]
+                  if t.startswith(("study_", "quiz_", "concept_"))]
+        assert leaked == []
+
+    @pytest.mark.parametrize("message", [
+        "quiz me on this chapter",
+        "study this pdf for my exam",
+        "make flashcards from the notes",
+        "teach me photosynthesis",
+        "revise chapter 3 with me",
+    ])
+    def test_learning_intents_route_to_study(self, message):
+        assert "study" in cap.tools_for(message).capabilities
+
+    def test_study_route_exposes_every_study_tool(self):
+        # budget must be wide enough to surface all of them in one shot
+        tools = cap.tools_for("quiz me on this chapter").tools
+        for tool in self.STUDY_TOOLS:
+            assert tool in tools
+
+    @pytest.mark.parametrize("message", [
+        "read the file report.pdf",
+        "list the files here",
+    ])
+    def test_file_intents_do_not_pull_in_study_tools(self, message):
+        tools = cap.tools_for(message).tools
+        assert not any(t in self.STUDY_TOOLS for t in tools)
+
+
 class TestFollowUpContext:
     def test_a_follow_up_inherits_the_previous_capability(self):
         """"Search for it" after opening a browser is a BROWSER command.

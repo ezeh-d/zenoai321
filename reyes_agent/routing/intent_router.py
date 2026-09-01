@@ -65,6 +65,10 @@ _DEFAULT_ROUTES: tuple[Route, ...] = (
         "look at this file", "open that pdf", "read this document for me",
         "what is this file", "open the spreadsheet", "check this word document",
         "have a look at this image", "what does this file say")),
+    Route("study_material", "study", (
+        "study this", "teach me this", "quiz me", "test me on this",
+        "help me revise for the exam", "learn this course", "make flashcards",
+        "explain this chapter", "what am I weak in", "what did you learn")),
     Route("defense_mode", "presentation", (
         "defense mode", "get ready for my presentation", "we're about to present",
         "presentation mode on", "prepare for the demo", "it's defense time")),
