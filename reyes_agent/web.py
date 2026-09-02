@@ -974,6 +974,51 @@ def _spotify_connected_safe() -> bool:
         return False
 
 
+# --- Phone remote control: touch mouse (OWNER-authenticated, mouse only) --
+# The phone becomes a touch mouse. Every route here requires an authenticated
+# phone session; the controller enforces MOUSE mode + emergency stop + rate
+# limits; keyboard/command actions are refused by the controller itself.
+class PointerRequest(BaseModel):
+    action: str
+    nx: float = 0.0
+    ny: float = 0.0
+    amount: int = 0
+
+
+class ControlRequest(BaseModel):
+    action: str            # "mode" | "stop" | "enable"
+    mode: str = ""         # for action=="mode": view | panel | mouse
+
+
+@app.post("/api/internal/remote-stop")
+def remote_stop_loopback(request: Request) -> dict[str, Any]:
+    """Desktop owner's kill switch -- loopback only, no phone session needed so
+    the laptop can always cut remote control instantly."""
+    peer = request.client.host if request.client else ""
+    if peer not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(403, "loopback only")
+    from reyes_agent.remote_control import get_remote_controller
+
+    return get_remote_controller().emergency_stop()
+
+
+@app.post("/api/panels/broadcast")
+def panels_broadcast(request: Request, event: dict = Body(...)) -> dict[str, Any]:
+    """The desktop panel host publishes its layout changes here so authenticated
+    mirror clients (the phone) follow the SAME panels. Loopback only -- the
+    laptop is the single source of truth; the phone consumes, never publishes."""
+    peer = request.client.host if request.client else ""
+    if peer not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(403, "loopback only")
+    etype = str(event.get("type", ""))
+    if not etype.startswith("panel."):
+        raise HTTPException(400, "only panel.* events may be broadcast")
+    from reyes_agent import event_bus
+
+    event_bus.publish(etype, event.get("payload", {}), source="panel_host")
+    return {"ok": True}
+
+
 @app.get("/api/voices/diagnose")
 def voices_diagnose() -> dict[str, Any]:
     """Voice diagnostics, including a real check that each configured id
@@ -3554,6 +3599,39 @@ def _phone_session(request: Request, zeno_phone_session: str | None = Cookie(def
                                             request.method not in {"GET", "HEAD"})
     except PermissionError as exc:
         raise HTTPException(401, str(exc)) from exc
+
+
+# Phone remote-control routes -- defined here, AFTER _phone_session, so the
+# authenticated-session dependency resolves at import time.
+@app.get("/api/remote/control")
+def remote_control_state(session=Depends(_phone_session)) -> dict[str, Any]:
+    from reyes_agent.remote_control import get_remote_controller
+
+    return get_remote_controller().state()
+
+
+@app.post("/api/remote/control")
+def remote_control_set(req: ControlRequest, session=Depends(_phone_session)) -> dict[str, Any]:
+    from reyes_agent.remote_control import get_remote_controller
+
+    ctl = get_remote_controller()
+    ctl.claim(session.get("device_id") if isinstance(session, dict) else None)
+    if req.action == "stop":
+        return ctl.emergency_stop()
+    if req.action == "enable":
+        return ctl.enable()
+    if req.action == "mode":
+        return ctl.set_mode(req.mode)
+    return {"ok": False, "detail": f"unknown control action '{req.action}'"}
+
+
+@app.post("/api/remote/pointer")
+def remote_pointer(req: PointerRequest, session=Depends(_phone_session)) -> dict[str, Any]:
+    from reyes_agent.remote_control import get_remote_controller
+
+    return get_remote_controller().pointer(
+        req.action, nx=req.nx, ny=req.ny, amount=req.amount,
+        device=session.get("device_id") if isinstance(session, dict) else None)
 
 
 def _phone_session_response(payload: dict[str, Any], login: dict[str, Any],

@@ -18,6 +18,11 @@ _PUBLIC_REMOTE_PREFIXES = (
     "/api/phone/devices", "/api/phone/audio/", "/api/phone/session/",
     "/api/phone/health", "/api/phone/tts", "/api/phone/approvals",
     "/ws/phone",
+    # Phone remote control (touch mouse). Reachable over the tunnel but every
+    # route enforces an authenticated phone session in its handler
+    # (Depends(_phone_session)); the controller adds MOUSE-mode + emergency-stop
+    # + rate-limit gates on top. Network position alone grants nothing.
+    "/api/remote/",
     # The owner web app and its API, reachable through the gateway. These are
     # NOT protected by network position -- they are protected by
     # OwnerAuthService: every /api/owner route except login/refresh/logout and

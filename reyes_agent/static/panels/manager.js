@@ -36,6 +36,9 @@ export class PanelManager {
 
   // -- lifecycle ---------------------------------------------------------
   async init() {
+    // The laptop (loopback) is the panel HOST and broadcasts its layout; any
+    // other origin (the phone over the tunnel) is a MIRROR that follows it.
+    this.isHost = /^(127\.0\.0\.1|localhost|::1|\[::1\])$/.test(location.hostname);
     this._buildHost();
     try {
       this.registry = await (await fetch("/api/panels/registry")).json();
@@ -67,6 +70,7 @@ export class PanelManager {
       this._source.onmessage = (m) => {
         let evt;
         try { evt = JSON.parse(m.data); } catch (_e) { return; }
+        if (!this.isHost) this._mirror(evt);   // phone follows the laptop's layout
         this._route(evt);
         this._dispatch(evt);
       };
@@ -90,6 +94,32 @@ export class PanelManager {
   }
 
   _capForTool(_tool) { return null; } // server already folds capability into tool_panel
+
+  // Host -> event bus: publish a layout change so mirrors follow (loopback-only
+  // on the server; a no-op fetch from a mirror is simply refused).
+  _broadcast(type, payload) {
+    if (!this.isHost) return;
+    try {
+      fetch("/api/panels/broadcast", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, payload }),
+      }).catch(() => {});
+    } catch (_e) {}
+  }
+
+  // Mirror <- event bus: follow the host's panel.* layout events.
+  _mirror(evt) {
+    const t = evt.type || evt.event_type || "";
+    const p = evt.payload || evt.data || {};
+    if (t === "panel.opened" && p.type) this.open(p.type, { focus: false, mirror: true });
+    else if (t === "panel.closed" && p.type) {
+      const ids = this.findByType(p.type);
+      if (ids.length) this.close(ids[0]);
+    } else if (t === "panel.focused" && p.type) {
+      const ids = this.findByType(p.type);
+      if (ids.length) this.focus(ids[0]);
+    }
+  }
 
   _dispatch(evt) {
     for (const p of this.panels.values()) {
@@ -132,6 +162,7 @@ export class PanelManager {
     if (opts.focus !== false) this.focus(id);
     this._persist();
     this._log("panel.created", { id, type, reason: opts.reason || "manual" });
+    if (!opts.mirror) this._broadcast("panel.opened", { type });
     return id;
   }
 
@@ -145,6 +176,7 @@ export class PanelManager {
     this._syncDockbar();
     this._persist();
     this._log("panel.closed", { id });
+    this._broadcast("panel.closed", { type: p.type });
   }
 
   focus(id) {
@@ -154,6 +186,7 @@ export class PanelManager {
     for (const q of this.panels.values()) q.el.classList.toggle("zp-active", q === p);
     if (p.el.classList.contains("zp-min")) this.restore(id);
     this._log("panel.focused", { id });
+    this._broadcast("panel.focused", { type: p.type });
   }
 
   minimize(id) {

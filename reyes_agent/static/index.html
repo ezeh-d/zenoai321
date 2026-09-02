@@ -5695,6 +5695,11 @@ setInterval(() => { const c = document.getElementById('ultron-clock');
     const mgr = await getPanelManager().init();
     window.zenoPanels = mgr;                 // dev/diagnostic handle (s57)
   } catch (_e) { /* panels are optional; never block the HUD */ }
+  try {
+    // On a phone (or ?view=phone), turn on the touch-mouse surface.
+    const { initPhoneMouse } = await import("/static/panels/phone.js?v=1");
+    initPhoneMouse();
+  } catch (_e) { /* phone control is optional; never block the HUD */ }
 </script>
 
 </body>
