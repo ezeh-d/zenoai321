@@ -264,13 +264,24 @@ export class PanelManager {
       moving = true; sx = e.clientX; sy = e.clientY;
       const r = el.getBoundingClientRect();
       ox = r.left; oy = r.top;
+      // Pin the panel at its current on-screen spot BEFORE switching to fixed
+      // positioning, so it doesn't jump to a corner on the first drag.
+      el.style.left = `${ox}px`; el.style.top = `${oy}px`;
+      el.style.width = `${r.width}px`;
       el.classList.add("zp-float");
       document.body.style.userSelect = "none";
     });
     window.addEventListener("mousemove", (e) => {
       if (!moving) return;
-      el.style.left = `${ox + e.clientX - sx}px`;
-      el.style.top = `${oy + e.clientY - sy}px`;
+      // clamp so a panel can never be dragged fully off-screen (always
+      // grabbable). Guard against a 0/undefined viewport (a hidden pane can
+      // report innerWidth 0), which would otherwise pin everything to 0,0.
+      const W = window.innerWidth || 100000;
+      const H = window.innerHeight || 100000;
+      const nx = Math.max(0, Math.min(W - 60, ox + e.clientX - sx));
+      const ny = Math.max(0, Math.min(H - 34, oy + e.clientY - sy));
+      el.style.left = `${nx}px`;
+      el.style.top = `${ny}px`;
     });
     window.addEventListener("mouseup", () => {
       if (moving) { moving = false; document.body.style.userSelect = ""; this._persist(); }
