@@ -397,6 +397,12 @@ AUTONOMY_ALLOW_OUTBOUND = _flag("AUTONOMY_ALLOW_OUTBOUND")
 # at this machine is treated as the owner when this is on.
 TRUST_LOCAL_OWNER = _flag("ZENO_TRUST_LOCAL_OWNER")
 
+# Gemini's OpenAI-compatible endpoint hangs on streamed reads (measured:
+# non-stream ~0.9s, stream times out), which stalled every model-requiring
+# command. So Gemini turns use ONE non-streamed completion by default -- fast
+# and reliable. Set ZENO_GEMINI_STREAMING=1 only if a future endpoint fixes it.
+GEMINI_STREAMING = _flag("ZENO_GEMINI_STREAMING")
+
 AUTONOMY_DESTRUCTIVE_TOOLS = frozenset({"delete_file", "run_command"})
 AUTONOMY_OUTBOUND_TOOLS = frozenset({"send_slack_message"})
 

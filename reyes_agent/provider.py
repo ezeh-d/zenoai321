@@ -176,7 +176,10 @@ def _http_client() -> Any:
         import httpx
         return httpx.Client(
             timeout=_request_timeout(),
-            limits=httpx.Limits(max_keepalive_connections=4, max_connections=10,
+            # Turns are serialized (one model call at a time), so a single
+            # kept-alive connection is enough and avoids reaching for a stale
+            # alternate from the pool.
+            limits=httpx.Limits(max_keepalive_connections=1, max_connections=10,
                                 keepalive_expiry=120.0),
         )
     except Exception:  # noqa: BLE001
@@ -390,11 +393,13 @@ def _run_openai_compatible(
     system: str,
     tools: list[dict],
     on_text: OnText | None,
+    *,
+    stream: bool = True,
 ) -> AgentTurn:
     kwargs: dict[str, Any] = dict(
         model=model,
         messages=_to_openai_messages(history, system),
-        stream=True,
+        stream=stream,
         # High enough that a tool call carrying real file contents can
         # finish. See config.MAX_OUTPUT_TOKENS for why 600 was actively
         # harmful rather than merely conservative.
@@ -402,6 +407,33 @@ def _run_openai_compatible(
     )
     if tools:
         kwargs["tools"] = _to_openai_tools(tools)
+
+    # Non-streaming path. Gemini's OpenAI-compatible endpoint hangs on
+    # streamed reads (measured: non-stream ~0.9s, stream times out at the read
+    # ceiling), which made EVERY model-requiring command stall. One call, then
+    # the same text + tool-call extraction the streaming branch produces.
+    if not stream:
+        resp = client.chat.completions.create(**kwargs)
+        choice = resp.choices[0] if resp.choices else None
+        msg = choice.message if choice else None
+        text = (getattr(msg, "content", None) or "") if msg else ""
+        if text and on_text:
+            on_text(text)
+        tool_calls = []
+        for i, tc in enumerate(getattr(msg, "tool_calls", None) or []):
+            fn = getattr(tc, "function", None)
+            raw_args = getattr(fn, "arguments", None) or ""
+            try:
+                tool_input = json.loads(raw_args or "{}")
+            except json.JSONDecodeError:
+                tool_input = {"__truncated_arguments__": len(raw_args)}
+            tool_calls.append(ToolCall(
+                id=getattr(tc, "id", None) or f"call_{i}",
+                name=getattr(fn, "name", None),
+                input=tool_input,
+                extra=getattr(tc, "extra_content", None),
+            ))
+        return AgentTurn(text=text, tool_calls=tool_calls)
 
     text_parts: list[str] = []
     tool_accum: dict[int, dict] = {}
@@ -534,7 +566,8 @@ def _run_gemini(
     sdk = _openai_module()
     try:
         return _run_openai_compatible(
-            _get_gemini_client(), config.GEMINI_MODEL, history, system, tools, on_text
+            _get_gemini_client(), config.GEMINI_MODEL, history, system, tools, on_text,
+            stream=config.GEMINI_STREAMING,
         )
     except sdk.AuthenticationError as exc:
         raise ProviderError(
