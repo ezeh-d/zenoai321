@@ -337,7 +337,23 @@ def evaluate(
         )
 
     if name in _EXTERNAL_TOOLS or cap in {"email_send", "messaging_send", "social_post"}:
-        if not context.active or not context.owner_authenticated:
+        owner_command = context.active and context.owner_authenticated
+        # Local-owner trust (ZENO_TRUST_LOCAL_OWNER): on THIS desktop a typed or
+        # spoken owner command may send PRIVATE messages/email without the
+        # approval step. Scoped deliberately -- it never covers public posts
+        # (social_post), never touches any other tool, and the send-verb and
+        # recipient-match guards below still apply. Remote/phone turns are never
+        # affected (source is voice/local_text only).
+        if not owner_command and cap in ("messaging_send", "email_send"):
+            try:
+                from reyes_agent import config as _cfg
+
+                if (_cfg.TRUST_LOCAL_OWNER and context.active
+                        and str(context.source) in ("voice", "local_text")):
+                    owner_command = True
+            except Exception:  # noqa: BLE001 -- trust check never breaks policy
+                pass
+        if not owner_command:
             return _decision(
                 PolicyEffect.DENY, AutonomyLevel.REQUESTED_EXTERNAL,
                 "no authenticated current owner command authorizes this outward action",

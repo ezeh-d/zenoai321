@@ -387,6 +387,16 @@ AUTONOMY_MODE = os.environ.get("AUTONOMY_MODE", "on").strip().lower() != "off"
 AUTONOMY_ALLOW_DESTRUCTIVE = _flag("AUTONOMY_ALLOW_DESTRUCTIVE")
 AUTONOMY_ALLOW_OUTBOUND = _flag("AUTONOMY_ALLOW_OUTBOUND")
 
+# Trust the owner on THIS desktop: treat local commands -- typed AND spoken --
+# as an authenticated owner command, so owner-initiated sends (messages,
+# app/file/browser control) run without a per-action approval prompt. The hard
+# safety floor still holds regardless: run_command, delete/move, social posts,
+# money and security tooling always keep their confirmation. Remote/paired-phone
+# turns are NOT affected -- they still require their own fingerprint step-up.
+# Off by default; a deliberate single-user opt-in. Anyone who can type or speak
+# at this machine is treated as the owner when this is on.
+TRUST_LOCAL_OWNER = _flag("ZENO_TRUST_LOCAL_OWNER")
+
 AUTONOMY_DESTRUCTIVE_TOOLS = frozenset({"delete_file", "run_command"})
 AUTONOMY_OUTBOUND_TOOLS = frozenset({"send_slack_message"})
 
