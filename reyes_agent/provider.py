@@ -142,6 +142,25 @@ def _get_anthropic_client() -> Any:
     return _anthropic_client
 
 
+def _request_timeout() -> Any:
+    """Granular per-request timeout for the model clients.
+
+    A flat 90s timeout meant a stale/half-open pooled connection blocked a
+    turn for the full 90s -- and because turns are serialized on one lock, that
+    one hang blocked EVERY following command. A single model call never
+    legitimately takes tens of seconds, so we cap connect/read/pool tightly:
+    a dead connection fails in seconds and the turn releases the lock, and the
+    next command gets a fresh connection. The read cap stays generous enough
+    for a genuinely slow provider response, but far below the old 90s.
+    """
+    try:
+        import httpx
+        read = min(30.0, float(config.AI_REQUEST_TIMEOUT_S))
+        return httpx.Timeout(connect=8.0, read=read, write=15.0, pool=8.0)
+    except Exception:  # noqa: BLE001 -- fall back to the flat value if httpx shape changes
+        return float(config.AI_REQUEST_TIMEOUT_S)
+
+
 def _get_openai_client() -> Any:
     global _openai_client
     if _openai_client is None:
@@ -150,7 +169,7 @@ def _get_openai_client() -> Any:
                 if not config.OPENAI_API_KEY:
                     raise ProviderError("No OPENAI_API_KEY set. Add one to .env, then restart.")
                 kwargs = {"api_key": config.OPENAI_API_KEY,
-                          "timeout": float(config.AI_REQUEST_TIMEOUT_S), "max_retries": 0}
+                          "timeout": _request_timeout(), "max_retries": 0}
                 if config.OPENAI_BASE_URL:
                     kwargs["base_url"] = config.OPENAI_BASE_URL
                 _openai_client = _openai_module().OpenAI(**kwargs)
@@ -166,7 +185,7 @@ def _get_xai_client() -> Any:
                     raise ProviderError("No XAI_API_KEY set. Add one to .env, then restart.")
                 _xai_client = _openai_module().OpenAI(
                     api_key=config.XAI_API_KEY, base_url="https://api.x.ai/v1",
-                    timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+                    timeout=_request_timeout(), max_retries=0,
                 )
     return _xai_client
 
@@ -181,7 +200,7 @@ def _get_gemini_client() -> Any:
                 _gemini_client = _openai_module().OpenAI(
                     api_key=config.GEMINI_API_KEY,
                     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-                    timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+                    timeout=_request_timeout(), max_retries=0,
                 )
     return _gemini_client
 
@@ -194,7 +213,7 @@ def _get_ollama_client() -> Any:
                 # Ollama's OpenAI-compatible endpoint ignores the key -- any string works.
                 _ollama_client = _openai_module().OpenAI(
                     api_key="ollama", base_url=config.OLLAMA_BASE_URL,
-                    timeout=float(config.AI_REQUEST_TIMEOUT_S), max_retries=0,
+                    timeout=_request_timeout(), max_retries=0,
                 )
     return _ollama_client
 
