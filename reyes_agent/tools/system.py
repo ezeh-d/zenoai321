@@ -463,15 +463,30 @@ def move_file(src: str, dst: str) -> str:
     },
     requires_confirmation=True,
 )
+def _terminal_event(kind: str, payload: dict) -> None:
+    """Best-effort publish so the live Terminal panel can show real output.
+    Never affects command execution."""
+    try:
+        from reyes_agent import event_bus
+        event_bus.publish(kind, payload, source="run_command")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_command(command: str) -> str:
+    _terminal_event("terminal.command", {"command": command})
     try:
         result = subprocess.run(
             command, shell=True, capture_output=True, text=True, timeout=30
         )
     except subprocess.TimeoutExpired:
+        _terminal_event("terminal.exit", {"code": -1, "timeout": True})
         return f"Command timed out after 30s: {command}"
     output = (result.stdout or "") + (result.stderr or "")
     output = output.strip()[:_MAX_READ_CHARS]
+    if output:
+        _terminal_event("terminal.output", {"output": output})
+    _terminal_event("terminal.exit", {"code": result.returncode})
     return f"Exit code {result.returncode}.\n{output}" if output else f"Exit code {result.returncode}. No output."
 
 

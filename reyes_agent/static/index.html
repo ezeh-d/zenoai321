@@ -5686,5 +5686,16 @@ setInterval(() => { const c = document.getElementById('ultron-clock');
   } catch (_e) { /* media panel is optional; never block the HUD */ }
 </script>
 
+<!-- Universal Live Panel System: command -> the right live panel. Isolated so
+     any failure leaves the rest of the HUD untouched. -->
+<link rel="stylesheet" href="/static/panels/panels.css?v=1">
+<script type="module">
+  try {
+    const { getPanelManager } = await import("/static/panels/manager.js?v=1");
+    const mgr = await getPanelManager().init();
+    window.zenoPanels = mgr;                 // dev/diagnostic handle (s57)
+  } catch (_e) { /* panels are optional; never block the HUD */ }
+</script>
+
 </body>
 </html>

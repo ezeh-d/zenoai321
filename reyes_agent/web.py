@@ -809,6 +809,100 @@ def spotify_callback(code: str = "", state: str = "", error: str = "") -> Respon
     return _page("Couldn't finish linking", res.get("detail", "Unknown error."), False)
 
 
+# --- Universal Live Panel System -----------------------------------------
+# The browser side (static/panels/*) builds the panel host from this registry
+# and reacts to the existing unified event stream (/api/events/stream). These
+# routes are the server side: the catalogue, the decision engine (discovery),
+# and the real data a couple of panels need beyond the event bus.
+@app.get("/api/panels/registry")
+def panels_registry() -> dict[str, Any]:
+    """Panel catalogue + capability/tool -> panel maps (drives the UI)."""
+    from reyes_agent import panels
+
+    return panels.registry()
+
+
+@app.get("/api/panels/route")
+def panels_route(tool: str = "", capability: str = "") -> dict[str, Any]:
+    """PanelDecisionEngine as a route -- which panel a tool/capability opens.
+    Also the developer discovery surface (master prompt s57)."""
+    from reyes_agent import panels
+
+    return panels.decide(tool=tool or None, capability=capability or None)
+
+
+@app.get("/api/panels/system")
+def panels_system() -> dict[str, Any]:
+    """Real live system metrics for the System panel (throttled by the client)."""
+    import shutil
+
+    out: dict[str, Any] = {"ok": True}
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+        out["cpu_percent"] = psutil.cpu_percent(interval=0.0)
+        out["cpu_count"] = psutil.cpu_count(logical=True)
+        out["ram_percent"] = vm.percent
+        out["ram_used_gb"] = round(vm.used / 1e9, 2)
+        out["ram_total_gb"] = round(vm.total / 1e9, 2)
+        try:
+            batt = psutil.sensors_battery()
+            if batt is not None:
+                out["battery_percent"] = round(batt.percent)
+                out["charging"] = bool(batt.power_plugged)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            du = shutil.disk_usage(os.path.expanduser("~"))
+            out["disk_percent"] = round(du.used / du.total * 100, 1)
+            out["disk_free_gb"] = round(du.free / 1e9, 1)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            net = psutil.net_io_counters()
+            out["net_sent_mb"] = round(net.bytes_sent / 1e6, 1)
+            out["net_recv_mb"] = round(net.bytes_recv / 1e6, 1)
+        except Exception:  # noqa: BLE001
+            pass
+        out["process_count"] = len(psutil.pids())
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"metrics unavailable: {exc}"}
+    return out
+
+
+@app.get("/api/panels/files")
+def panels_files(path: str = "") -> dict[str, Any]:
+    """Real directory listing for the Files panel, bounded to the owner's
+    profile. No path escapes the home directory."""
+    home = os.path.abspath(os.path.expanduser("~"))
+    target = os.path.abspath(path) if path else home
+    # Keep the panel inside the home tree -- no arbitrary filesystem browsing.
+    if os.path.commonpath([home, target]) != home:
+        target = home
+    if not os.path.isdir(target):
+        raise HTTPException(404, "not a directory")
+    entries: list[dict[str, Any]] = []
+    try:
+        for name in sorted(os.listdir(target), key=str.casefold):
+            if name.startswith("."):
+                continue
+            full = os.path.join(target, name)
+            try:
+                is_dir = os.path.isdir(full)
+                size = 0 if is_dir else os.path.getsize(full)
+            except OSError:
+                continue
+            entries.append({"name": name, "dir": is_dir, "size": size,
+                            "path": full})
+    except OSError as exc:
+        raise HTTPException(403, f"cannot read directory: {exc}") from exc
+    parent = os.path.dirname(target)
+    return {"ok": True, "path": target,
+            "parent": parent if os.path.commonpath([home, parent]) == home else None,
+            "entries": entries[:500]}
+
+
 @app.get("/api/voices/diagnose")
 def voices_diagnose() -> dict[str, Any]:
     """Voice diagnostics, including a real check that each configured id
