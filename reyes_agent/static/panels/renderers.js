@@ -127,8 +127,14 @@ export const RENDERERS = {
         api.setBody(`<div class="zp-files">${up}${rows || '<div class="zp-hint">empty</div>'}</div>`);
         api.body.querySelectorAll(".zp-file").forEach((el) => {
           el.onclick = () => {
-            if (el.dataset.dir === "true" || el.classList.contains("zp-dir"))
-              RENDERERS.files.mount(api, el.dataset.path);
+            const fp = el.dataset.path;
+            if (el.dataset.dir === "true" || el.classList.contains("zp-dir")) {
+              RENDERERS.files.mount(api, fp);
+            } else if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(fp)) {
+              api.open("image", { arg: fp, focus: true });
+            } else {
+              api.open("editor", { arg: fp, focus: true });   // real read-only view
+            }
           };
         });
       } catch (e) { api.fail(e); }
@@ -242,6 +248,78 @@ export const RENDERERS = {
       tick(); api._timer = setInterval(tick, 3000);
     },
     unmount(api) { if (api._timer) clearInterval(api._timer); },
+  },
+
+  // --- Editor: real read-only file view (keyboard editing off, s10) ----
+  editor: {
+    async mount(api, path) {
+      if (!path) { api.setBody(`<div class="zp-hint">Open a file from the Files panel to view it here.</div>`); api.setStatus("idle"); return; }
+      api.setStatus("loading");
+      try {
+        const d = await (await fetch(`/api/panels/file?path=${encodeURIComponent(path)}`)).json();
+        if (!d.ok) { api.setBody(`<div class="zp-hint">${esc(d.error || "cannot open")}</div>`); api.setStatus("warning"); return; }
+        api.setStatus("active");
+        api.title(`Editor — ${esc(d.name)}`);
+        const numbered = d.content.split("\n").map((ln, i) =>
+          `<div class="zp-eline"><span class="zp-lno">${i + 1}</span><span class="zp-code">${esc(ln) || " "}</span></div>`).join("");
+        api.setBody(`<div class="zp-editor" data-ext="${esc(d.ext)}">${numbered}</div>`);
+      } catch (e) { api.fail(e); }
+    },
+  },
+
+  // --- Image: real image render ---------------------------------------
+  image: {
+    mount(api, path) {
+      if (!path) { api.setBody(`<div class="zp-hint">No image selected — open one from Files.</div>`); api.setStatus("idle"); return; }
+      api.setStatus("active");
+      api.title(`Image — ${esc(path.split(/[\\/]/).pop())}`);
+      api.setBody(`<div class="zp-imgwrap"><img class="zp-fullimg" src="/api/panels/image?path=${encodeURIComponent(path)}"></div>`);
+      const img = api.body.querySelector("img");
+      if (img) img.onerror = () => api.setBody(`<div class="zp-hint">Image unavailable.</div>`);
+    },
+  },
+
+  // --- Analytics: live metric history, inline SVG (CSP-safe, no lib) ----
+  analytics: {
+    mount(api) {
+      api.setStatus("active"); api._cpu = []; api._ram = [];
+      const spark = (data, color) => {
+        if (data.length < 2) return "";
+        const w = 300, h = 42;
+        const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - (Math.max(0, Math.min(100, v)) / 100) * h}`).join(" ");
+        return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="zp-spark"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"/></svg>`;
+      };
+      const tick = async () => {
+        try {
+          const m = await (await fetch("/api/panels/system")).json();
+          if (!m.ok) return;
+          api._cpu.push(m.cpu_percent || 0); api._ram.push(m.ram_percent || 0);
+          if (api._cpu.length > 60) { api._cpu.shift(); api._ram.shift(); }
+          api.setBody(`<div class="zp-analytics">
+            <div class="zp-achart"><span>CPU ${m.cpu_percent}%</span>${spark(api._cpu, "#40c4ff")}</div>
+            <div class="zp-achart"><span>RAM ${m.ram_percent}%</span>${spark(api._ram, "#39d98a")}</div>
+            <div class="zp-hint">Live, last ${api._cpu.length} samples.</div></div>`);
+        } catch (_e) { api.setStatus("offline"); }
+      };
+      tick(); api._timer = setInterval(tick, 2000);
+    },
+    unmount(api) { if (api._timer) clearInterval(api._timer); },
+  },
+
+  // --- Settings: real, non-secret configuration ------------------------
+  settings: {
+    async mount(api) {
+      api.setStatus("active");
+      try {
+        const s = await (await fetch("/api/panels/settings")).json();
+        const row = (k, v) => `<div class="zp-setrow"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+        api.setBody(`<div class="zp-settings">
+          ${row("Model", s.model_provider)}${row("Voice output", s.voice_output)}
+          ${row("Duck on speak", s.duck_on_speak)}${row("Trust local owner", s.trust_local_owner)}
+          ${row("Autonomy", s.autonomy_mode)}${row("Intent router", s.intent_router)}
+          ${row("Spotify", s.spotify_connected ? "connected" : "not linked")}</div>`);
+      } catch (e) { api.fail(e); }
+    },
   },
 
   // --- honest fallback for registered-but-not-yet-rich panels ----------

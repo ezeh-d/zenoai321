@@ -107,7 +107,13 @@ export class PanelManager {
     // singleton reuse
     if (def.singleton) {
       for (const p of this.panels.values()) {
-        if (p.type === type) { if (opts.focus !== false) this.focus(p.id); return p.id; }
+        if (p.type === type) {
+          if (opts.arg !== undefined && p.renderer && p.renderer.mount) {
+            try { p.renderer.mount(this._api(p), opts.arg); } catch (e) { this._panelError(p, e); }
+          }
+          if (opts.focus !== false) this.focus(p.id);
+          return p.id;
+        }
       }
     }
     const id = `${type}-${++this._seq}`;
@@ -121,7 +127,7 @@ export class PanelManager {
     };
     this.panels.set(id, panel);
     this._setStatus(panel, "idle");
-    try { panel.renderer.mount && panel.renderer.mount(this._api(panel)); }
+    try { panel.renderer.mount && panel.renderer.mount(this._api(panel), opts.arg); }
     catch (e) { this._panelError(panel, e); }
     if (opts.focus !== false) this.focus(id);
     this._persist();
@@ -311,6 +317,7 @@ export class PanelManager {
       setBody: (html) => { panel.body.innerHTML = html; },
       title: (t) => { const el = panel.el.querySelector(".zp-title"); if (el) el.textContent = t; },
       fail: (e) => mgr._panelError(panel, e),
+      open: (type, opts) => mgr.open(type, opts),
     };
   }
 

@@ -74,7 +74,7 @@ PANELS: dict[str, dict[str, Any]] = {
                         support="planned"),
     "map":           _p("map", "Map", "◈", kind="map", support="planned"),
     "analytics":     _p("analytics", "Analytics", "▦", kind="analytics",
-                        support="planned"),
+                        support="live"),
     "camera":        _p("camera", "Camera", "▣", kind="camera",
                         support="planned", security="sensitive"),
     "video":         _p("video", "Video", "▷", kind="video", support="planned"),

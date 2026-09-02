@@ -903,6 +903,77 @@ def panels_files(path: str = "") -> dict[str, Any]:
             "entries": entries[:500]}
 
 
+def _within_home(path: str) -> str | None:
+    home = os.path.abspath(os.path.expanduser("~"))
+    target = os.path.abspath(path)
+    if os.path.commonpath([home, target]) != home or not os.path.isfile(target):
+        return None
+    return target
+
+
+@app.get("/api/panels/file")
+def panels_file(path: str = "") -> dict[str, Any]:
+    """Read a text file for the Editor panel (read-only, bounded to the home
+    tree, size-capped). Binary/oversized files are refused with a clear note."""
+    target = _within_home(path)
+    if not target:
+        raise HTTPException(404, "file not found or outside the home tree")
+    try:
+        if os.path.getsize(target) > 512_000:
+            return {"ok": False, "error": "file too large to preview (>500 KB)"}
+        with open(target, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except OSError as exc:
+        raise HTTPException(403, f"cannot read file: {exc}") from exc
+    if "\x00" in content[:1024]:
+        return {"ok": False, "error": "binary file — not previewable as text"}
+    return {"ok": True, "name": os.path.basename(target), "path": target,
+            "content": content, "lines": content.count("\n") + 1,
+            "ext": os.path.splitext(target)[1].lstrip(".").lower()}
+
+
+@app.get("/api/panels/image")
+def panels_image(path: str = "") -> Response:
+    """Serve an image for the Image panel (bounded to the home tree)."""
+    target = _within_home(path)
+    ext = os.path.splitext(target or "")[1].lower()
+    mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}.get(ext)
+    if not target or not mime:
+        raise HTTPException(404, "not an image inside the home tree")
+    try:
+        with open(target, "rb") as fh:
+            data = fh.read()
+    except OSError as exc:
+        raise HTTPException(403, f"cannot read image: {exc}") from exc
+    return Response(content=data, media_type=mime, headers={"Cache-Control": "max-age=15"})
+
+
+@app.get("/api/panels/settings")
+def panels_settings() -> dict[str, Any]:
+    """Real, non-secret settings for the Settings panel."""
+    def _flag(name: str, default: str = "") -> str:
+        return os.environ.get(name, default)
+    return {
+        "ok": True,
+        "model_provider": getattr(config, "MODEL_PROVIDER", "?"),
+        "voice_output": _flag("ZENO_OWNER_VOICE_ENABLED", "true"),
+        "duck_on_speak": _flag("ZENO_DUCK_ON_SPEAK", "1"),
+        "trust_local_owner": "on" if getattr(config, "TRUST_LOCAL_OWNER", False) else "off",
+        "autonomy_mode": "on" if getattr(config, "AUTONOMY_MODE", True) else "off",
+        "intent_router": _flag("ZENO_INTENT_ROUTER", "auto"),
+        "spotify_connected": _spotify_connected_safe(),
+    }
+
+
+def _spotify_connected_safe() -> bool:
+    try:
+        from reyes_agent.media.spotify import get_spotify_client
+        return get_spotify_client().connected()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @app.get("/api/voices/diagnose")
 def voices_diagnose() -> dict[str, Any]:
     """Voice diagnostics, including a real check that each configured id
