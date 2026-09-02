@@ -36,7 +36,23 @@ XAI_API_KEY = os.environ.get("XAI_API_KEY", "").strip()
 XAI_MODEL = os.environ.get("XAI_MODEL", "grok-4-latest").strip()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest").strip()
+# Fast vs smart Gemini models. gemini-3.5-flash-lite is verified available on
+# this key and is a PINNED id (steadier than the moving -latest alias). The
+# smart model is used for the heavier Gemini path; deep reasoning still routes
+# to the existing advanced provider chain (model_router). GEMINI_MODEL is kept
+# as a backward-compatible alias and defaults to the fast model, so existing
+# code paths (_run_gemini) automatically use Flash-Lite.
+GEMINI_FAST_MODEL = os.environ.get("GEMINI_FAST_MODEL", "gemini-3.5-flash-lite").strip()
+GEMINI_SMART_MODEL = os.environ.get("GEMINI_SMART_MODEL", "gemini-3.5-flash").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", GEMINI_FAST_MODEL).strip() or GEMINI_FAST_MODEL
+GEMINI_ENABLED = os.environ.get("GEMINI_ENABLED", "true").strip().lower() not in (
+    "0", "false", "no", "off")
+try:
+    # Per-request Gemini timeout override (seconds); falls back to
+    # AI_REQUEST_TIMEOUT_S in the provider when unset/invalid.
+    GEMINI_TIMEOUT = float(os.environ.get("GEMINI_TIMEOUT", "").strip() or 0) or None
+except ValueError:
+    GEMINI_TIMEOUT = None
 
 def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     try:

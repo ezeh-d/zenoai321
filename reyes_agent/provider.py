@@ -155,7 +155,10 @@ def _request_timeout() -> Any:
     """
     try:
         import httpx
-        read = min(30.0, float(config.AI_REQUEST_TIMEOUT_S))
+        # GEMINI_TIMEOUT (if set) tunes the read cap; else cap well under the
+        # 90s flat ceiling so a stall fails fast and releases the turn lock.
+        read = float(getattr(config, "GEMINI_TIMEOUT", None) or min(
+            30.0, float(config.AI_REQUEST_TIMEOUT_S)))
         return httpx.Timeout(connect=8.0, read=read, write=15.0, pool=8.0)
     except Exception:  # noqa: BLE001 -- fall back to the flat value if httpx shape changes
         return float(config.AI_REQUEST_TIMEOUT_S)
