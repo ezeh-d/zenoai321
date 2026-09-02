@@ -6,6 +6,8 @@ start ZENO, connect a provider, or initialize optional hardware.
 
 from __future__ import annotations
 
+import argparse
+import json
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -127,3 +129,27 @@ def run_router_benchmark(
         "warmups": warmups,
         "cases": cases,
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the explicit local-only benchmark suite and print one JSON result."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--router-only", action="store_true",
+                        help="benchmark fixed in-process capability routes")
+    parser.add_argument("--iterations", type=int, default=200)
+    parser.add_argument("--warmups", type=int, default=5)
+    args = parser.parse_args(argv)
+    if not args.router_only:
+        parser.error("--router-only is required")
+    try:
+        result = run_router_benchmark(
+            iterations=args.iterations, warmups=args.warmups
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

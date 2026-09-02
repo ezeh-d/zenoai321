@@ -1,5 +1,8 @@
 """Contracts for ZENO's dependency-free local performance benchmark."""
 
+import json
+
+from reyes_agent import performance_benchmark as benchmark
 from reyes_agent.performance_benchmark import run_case, run_router_benchmark, summarize
 
 
@@ -62,3 +65,18 @@ def test_router_benchmark_reports_each_fixed_route_without_starting_a_server(mon
         "Fix this Python traceback",
     ]
     assert {row["tools_exposed"] for row in result["cases"]} == {3}
+
+
+def test_main_router_only_writes_one_json_document(monkeypatch, capsys):
+    """The CLI must be machine-readable for durable benchmark evidence."""
+    observed = {}
+
+    def fake_router_benchmark(**kwargs):
+        observed.update(kwargs)
+        return {"suite": "router", "cases": []}
+
+    monkeypatch.setattr(benchmark, "run_router_benchmark", fake_router_benchmark)
+
+    assert benchmark.main(["--router-only", "--iterations", "7", "--warmups", "0"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"suite": "router", "cases": []}
+    assert observed == {"iterations": 7, "warmups": 0}
