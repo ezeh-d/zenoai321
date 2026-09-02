@@ -50,14 +50,46 @@ from normal chat; it is not a general claim about every ZENO subsystem.
 ## Limits and next measurement rule
 
 This router benchmark does **not** prove STT, TTS, LLM/provider, UI,
-rendering, browser, network, process-startup, or full-app performance. It ran
-without a local ZENO server, voice device, provider, panel, or browser.
+rendering, browser, network, process-startup, or full-app performance. The
+benchmark itself is in-process and does not start or require a ZENO server,
+voice device, provider, panel, or browser.
+
+## Bounded live ZENO checks
+
+The local server was available at `http://127.0.0.1:8765` (health HTTP 200).
+After one unmeasured cache-warming request, 100 persistent-connection
+`/api/health` requests that consumed the complete response measured p50
+15.5255 ms, p95 29.1308 ms, p99 54.3276 ms, and maximum 126.7527 ms. The
+server then reported `cached: true`, `ONLINE`, and 16 health checks.
+
+An earlier 50-request PowerShell `Invoke-RestMethod` run measured p50 46.0010
+ms, p95 188.8227 ms, and p99/maximum 838.6394 ms. That observation combines
+a cold health snapshot and PowerShell JSON response conversion, so it is not
+attributable to server work alone. The warmed persistent-client measurement is
+the reproducible server-boundary result.
+
+Twenty warmed, allow-listed `hello zeno` fast-path turns completed locally
+without a provider, tool call, or shared conversation history. Their loopback
+HTTP timing was p50 15.6477 ms, p90 34.4081 ms, p95 34.6472 ms, p99/maximum
+133.4495 ms. Five initial fast-path turns also created five complete latency
+timelines. As designed, those timelines reported zero `model_latency` and
+`time_to_first_token` samples because no model was requested; absent is not
+recorded as zero.
+
+One bounded streamed provider probe was made only after health reported
+providers available. Its complete timeline contained `model_requested` but no
+`first_model_token`, and reported total latency 151.0841 s. The live model
+router recorded connection failures across the configured fallback attempts
+(Gemini, OpenAI, xAI, and local Ollama); no code change can honestly claim to
+fix an unavailable provider/network path. The next provider-backed latency
+measurement must wait for a successful real model stream, then record the
+existing first-token mark rather than synthesizing one.
 
 The next target must be selected from measured evidence:
 
 1. Reinvestigate routing only if greeting p95 exceeds 5 ms or maximum exceeds
    100 ms after warmups.
-2. If a local ZENO server is available, measure loopback acknowledgement and
-   first-token trace completeness.
-3. Otherwise, benchmark one deterministic local target from Event Bus, worker
+2. A local server is available and loopback/trace completeness was measured;
+   collect a first-token sample only after a provider-backed stream succeeds.
+3. Until then, benchmark one deterministic local target from Event Bus, worker
    queue, scheduler, or Workspace panel throughput before changing it.
