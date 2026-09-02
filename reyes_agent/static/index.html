@@ -469,17 +469,32 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
 #code-overlay, #news-overlay, #timeline-overlay, #tool-library-overlay, #agents-overlay, #situation-overlay, #galaxy-overlay, #council-overlay, #subspace-overlay {
   display: none;
   position: fixed;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(92vw, 1200px);
-  height: min(82vh, 780px);
+  /* Compact, movable window by default -- NOT a near-fullscreen overlay. The
+     workspace stays visible around it; the header drags it (ws-drag.js) and a
+     double-click maximizes. Graph-heavy overlays override the size below. */
+  top: 12vh; left: 50%;
+  transform: translateX(-50%);
+  width: clamp(420px, 56vw, 900px);
+  height: clamp(340px, 62vh, 700px);
+  min-width: 360px; min-height: 300px;
   background: #0a0c12;
   border: 1px solid rgba(120,170,255,0.35);
   border-radius: 14px;
   box-shadow: 0 20px 80px rgba(0,0,0,0.7), 0 0 40px rgba(80,140,255,0.15);
-  z-index: 9999;
+  z-index: 9990;
   overflow: hidden;
   flex-direction: column;
+  resize: both;
+}
+/* Maximized (explicit, via double-click header or the ⛶ control) is the ONLY
+   way an overlay fills the workspace. */
+#code-overlay.ws-max, #news-overlay.ws-max, #timeline-overlay.ws-max, #tool-library-overlay.ws-max, #agents-overlay.ws-max, #situation-overlay.ws-max, #galaxy-overlay.ws-max, #council-overlay.ws-max, #subspace-overlay.ws-max {
+  top: 4vh !important; left: 50% !important; transform: translateX(-50%) !important;
+  width: 94vw !important; height: 90vh !important;
+}
+/* A dragged overlay pins to left/top (JS clears the centering transform). */
+#code-overlay.ws-dragged, #news-overlay.ws-dragged, #timeline-overlay.ws-dragged, #tool-library-overlay.ws-dragged, #agents-overlay.ws-dragged, #situation-overlay.ws-dragged, #galaxy-overlay.ws-dragged, #council-overlay.ws-dragged, #subspace-overlay.ws-dragged {
+  transform: none !important;
 }
 #code-overlay.open, #news-overlay.open, #timeline-overlay.open, #tool-library-overlay.open, #agents-overlay.open, #situation-overlay.open, #galaxy-overlay.open, #council-overlay.open, #subspace-overlay.open { display: flex; }
 
@@ -716,7 +731,10 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
   background: rgba(20,26,40,0.95);
   border-bottom: 1px solid rgba(120,170,255,0.2);
   font: 600 14px system-ui, sans-serif; color: #cfe0ff;
+  cursor: grab; user-select: none;
 }
+.ws-bar:active { cursor: grabbing; }
+.ws-bar button { cursor: pointer; }   /* controls stay clickable, not drag */
 .ws-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-close {
   background: transparent; border: none; color: #9fb4dd;
@@ -5670,6 +5688,7 @@ inputEl.focus();
     <button onclick="zenoUltron.refresh()">Refresh State</button>
   </div>
 </div>
+<script src="/static/ws-drag.js?v=1"></script>
 <script src="/static/ultron.js"></script>
 <script>
 setInterval(() => { const c = document.getElementById('ultron-clock');

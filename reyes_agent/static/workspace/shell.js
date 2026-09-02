@@ -10,6 +10,46 @@ function stateLabel(value) {
   return String(value || '').replaceAll('_', ' ').toLowerCase();
 }
 
+// Internal event/type names must never reach the user. Translate the known
+// ones to human activity, and treat a raw "a.b.c" identifier as noise to hide.
+const ACTIVITY_LABELS = {
+  'execution.lifecycle': 'Working', 'tool.started': 'Running a tool',
+  'tool.completed': 'Done', 'tool.failed': 'A step failed',
+  'provider.router.failed': 'AI unavailable', 'ui.workspace_news': 'Checking news',
+  'build.task': 'Building', 'project.activity': 'Working',
+};
+// Pure internal plumbing that should not appear as activity at all.
+const ACTIVITY_HIDE = /^(panel\.|heartbeat|conversation\.state|audio\.|wake\.|visual\.|desktop\.|media\.|latency\.|confidence\.|session\.|trace\.|service\.)/;
+function humanTitle(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return 'Activity';
+  if (ACTIVITY_LABELS[s]) return ACTIVITY_LABELS[s];
+  // a bare dotted internal id like "x.y.z" with no spaces -> friendly-ize
+  if (/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(s)) {
+    return s.split('.').slice(-1)[0].replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase());
+  }
+  return s;
+}
+function isNoiseActivity(item) {
+  const raw = String(item.title || item.category || '');
+  return ACTIVITY_HIDE.test(raw);
+}
+// A row whose detail carries a terminal error must not still read RUNNING
+// (spec: a ProviderError transitions the execution out of RUNNING).
+const _ERROR_IN_DETAIL = /providererror|every configured model provider|traceback|exception:|couldn'?t reach/i;
+function correctedStatus(item) {
+  const st = String(item.status || '');
+  if (_ERROR_IN_DETAIL.test(String(item.safe_detail || '')) &&
+      /RUNNING|PLANNING|WAITING|QUEUED/i.test(st)) return 'FAILED';
+  return st;
+}
+// Never surface a raw provider stack error to the user.
+function safeDetail(item) {
+  const d = String(item.safe_detail || '');
+  if (_ERROR_IN_DETAIL.test(d)) return 'AI services are temporarily unavailable.';
+  return d;
+}
+
 export function createWorkspaceShell({ fetchImpl = globalThis.fetch?.bind(globalThis),
                                        documentRef = globalThis.document } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('Workspace shell needs fetch.');
@@ -109,17 +149,21 @@ export function createWorkspaceShell({ fetchImpl = globalThis.fetch?.bind(global
 
   function renderActivityRows(container, filter = '') {
     const rows = (buffer.state.activities || []).filter(
-      (item) => !filter || item.category === filter || item.panel_target === filter);
+      (item) => (!filter || item.category === filter || item.panel_target === filter)
+        && !isNoiseActivity(item));                       // drop internal plumbing
     if (!rows.length) {
       container.appendChild(element(documentRef, 'div', 'zeno-workspace-empty', 'No live activity.'));
       return;
     }
-    for (const item of rows.slice(0, 20)) {
-      const row = element(documentRef, 'article', `zeno-workspace-row ${stateLabel(item.status)}`);
+    // Compact: show the most recent few; the rest stay scrollable but the area
+    // never dominates the workspace.
+    for (const item of rows.slice(-8).reverse()) {
+      const status = correctedStatus(item);
+      const row = element(documentRef, 'article', `zeno-workspace-row ${stateLabel(status)}`);
       row.append(
-        element(documentRef, 'strong', '', item.title || 'Activity'),
-        element(documentRef, 'span', '', stateLabel(item.status)),
-        element(documentRef, 'p', '', item.safe_detail || ''),
+        element(documentRef, 'strong', '', humanTitle(item.title)),   // never a raw event name
+        element(documentRef, 'span', '', stateLabel(status)),
+        element(documentRef, 'p', '', safeDetail(item)),              // never a raw provider stack
       );
       container.appendChild(row);
     }
