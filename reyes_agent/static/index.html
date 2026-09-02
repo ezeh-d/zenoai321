@@ -1740,6 +1740,8 @@ const workspaceShellReady = import('/static/workspace/shell.js?v=1')
   .then(({ createWorkspaceShell }) => {
     zenoWorkspaceShell = createWorkspaceShell({
       fetchImpl: (...args) => fetch(...args), documentRef: document,
+      renderUI: false,   // consolidated: static/panels is the single visible
+                          // panel system; the shell stays a search/state backend
     });
     window.zenoWorkspace = zenoWorkspaceShell;
     void zenoWorkspaceShell.hydrate();

@@ -51,7 +51,8 @@ function safeDetail(item) {
 }
 
 export function createWorkspaceShell({ fetchImpl = globalThis.fetch?.bind(globalThis),
-                                       documentRef = globalThis.document } = {}) {
+                                       documentRef = globalThis.document,
+                                       renderUI = true } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('Workspace shell needs fetch.');
   const buffer = new WorkspaceRevisionBuffer();
   const controllers = new Set();
@@ -63,7 +64,11 @@ export function createWorkspaceShell({ fetchImpl = globalThis.fetch?.bind(global
   let panelHost = null;
   let activityHost = null;
 
-  if (documentRef) {
+  // renderUI:false makes this a headless search/state backend only -- no
+  // competing panel/activity UI. The single VISIBLE panel system is
+  // static/panels (UniversalPanelManager); this still powers cmdk search and
+  // keeps buffer state, but never paints its own cards.
+  if (documentRef && renderUI) {
     root = documentRef.getElementById('zeno-workspace-root');
     if (!root) {
       root = element(documentRef, 'aside', 'zeno-workspace-root');

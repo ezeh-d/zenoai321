@@ -31,7 +31,7 @@ _PING_INTERVAL_SECONDS = 4 * 60  # inside Ollama's ~5 min default unload window
 # most commands reconnect (or stall on a half-open socket). The ping is a
 # max_tokens=1 request, so ~1 token/100s is a negligible cost for a connection
 # that stays warm turn-to-turn.
-_CLOUD_REFRESH_SECONDS = 100
+_CLOUD_REFRESH_SECONDS = 45
 
 
 def _ping() -> None:
