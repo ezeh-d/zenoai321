@@ -161,6 +161,34 @@ def _request_timeout() -> Any:
         return float(config.AI_REQUEST_TIMEOUT_S)
 
 
+def _http_client() -> Any:
+    """A pooled HTTP client whose warm connection SURVIVES between commands.
+
+    httpx's default keepalive_expiry is 5s, so a warmed connection was evicted
+    within seconds and almost every model command paid a fresh connect (and
+    occasionally a stale-connection stall). Holding the keepalive connection
+    for ~2 minutes -- refreshed by warmup's periodic ping -- means back-to-back
+    commands reuse ONE warm connection and stay ~1s instead of reconnecting.
+    Returns None if httpx isn't shaped as expected (callers fall back to the
+    plain timeout kwarg).
+    """
+    try:
+        import httpx
+        return httpx.Client(
+            timeout=_request_timeout(),
+            limits=httpx.Limits(max_keepalive_connections=4, max_connections=10,
+                                keepalive_expiry=120.0),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _transport_kwargs() -> dict[str, Any]:
+    """http_client (warm pool) when available, else the plain timeout kwarg."""
+    hc = _http_client()
+    return {"http_client": hc} if hc is not None else {"timeout": _request_timeout()}
+
+
 def _get_openai_client() -> Any:
     global _openai_client
     if _openai_client is None:
@@ -168,8 +196,8 @@ def _get_openai_client() -> Any:
             if _openai_client is None:
                 if not config.OPENAI_API_KEY:
                     raise ProviderError("No OPENAI_API_KEY set. Add one to .env, then restart.")
-                kwargs = {"api_key": config.OPENAI_API_KEY,
-                          "timeout": _request_timeout(), "max_retries": 0}
+                kwargs = {"api_key": config.OPENAI_API_KEY, "max_retries": 0,
+                          **_transport_kwargs()}
                 if config.OPENAI_BASE_URL:
                     kwargs["base_url"] = config.OPENAI_BASE_URL
                 _openai_client = _openai_module().OpenAI(**kwargs)
@@ -185,7 +213,7 @@ def _get_xai_client() -> Any:
                     raise ProviderError("No XAI_API_KEY set. Add one to .env, then restart.")
                 _xai_client = _openai_module().OpenAI(
                     api_key=config.XAI_API_KEY, base_url="https://api.x.ai/v1",
-                    timeout=_request_timeout(), max_retries=0,
+                    max_retries=0, **_transport_kwargs(),
                 )
     return _xai_client
 
@@ -200,7 +228,7 @@ def _get_gemini_client() -> Any:
                 _gemini_client = _openai_module().OpenAI(
                     api_key=config.GEMINI_API_KEY,
                     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-                    timeout=_request_timeout(), max_retries=0,
+                    max_retries=0, **_transport_kwargs(),
                 )
     return _gemini_client
 
@@ -213,7 +241,7 @@ def _get_ollama_client() -> Any:
                 # Ollama's OpenAI-compatible endpoint ignores the key -- any string works.
                 _ollama_client = _openai_module().OpenAI(
                     api_key="ollama", base_url=config.OLLAMA_BASE_URL,
-                    timeout=_request_timeout(), max_retries=0,
+                    max_retries=0, **_transport_kwargs(),
                 )
     return _ollama_client
 

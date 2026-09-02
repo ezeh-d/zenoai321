@@ -24,9 +24,14 @@ from __future__ import annotations
 from reyes_agent import config
 
 _PING_INTERVAL_SECONDS = 4 * 60  # inside Ollama's ~5 min default unload window
-# Cloud connections go idle and get closed by the peer too; a quiet
-# re-ping keeps the pooled TLS connection usable without being chatty.
-_CLOUD_REFRESH_SECONDS = 10 * 60
+# Cloud connections go idle and get closed by the peer too; a quiet re-ping
+# keeps the pooled TLS connection usable without being chatty. This MUST stay
+# under the HTTP client's keepalive_expiry (120s in provider._http_client) so
+# the warmed connection is refreshed before the pool evicts it -- otherwise
+# most commands reconnect (or stall on a half-open socket). The ping is a
+# max_tokens=1 request, so ~1 token/100s is a negligible cost for a connection
+# that stays warm turn-to-turn.
+_CLOUD_REFRESH_SECONDS = 100
 
 
 def _ping() -> None:
