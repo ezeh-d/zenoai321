@@ -360,6 +360,13 @@ _FOLLOW_UP = re.compile(
     r"click (?:it|that)|again|the same|that one|there|next one|go back|"
     r"close it|scroll|read it|save (?:it|that))\b", re.I)
 
+# The optional semantic router may help only with command-shaped paraphrases
+# after it is already warm.  Broad normal conversation must not pay a model
+# initialization or embedding cost just because no deterministic rule matched.
+_SEMANTIC_COMMAND = re.compile(
+    r"\b(?:open|launch|start|play|pause|resume|search|find|look|read|send|"
+    r"message|tell|where|check|show|turn|set|go|bring|fire|put|get)\b", re.I)
+
 # How long a capability stays inherited. Long enough for a real follow-up,
 # short enough that an unrelated question later is judged on its own.
 CONTEXT_TTL_S = 120.0
@@ -492,19 +499,16 @@ def tools_for(message: str, *, expand: bool = False) -> Route:
     request_id = f"r{int(time.time() * 1000) % 10_000_000}"
     capabilities, confidence, reason = classify(message)
 
-    # Semantic fallback (#3): when the fast regex triggers matched nothing, a
-    # paraphrase may still carry a clear intent ("get spotify going"). Consult
-    # the embedding-based intent router -- additive, gated (ZENO_INTENT_ROUTER),
-    # and fully guarded: it degrades to the regex result on any error or when
-    # the model isn't present, and only runs on the uncertain case so the
-    # common path stays regex-fast.
-    if not capabilities:
+    # Semantic fallback (#3): when a command-shaped paraphrase misses the fast
+    # regex rules, an already-warm semantic router may add a capability.  This
+    # hot path must never initialize the optional model for normal conversation.
+    if not capabilities and _SEMANTIC_COMMAND.search(message or ""):
         try:
             from reyes_agent.routing.intent_router import get_intent_router
-            match = get_intent_router().classify(message)
+            match = get_intent_router().classify_if_ready(message)
             if match and match.capability in CAPABILITIES:
                 capabilities = (match.capability,)
-                confidence = max(confidence, round(float(match.confidence), 3))
+                confidence = "semantic-ready"
                 reason = f"{reason or 'no trigger'}; semantic:{match.intent}"
         except Exception:  # noqa: BLE001 -- routing must never break on the fallback
             pass

@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reyes_agent.routing.intent_router import IntentRouter, Route
+from reyes_agent.routing.intent_router import IntentMatch, IntentRouter, Route
 
 
 def _bow(texts, dim=512):
@@ -79,22 +79,59 @@ def test_threshold_is_respected(monkeypatch):
     assert r.classify("please open the settings") is None
 
 
-# --- the regex-first / semantic-fallback wiring in tools_for ----------------
-def test_tools_for_uses_the_semantic_fallback_only_when_regex_finds_nothing(monkeypatch):
+def test_ready_only_classification_never_initializes_router(monkeypatch):
+    """A chat-path query must not turn a cold optional model into work."""
+    router = IntentRouter(_ROUTES, encoder=_bow)
+    called = {"ensure": 0}
+    monkeypatch.setattr(
+        router,
+        "_ensure",
+        lambda: called.__setitem__("ensure", called["ensure"] + 1) or True,
+    )
+
+    assert router.classify_if_ready("open chrome") is None
+    assert called["ensure"] == 0
+
+
+# --- the regex-first / ready-semantic-fallback wiring in tools_for ----------
+def test_tools_for_uses_ready_semantic_fallback_for_a_command_shaped_miss(monkeypatch):
     from reyes_agent.routing import capability, intent_router
 
-    # Force the regex classifier to find nothing, so the fallback should run.
-    monkeypatch.setattr(capability, "classify", lambda m: ((), 0.0, "no trigger"))
+    # Force a deterministic miss so the ready semantic fallback is eligible.
+    monkeypatch.setattr(capability, "classify", lambda m: ((), "low", "no trigger"))
 
     class _Stub:
-        def classify(self, message):
-            from reyes_agent.routing.intent_router import IntentMatch
+        def classify_if_ready(self, message):
             return IntentMatch("open_app", "desktop", 0.7)
     monkeypatch.setattr(intent_router, "get_intent_router", lambda: _Stub())
 
-    route = capability.tools_for("mystery phrasing the triggers miss")
+    route = capability.tools_for("get calculator going")
     assert "desktop" in route.capabilities
     assert "semantic:open_app" in route.reason
+    assert route.confidence == "semantic-ready"
+
+
+def test_ordinary_conversation_never_calls_semantic_router(monkeypatch):
+    """A normal reply must not initialize or query the optional model."""
+    from reyes_agent.routing import capability, intent_router
+
+    calls = {"cold": 0, "ready": 0}
+
+    class _ColdRouter:
+        def classify(self, _message):
+            calls["cold"] += 1
+            raise AssertionError("ordinary chat must not initialize semantic routing")
+
+        def classify_if_ready(self, _message):
+            calls["ready"] += 1
+            raise AssertionError("ordinary chat must not invoke semantic routing")
+
+    monkeypatch.setattr(intent_router, "get_intent_router", lambda: _ColdRouter())
+
+    route = capability.tools_for("Hello ZENO, how are you?")
+
+    assert route.capabilities == ()
+    assert calls == {"cold": 0, "ready": 0}
 
 
 def test_tools_for_skips_the_fallback_when_regex_already_matched(monkeypatch):
@@ -105,7 +142,7 @@ def test_tools_for_skips_the_fallback_when_regex_already_matched(monkeypatch):
     called = {"n": 0}
 
     class _Stub:
-        def classify(self, message):
+        def classify_if_ready(self, message):
             called["n"] += 1
             return None
     monkeypatch.setattr(intent_router, "get_intent_router", lambda: _Stub())

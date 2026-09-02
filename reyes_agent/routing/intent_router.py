@@ -142,6 +142,11 @@ class IntentRouter:
     def available(self) -> bool:
         return self._ensure()
 
+    def is_ready(self) -> bool:
+        """Whether route vectors are already available without loading them."""
+        with self._lock:
+            return bool(self._ready)
+
     # -- classification ----------------------------------------------------
     def classify(self, message: str) -> IntentMatch | None:
         """Best intent for `message`, or None if nothing clears its threshold
@@ -149,6 +154,17 @@ class IntentRouter:
         text = str(message or "").strip()
         if len(text) < 2 or not self._ensure():
             return None
+        return self._classify_loaded(text)
+
+    def classify_if_ready(self, message: str) -> IntentMatch | None:
+        """Classify only when this optional router was already initialized."""
+        text = str(message or "").strip()
+        if len(text) < 2 or not self.is_ready():
+            return None
+        return self._classify_loaded(text)
+
+    def _classify_loaded(self, text: str) -> IntentMatch | None:
+        """Classify after a caller has established that vectors are ready."""
         try:
             q = self._encode([text])[0]
             best: IntentMatch | None = None
