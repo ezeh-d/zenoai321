@@ -290,7 +290,8 @@ _INTENT: tuple[tuple[str, str], ...] = (
                r"(?:what|which)\s+(?:\w+\s+){0,3}(?:was|is|were) my\b)"),
     ("coding", r"\b(?:fix (?:this|the) (?:bug|error|code)|traceback|stack ?trace|"
                r"exception|refactor|write (?:a )?(?:function|script|class)|"
-               r"debug|compile|unit test)\b"),
+               r"debug|compile|unit test|run (?:the )?(?:tests?|pytest|test suite|"
+               r"unittest)|\bpytest\b)\b"),
     ("builder", r"\b(?:build (?:me |the |a )?(?:site|website|app|project)|"
                 r"create (?:a |the )?(?:website|web app|landing page))\b"),
     ("business", r"\b(?:portfolio|invest|trade|revenue|business idea|"
@@ -321,7 +322,9 @@ _INTENT: tuple[tuple[str, str], ...] = (
                r"la liga|serie a)\b"),
     ("web", r"\b(?:search for|look up|google|find out|latest news|what.*happening|"
             r"research|today.?s? news|news (?:on|about|today|story|stories)|"
-            r"headlines?|what.?s (?:the )?(?:latest|new)|any .*news)\b"),
+            r"headlines?|what.?s (?:the )?(?:latest|new)|any .*news|"
+            r"search (?:github|youtube|google|the web|online|reddit|stack ?overflow|"
+            r"for))\b"),
     ("files", r"\b(?:file|folder|directory|read (?:the )?\S+\.\w+|save (?:it |this )?to|"
               r"list (?:the )?(?:files|dir))\b"),
     ("study", r"\b(?:study|learn|teach me|quiz|flash ?cards?|revise|revision|"
@@ -345,7 +348,11 @@ _INTENT: tuple[tuple[str, str], ...] = (
                      r"ready for (?:my |the )?(?:defen[cs]e|demo|presentation))\b"),
     ("diagnostics", r"\b(?:health|diagnostic|status of|are you (?:ok|working)|"
                     r"system status|tool library|capability library|available tools|"
-                    r"tool health|best tool)\b"),
+                    r"tool health|best tool|"
+                    r"(?:cpu|ram|gpu|memory|disk|network) (?:usage|load|status)|"
+                    r"(?:show|check|what.?s) (?:my )?(?:cpu|ram|gpu|disk|memory)\b|"
+                    r"how much (?:ram|memory|cpu|disk|gpu)|resource usage|"
+                    r"system (?:load|resources|monitor))\b"),
     ("voice", r"\b(?:learn my voice|my voice|microphone level|mic level)\b"),
     ("workflow", r"\b(?:workflow|routine|do that again|the usual)\b"),
     ("missions", r"\b(?:mission|task list|what.*working on)\b"),

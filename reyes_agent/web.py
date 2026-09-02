@@ -304,6 +304,15 @@ def _boot_background_services() -> None:
     _try("heartbeat", heartbeat.start_background)
     _try("proactive", proactive.start_background)
 
+    # Keep the model connection warm. The CLI/voice front doors already do this,
+    # but the WEB server -- which serves /api/chat for typed AND voice commands
+    # -- did not, so its provider connection went cold between commands and
+    # every command paid an 8-19s cold-start (measured). This warms it up front
+    # and re-pings so steady-state turns stay ~0.5-1.5s.
+    from reyes_agent import warmup
+
+    _try("model-keepalive", warmup.start_background_keepalive)
+
     # Generate the configured ZENO-voice realtime phrases once, well after first
     # render and on the existing bounded pool.  The realtime wake route is
     # cache-only and will never wait for this provider work.
