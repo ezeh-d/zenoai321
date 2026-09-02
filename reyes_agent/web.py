@@ -840,6 +840,28 @@ def panels_route(tool: str = "", capability: str = "") -> dict[str, Any]:
     return panels.decide(tool=tool or None, capability=capability or None)
 
 
+@app.get("/api/news")
+def news_feed(topic: str = "", limit: int = 8) -> dict[str, Any]:
+    """AI-FREE news retrieval so the News panel works even when every model
+    provider is down (spec: separate retrieval from summarization). Fetches
+    real headlines from the news engine (RSS); AI summaries are optional."""
+    try:
+        from datetime import datetime, timezone
+
+        from reyes_agent import news_engine
+        result = news_engine.live_news(str(topic or ""),
+                                       max(1, min(20, int(limit or 8))),
+                                       now=datetime.now(timezone.utc))
+        arts = result.get("articles") or []
+        headlines = [{"title": a.get("title", ""), "source": a.get("source") or "",
+                      "link": a.get("link") or "", "published": a.get("published")}
+                     for a in arts if a.get("title")]
+        return {"ok": True, "topic": topic, "headlines": headlines,
+                "note": result.get("note", ""), "ai_summary": False}
+    except Exception as exc:  # noqa: BLE001 -- a news outage is not a crash
+        return {"ok": False, "error": f"news unavailable: {exc}", "headlines": []}
+
+
 @app.get("/api/panels/system")
 def panels_system() -> dict[str, Any]:
     """Real live system metrics for the System panel (throttled by the client)."""

@@ -797,9 +797,11 @@ body.mini #agent-ring, body.mini #agent-beams, body.mini #agent-team-overview, b
 </div>
 <div id="news-overlay">
   <div class="ws-bar">
-    <span class="ws-title" id="news-overlay-title">News Workspace</span>
+    <span class="ws-title" id="news-overlay-title">News</span>
+    <button class="ws-refresh" id="news-overlay-refresh" title="Refresh" style="background:none;border:none;color:#9fc6d4;cursor:pointer;font-size:13px;padding:2px 8px;">↻</button>
     <button class="ws-close" id="news-overlay-close" title="Close">&times;</button>
   </div>
+  <div id="news-overlay-note" style="display:none;padding:6px 14px;font-size:11.5px;color:#ffd166;background:rgba(255,209,102,.06);"></div>
   <div id="news-overlay-body"></div>
 </div>
 <div id="galaxy-overlay">
@@ -3640,33 +3642,78 @@ if (_codeClose) {
 // News workspace: opens when get_news runs, rendering headlines as a real
 // readable/clickable panel (each links to the actual article) instead of
 // only the spoken/captioned summary.
-function openNewsWorkspace(data) {
-  document.getElementById('news-overlay-title').textContent = data.topic || 'News Workspace';
+let _newsTopic = '';
+function _newsNote(text, show) {
+  const n = document.getElementById('news-overlay-note');
+  if (!n) return;
+  n.textContent = text || '';
+  n.style.display = show && text ? 'block' : 'none';
+}
+function renderHeadlines(headlines) {
   const body = document.getElementById('news-overlay-body');
   body.innerHTML = '';
-  (data.headlines || []).forEach((h) => {
+  if (!headlines || !headlines.length) {
+    body.innerHTML = '<div class="empty-note" style="padding:24px 16px;color:#7a8196;">No current headlines. <button id="news-retry" style="background:none;border:1px solid rgba(120,170,255,.3);color:#cfe0ff;border-radius:6px;padding:3px 10px;margin-left:6px;cursor:pointer">Retry</button></div>';
+    const rt = document.getElementById('news-retry');
+    if (rt) rt.onclick = () => fetchNews(_newsTopic);
+    return;
+  }
+  headlines.forEach((h) => {
     const a = document.createElement('a');
     a.className = 'ws-headline';
-    a.href = h.link || '#';
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
+    a.href = h.link || '#'; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.style.cssText = 'display:block;padding:9px 14px;color:#dce8ff;text-decoration:none;border-bottom:1px solid rgba(120,170,255,.08)';
     const title = document.createElement('span');
     title.textContent = h.title || '';
     a.appendChild(title);
-    if (h.source) {
+    if (h.source || h.summary) {
       const src = document.createElement('span');
       src.className = 'ws-source';
-      src.textContent = h.source;
+      src.style.cssText = 'display:block;font-size:11px;color:#7a8196;margin-top:2px';
+      src.textContent = h.summary ? h.summary : h.source;
       a.appendChild(src);
     }
     body.appendChild(a);
   });
+}
+// AI-FREE: fetch real headlines straight from /api/news so the News panel works
+// even when every model provider is down. AI summaries are a separate layer.
+async function fetchNews(topic) {
+  _newsTopic = topic || '';
+  const body = document.getElementById('news-overlay-body');
+  document.getElementById('news-overlay-title').textContent = topic ? ('News · ' + topic) : 'News';
+  body.innerHTML = '<div class="empty-note" style="padding:24px 16px;color:#7a8196;">Loading news…</div>';
+  _newsNote('', false);
+  try {
+    const d = await (await fetch('/api/news?limit=10' + (topic ? '&topic=' + encodeURIComponent(topic) : ''))).json();
+    if (!d.ok || !(d.headlines || []).length) {
+      renderHeadlines([]);
+      _newsNote(d.error ? 'News source unavailable right now.' : (d.note || ''), !!(d.error || d.note));
+      return;
+    }
+    renderHeadlines(d.headlines);
+    if (!d.ai_summary) _newsNote('News loaded. AI summaries are temporarily unavailable.', false);
+  } catch (e) {
+    renderHeadlines([]);
+    _newsNote('Could not reach the news service. Check your connection.', true);
+  }
+}
+function openNewsWorkspace(data) {
   document.getElementById('news-overlay').classList.add('open');
+  if (data && (data.headlines || []).length) {
+    _newsTopic = data.topic || '';
+    document.getElementById('news-overlay-title').textContent = data.topic ? ('News · ' + data.topic) : 'News';
+    renderHeadlines(data.headlines);
+    _newsNote('', false);
+  } else {
+    void fetchNews((data && data.topic) || '');   // AI-free fallback -> real headlines
+  }
 }
 const _newsClose = document.getElementById('news-overlay-close');
-if (_newsClose) {
-  _newsClose.addEventListener('click', () => document.getElementById('news-overlay').classList.remove('open'));
-}
+if (_newsClose) _newsClose.addEventListener('click', () => document.getElementById('news-overlay').classList.remove('open'));
+const _newsRefresh = document.getElementById('news-overlay-refresh');
+if (_newsRefresh) _newsRefresh.addEventListener('click', () => fetchNews(_newsTopic));
+window.zenoNews = { show: (topic) => { document.getElementById('news-overlay').classList.add('open'); void fetchNews(topic || ''); }, refresh: () => fetchNews(_newsTopic) };
 
 // --- Agent roll call --------------------------------------------------
 // Plays a sequence of lines, each through /api/tts with its own agent so
