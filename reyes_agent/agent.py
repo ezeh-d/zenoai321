@@ -49,6 +49,7 @@ def run_agent(
     source and ``owner_authenticated=False``.
     """
     from reyes_agent.action_policy import current_action_context, use_action_context
+    from reyes_agent.turn_context import build_turn_context, use_turn_context
 
     # Nested execution (for example a scoped specialist) inherits the exact
     # current request instead of replacing it with a broader one.
@@ -96,7 +97,10 @@ def run_agent(
         if authenticated is None:
             authenticated = source == "local_text"
 
-    with use_action_context(
+    context = build_turn_context(
+        source, owner_authenticated=bool(authenticated), spoken=spoken, turn_id=turn_id,
+    )
+    with use_turn_context(context), use_action_context(
         utterance,
         source=source,
         owner_authenticated=bool(authenticated),
