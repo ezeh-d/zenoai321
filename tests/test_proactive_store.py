@@ -90,3 +90,14 @@ def test_snapshot_never_persists_sensitive_facts(tmp_path: Path) -> None:
 
     assert row["facts"] == {"latency_ms": 120}
     assert "secret" not in repr(row)
+
+
+def test_store_recovers_from_a_corrupt_sqlite_file(tmp_path: Path) -> None:
+    path = tmp_path / "corrupt.db"
+    path.write_bytes(b"this is not sqlite")
+
+    store = ProactiveStore(path)
+    store.migrate()
+
+    assert store.load_checks() == []
+    assert list(tmp_path.glob("corrupt.corrupt-*.db"))

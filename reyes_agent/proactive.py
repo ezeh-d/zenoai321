@@ -15,7 +15,6 @@ which already exists and lets the user define exactly that).
 
 from __future__ import annotations
 
-import threading
 import time
 
 from reyes_agent import config
@@ -28,21 +27,10 @@ _last_session_nudge_at = 0.0
 _battery_nudge_fired = False  # resets once charging or level recovers
 
 
-def _speak(text: str) -> None:
-    from reyes_agent.voice.tts import TTSError, speak
-
-    try:
-        speak(text, threading.Event())
-    except TTSError:
-        pass
-
-
 def _notice(check_name: str, message: str) -> None:
     from reyes_agent import heartbeat
 
     heartbeat._add_notice(check_name, message)
-    if not heartbeat._in_quiet_hours():
-        _speak(message)
 
 
 def _check_long_session() -> None:
@@ -183,20 +171,50 @@ def _check_morning() -> None:
         pass
 
 
+def _as_check(source: str, fn):
+    """Adapt an existing deterministic task to the shared typed registry."""
+    from reyes_agent.proactive_models import CheckResult
+
+    def handler(_context):
+        fn()
+        return CheckResult.no_change(source)
+
+    return handler
+
+
+def _register_with_heartbeat() -> None:
+    """Attach all proactive adapters to the one native heartbeat engine."""
+    from reyes_agent import heartbeat
+    from reyes_agent.proactive_models import OverlapPolicy, ScheduledCheck
+
+    engine = heartbeat.get_heartbeat_engine()
+    definitions = (
+        ("wellbeing.long_session", "Check a sustained active work session", 300, 40, _check_long_session),
+        ("device.low_battery", "Check local battery charge state", 300, 45, _check_battery),
+        ("dream.maintenance", "Run idle-only local Dream maintenance", 300, 80, _check_dream_mode),
+        ("morning.brief", "Prepare one local morning brief when the owner is active", 300, 60, _check_morning),
+    )
+    for check_id, description, interval_s, priority, fn in definitions:
+        engine.register(
+            ScheduledCheck(
+                id=check_id, description=description, enabled=True, interval_s=interval_s,
+                priority=priority, timeout_s=120, overlap_policy=OverlapPolicy.SKIP,
+                quiet_hours_policy="hold", handler_id=check_id,
+            ),
+            _as_check(check_id, fn),
+        )
+
+
 def _tick() -> None:
+    """Compatibility entry point; the actual scheduler is heartbeat only."""
     from reyes_agent import heartbeat
 
     if not heartbeat.is_killed():
-        _check_morning()
-        _check_long_session()
-        _check_battery()
-        _check_dream_mode()
+        heartbeat.get_heartbeat_engine().tick()
 
 
 def start_background() -> None:
-    from reyes_agent.scheduler import get_scheduler
+    _register_with_heartbeat()
+    from reyes_agent import heartbeat
 
-    get_scheduler().schedule(
-        "proactive", _tick, delay=10.0, interval=_CHECK_INTERVAL_S,
-        priority=80, timeout=120,
-    )
+    heartbeat.start_background()

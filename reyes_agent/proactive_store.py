@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import asdict, replace
@@ -35,18 +36,51 @@ _TRANSITIONS = {
 }
 
 
+class _ClosingConnection(sqlite3.Connection):
+    """Close SQLite handles when a ``with`` block ends (important on Windows)."""
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+        try:
+            return super().__exit__(exc_type, exc, traceback)
+        finally:
+            self.close()
+
+
 class ProactiveStore:
     def __init__(self, path: Path, *, clock: Any = time.time) -> None:
         self.path = Path(path)
         self._clock = clock
+        self._migration_lock = threading.RLock()
+        self._migrated = False
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path, timeout=10)
+        conn = sqlite3.connect(self.path, timeout=10, factory=_ClosingConnection)
         conn.row_factory = sqlite3.Row
         return conn
 
     def migrate(self) -> None:
+        if self._migrated:
+            return
+        with self._migration_lock:
+            if self._migrated:
+                return
+            try:
+                self._migrate_schema()
+            except sqlite3.DatabaseError:
+                self._recover_corrupt_database()
+                self._migrate_schema()
+            self._migrated = True
+
+    def _recover_corrupt_database(self) -> None:
+        """Quarantine an unreadable local state file instead of blocking startup."""
+        if not self.path.exists():
+            return
+        stamp = time.time_ns()
+        backup = self.path.with_name(f"{self.path.stem}.corrupt-{stamp}{self.path.suffix}")
+        self.path.replace(backup)
+
+    def _migrate_schema(self) -> None:
         with self._connect() as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS proactive_schema (version INTEGER NOT NULL)")
             if conn.execute("SELECT COUNT(*) FROM proactive_schema").fetchone()[0] == 0:
@@ -70,6 +104,12 @@ class ProactiveStore:
                 "acknowledged_at REAL NOT NULL, expires_at REAL NOT NULL)"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_proactive_notices_state ON proactive_notices(delivery_state, updated_at DESC)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS proactive_events ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL, source TEXT NOT NULL, "
+                "subject TEXT NOT NULL, condition TEXT NOT NULL, summary TEXT NOT NULL, importance TEXT NOT NULL)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_proactive_events_created ON proactive_events(created_at DESC)")
             conn.execute("CREATE TABLE IF NOT EXISTS proactive_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
 
     @staticmethod
@@ -199,6 +239,47 @@ class ProactiveStore:
             ).rowcount
             if changed != 1:
                 raise KeyError("unknown proactive check")
+
+    def record_event(self, result: CheckResult, *, importance: Importance = Importance.LOG) -> None:
+        """Keep a bounded, non-interrupting record for LOG-level results."""
+        self.migrate()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO proactive_events(created_at, source, subject, condition, summary, importance) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (self._clock(), bounded_text(result.source, 80), bounded_text(result.subject, 160),
+                 bounded_text(result.condition, 120), bounded_text(result.summary), importance.value),
+            )
+            conn.execute(
+                "DELETE FROM proactive_events WHERE id NOT IN "
+                "(SELECT id FROM proactive_events ORDER BY id DESC LIMIT 500)"
+            )
+
+    def list_events(self, *, limit: int = 50) -> list[dict[str, str]]:
+        self.migrate()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT source, subject, condition, summary, importance FROM proactive_events "
+                "ORDER BY id DESC LIMIT ?", (max(1, min(int(limit), 500)),)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        self.migrate()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM proactive_settings WHERE key=?", (bounded_text(key, 80),)
+            ).fetchone()
+        return bounded_text(row["value"], 500) if row is not None else default
+
+    def set_setting(self, key: str, value: object) -> None:
+        self.migrate()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO proactive_settings(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (bounded_text(key, 80), bounded_text(value, 500)),
+            )
 
     def upsert_notice(self, result: CheckResult, *, importance: Importance = Importance.INBOX,
                       title: str = "", explanation: str = "") -> ProactiveNotice:

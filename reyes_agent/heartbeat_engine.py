@@ -205,10 +205,13 @@ class HeartbeatEngine:
             if not isinstance(result, CheckResult):
                 raise TypeError("heartbeat handlers must return CheckResult")
             self.store.record_check_success(check.id, result, now=started_at)
-            if result.changed:
+            importance = result.importance_hint or Importance.INBOX
+            if result.changed and importance is Importance.LOG:
+                self.store.record_event(result, importance=importance)
+            elif result.changed and importance is not Importance.IGNORE:
                 self.store.upsert_notice(
                     result,
-                    importance=result.importance_hint or Importance.INBOX,
+                    importance=importance,
                 )
         except BaseException as exc:  # each check must fail independently
             self.store.record_check_failure(check.id, now=started_at)

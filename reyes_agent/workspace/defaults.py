@@ -24,6 +24,8 @@ _PANELS = (
     PanelDefinition("messages", "Messages", "builtin:activity", priority=75),
     PanelDefinition("news", "News Workspace", "dom:#news-overlay", priority=65),
     PanelDefinition("notifications", "Notifications", "builtin:activity", priority=65),
+    PanelDefinition("proactive", "Proactive", "module:/static/proactive_view.js#createProactiveView",
+                    priority=72, preferred_position="right"),
     PanelDefinition("search", "Universal Search", "builtin:search", priority=75),
     PanelDefinition("system", "System", "builtin:health", priority=85),
     PanelDefinition("tasks", "Tasks", "builtin:activity", priority=75),

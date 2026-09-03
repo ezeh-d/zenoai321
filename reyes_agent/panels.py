@@ -46,6 +46,8 @@ PANELS: dict[str, dict[str, Any]] = {
     "agents":        _p("agents", "Agents", "◈", kind="agents"),
     "notifications": _p("notifications", "Notifications", "◉",
                         persistent=True, kind="notifications"),
+    "proactive":     _p("proactive", "Proactive", "✦", persistent=True,
+                        kind="proactive"),
     "files":         _p("files", "Files", "▧", kind="files"),
     "browser":       _p("browser", "Browser", "◐", kind="browser",
                         support="state"),

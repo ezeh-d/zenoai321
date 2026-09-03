@@ -307,6 +307,7 @@ CORE_TOOL_NAMES = frozenset({
     "enable_tools", "delegate", "open_app", "web_search", "build_project",
     "learning_mode", "creator_project", "mastery_mode",
     "foodie_mode", "phase3_status", "system_health",
+    "proactive_control",
     # Defense/presentation mode is a one-word demo command ("defense mode") and
     # must reach the model directly -- core, like open_app.
     "defense_mode",

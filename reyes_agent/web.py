@@ -3452,13 +3452,28 @@ def notices() -> list[dict[str, Any]]:
 
 
 @app.post("/api/notices/{notice_id}/dismiss")
-def dismiss_notice(notice_id: int) -> dict[str, Any]:
+def dismiss_notice(notice_id: str) -> dict[str, Any]:
     from reyes_agent import heartbeat
 
     ok = heartbeat.dismiss_notice(notice_id)
     if not ok:
         raise HTTPException(404, "No such notice.")
     return {"ok": True}
+
+
+@app.get("/api/proactive/status")
+def proactive_status() -> dict[str, Any]:
+    """Safe status projection for the shared desktop workspace and companion."""
+    from reyes_agent import heartbeat
+
+    return heartbeat.proactive_status()
+
+
+@app.post("/api/proactive/catch-up")
+def proactive_catch_up(limit: int = 5) -> dict[str, Any]:
+    from reyes_agent import heartbeat
+
+    return heartbeat.catch_up_notices(limit=limit)
 
 
 @app.get("/api/kill-switch")
@@ -4169,12 +4184,13 @@ def phone_login_complete(req: PhoneCredentialRequest, request: Request) -> Respo
 
 @app.get("/api/phone/status")
 def phone_status(request: Request, session=Depends(_phone_session)) -> dict[str, Any]:
-    from reyes_agent import phone_companion
+    from reyes_agent import heartbeat, phone_companion
 
     return {"desktop": "ready", "device_id": session["device_id"], "device": session["name"],
             "role": session["role"], "auth_level": session["auth_level"],
             "scopes": json.loads(session["scopes"]), "runtime": _boot_state["phase"],
             "audio_output": phone_companion.audio_output(session["device_id"]),
+            "proactive": heartbeat.proactive_status(),
             "route": phone_companion.route_for_peer(request.client.host if request.client else "")}
 
 

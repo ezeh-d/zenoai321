@@ -135,3 +135,23 @@ def test_engine_isolates_handler_failures_and_runs_event_checks(tmp_path: Path) 
     assert broken.consecutive_failures == 1
     assert engine.trigger_event("calendar.changed", now=100.0) == ["event-check"]
     assert store.list_notices()[0].summary == "event=calendar.changed"
+
+
+def test_engine_records_log_results_but_ignores_explicitly_ignored_results(tmp_path: Path) -> None:
+    from reyes_agent.heartbeat_engine import HeartbeatEngine
+    from reyes_agent.proactive_models import Importance
+
+    store = ProactiveStore(tmp_path / "heartbeat.db")
+    engine = HeartbeatEngine(store, worker_pool=ImmediatePool(), clock=lambda: 100.0)
+    engine.register(
+        check(check_id="log-only", next_due_at=100.0),
+        lambda _context: CheckResult.changed("system", "cache", "cleared", "cache cleared", importance_hint=Importance.LOG),
+    )
+    engine.register(
+        check(check_id="ignore", next_due_at=100.0),
+        lambda _context: CheckResult.changed("system", "probe", "same", "same state", importance_hint=Importance.IGNORE),
+    )
+
+    assert engine.tick(now=100.0) == ["ignore", "log-only"]
+    assert store.list_notices() == []
+    assert store.list_events() == [{"source": "system", "subject": "cache", "condition": "cleared", "summary": "cache cleared", "importance": "LOG"}]
