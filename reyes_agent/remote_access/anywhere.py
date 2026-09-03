@@ -70,9 +70,24 @@ TUNNEL_FAILED_PROBES = 3
 
 
 class _SingleInstance:
-    """Process-wide supervisor lock, independent of a racy PID-file check."""
+    """Machine-wide supervisor lock, independent of a racy PID-file check.
 
-    def __init__(self, name: str = "Local\\ZENOAnywhereSupervisor",
+    MUST be `Global\\`, not `Local\\`. A named mutex under `Local\\` is scoped
+    to the CURRENT Terminal Services session -- it does not block a second
+    acquire from a different session. The logon-triggered scheduled task can
+    legitimately run in a different session than an interactive launch (and,
+    observed after a reboot, the trigger can fire more than once across
+    sessions in close succession), so a `Local\\` mutex let MULTIPLE
+    supervisors "successfully" acquire it at once, each spawning its own
+    server+tunnel pair racing for the same port -- exactly the growing,
+    never-settling process count seen after a fresh reboot tonight, with the
+    real duplicate-refusal log line (`supervisor_duplicate_refused`) never
+    firing because each one genuinely held ITS session's copy of the lock.
+    `Global\\` is one namespace for the whole machine, which is what a
+    single-instance guard is supposed to mean.
+    """
+
+    def __init__(self, name: str = "Global\\ZENOAnywhereSupervisor",
                  lock_file: Path = LOCK_FILE) -> None:
         self._name = name
         self._lock_file = lock_file
