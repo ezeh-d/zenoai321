@@ -36,6 +36,15 @@ class Tool:
     # is returned to the active model turn but must not be duplicated into
     # durable audit, Event Bus, span, or action-history payloads.
     audit_private: bool = False
+    # Proactive checks are opt-in and must be read-only/bounded.  This is
+    # metadata only; action policy and confirmation remain authoritative.
+    proactive_allowed: bool = False
+
+    def metadata(self) -> dict[str, bool]:
+        return {
+            "requiresConfirmation": self.requires_confirmation,
+            "proactiveAllowed": self.proactive_allowed and not self.requires_confirmation,
+        }
 
 
 TOOLS: dict[str, Tool] = {}
@@ -109,6 +118,7 @@ def register(
     requires_confirmation: bool = False,
     light: bool = False,
     audit_private: bool = False,
+    proactive_allowed: bool = False,
 ) -> Callable[[Callable[..., str]], Callable[..., str]]:
     def decorator(func: Callable[..., str]) -> Callable[..., str]:
         if name in TOOLS:
@@ -121,6 +131,7 @@ def register(
             requires_confirmation=requires_confirmation,
             light=light,
             audit_private=audit_private,
+            proactive_allowed=proactive_allowed,
         )
         return func
 
@@ -296,6 +307,7 @@ CORE_TOOL_NAMES = frozenset({
     "enable_tools", "delegate", "open_app", "web_search", "build_project",
     "learning_mode", "creator_project", "mastery_mode",
     "foodie_mode", "phase3_status", "system_health",
+    "proactive_control",
     # Defense/presentation mode is a one-word demo command ("defense mode") and
     # must reach the model directly -- core, like open_app.
     "defense_mode",
