@@ -129,6 +129,15 @@ class ProactiveStore:
         with self._connect() as conn:
             return [self._row_to_check(row) for row in conn.execute("SELECT * FROM proactive_checks ORDER BY id")]
 
+    def get_check(self, check_id: str) -> ScheduledCheck | None:
+        """Return one persisted check without claiming or changing its schedule."""
+        self.migrate()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM proactive_checks WHERE id=?", (bounded_text(check_id, 80),)
+            ).fetchone()
+        return self._row_to_check(row) if row is not None else None
+
     def claim_due(self, check_id: str, *, now: float | None = None) -> ScheduledCheck | None:
         self.migrate()
         now = self._clock() if now is None else float(now)
@@ -147,6 +156,49 @@ class ProactiveStore:
             if changed != 1:
                 return None
         return replace(check, next_due_at=next_due, last_run_at=now)
+
+    def claim_event(self, check_id: str, *, now: float | None = None) -> ScheduledCheck | None:
+        """Claim an event-triggered run without creating an extra timer schedule."""
+        self.migrate()
+        now = self._clock() if now is None else float(now)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM proactive_checks WHERE id=?", (bounded_text(check_id, 80),)
+            ).fetchone()
+            if row is None:
+                return None
+            check = self._row_to_check(row)
+            if not check.enabled:
+                return None
+            conn.execute("UPDATE proactive_checks SET last_run_at=? WHERE id=?", (now, check.id))
+        return replace(check, last_run_at=now)
+
+    def record_check_success(self, check_id: str, result: CheckResult, *, now: float | None = None) -> None:
+        """Persist a completion independently from whether it produced a notice."""
+        self.migrate()
+        now = self._clock() if now is None else float(now)
+        fingerprint = result.dedupe_key if result.changed else ""
+        with self._connect() as conn:
+            changed = conn.execute(
+                "UPDATE proactive_checks SET last_success_at=?, consecutive_failures=0, "
+                "last_result_fingerprint=? WHERE id=?",
+                (now, bounded_text(fingerprint, 400), bounded_text(check_id, 80)),
+            ).rowcount
+            if changed != 1:
+                raise KeyError("unknown proactive check")
+
+    def record_check_failure(self, check_id: str, *, now: float | None = None) -> None:
+        """Record a failed check without allowing one failure to stop the heartbeat."""
+        self.migrate()
+        now = self._clock() if now is None else float(now)
+        with self._connect() as conn:
+            changed = conn.execute(
+                "UPDATE proactive_checks SET last_failure_at=?, consecutive_failures=consecutive_failures+1 "
+                "WHERE id=?",
+                (now, bounded_text(check_id, 80)),
+            ).rowcount
+            if changed != 1:
+                raise KeyError("unknown proactive check")
 
     def upsert_notice(self, result: CheckResult, *, importance: Importance = Importance.INBOX,
                       title: str = "", explanation: str = "") -> ProactiveNotice:
