@@ -1769,6 +1769,12 @@ def _fast_local_reply(message: str):
             label = (focus or "agent space").replace("hermes_comm", "Hermes").replace("_", " ")
             return FastReply(f"Opening {label}.", "agent_space")
 
+        from reyes_agent.voice.local_command_router import route as route_local_command
+
+        fast_command = route_local_command(message)
+        if fast_command is not None:
+            return fast_command
+
         return reply_for(message)
     except Exception:  # noqa: BLE001 -- optimisation never gates the real brain
         return None

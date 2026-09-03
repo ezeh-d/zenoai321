@@ -263,6 +263,13 @@ VOICE_THINKING_ACK_DELAY_MS = _bounded_env_int("ZENO_THINKING_ACK_DELAY_MS", 650
 VOICE_FAST_LOCAL_REPLIES = os.environ.get("ZENO_FAST_LOCAL_REPLIES", "true").strip().lower() not in {
     "0", "false", "no", "off",
 }
+# Obvious device commands (mute, volume N, next song, open spotify) execute
+# directly -- see voice/local_command_router.py -- instead of paying a model
+# round-trip to decide what "mute" means. Only tools already marked light=True
+# (no confirmation required) are reachable through it.
+FAST_LOCAL_COMMANDS_ENABLED = os.environ.get("ZENO_FAST_LOCAL_COMMANDS", "true").strip().lower() not in {
+    "0", "false", "no", "off",
+}
 VOICE_THINKING_ACK_ENABLED = os.environ.get("ZENO_THINKING_ACK_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off",
 }
