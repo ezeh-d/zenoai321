@@ -121,6 +121,34 @@ class RuntimeControl:
         if operation is not None:
             _publish("runtime.operation_finished", self.snapshot_operation(operation))
 
+    def supersede(self, *, kinds: tuple[str, ...], keep_id: str = "") -> list[str]:
+        """Cancel earlier conversation turns when a newer one supersedes them.
+
+        ZENO serves a single owner and every conversation turn (typed or voice)
+        takes the SAME global turn lock, so a slow or abandoned turn makes every
+        following command queue behind it (measured: a 2s query waited 87s behind
+        stale turns). For an interactive assistant the latest command is the
+        intended one, so when a new turn starts we cancel the earlier ones
+        instead of letting the newcomer wait out its 90s timeout. Cancellation is
+        the existing cooperative kind -- a queued turn spinning on the lock raises
+        at its next ``check_cancelled`` and frees the slot at once; one already
+        inside a model read frees when that read returns (bounded by the granular
+        read timeout), never the full 90s. Only the given ``kinds`` are touched,
+        so a workflow or background agent the owner started keeps running.
+        """
+        wanted = set(kinds)
+        cancelled: list[str] = []
+        with self._control_lock:
+            operations = list(self._operations.values())
+        for operation in operations:
+            if operation.id == keep_id or operation.kind not in wanted:
+                continue
+            if getattr(operation.handle, "done", False):
+                continue
+            if operation.handle.cancel():
+                cancelled.append(operation.label)
+        return cancelled
+
     @staticmethod
     def snapshot_operation(operation: ActiveOperation) -> dict[str, Any]:
         snapshot = operation.handle.snapshot() if hasattr(operation.handle, "snapshot") else {}

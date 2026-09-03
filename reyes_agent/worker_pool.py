@@ -232,7 +232,17 @@ class ManagedWorkerPool:
         cpu = os.cpu_count() or 2
         configured_workers = int(os.environ.get("ZENO_WORKERS", "0") or 0)
         configured_queue = int(os.environ.get("ZENO_WORK_QUEUE", "0") or 0)
-        self.max_workers = max(1, max_workers or configured_workers or min(6, max(2, cpu)))
+        # This pool runs BOTH interactive turns (brain/voice) and a steady stream
+        # of background work (STT clips, heartbeat, activity, session snapshots),
+        # and it has no preemption: once every worker is busy, a brand-new brain
+        # turn waits for one to free up no matter its priority. The old default
+        # of min(6, cpu) was 4 on this 4-core box, and 2-3 slow background tasks
+        # (a stalled STT connect, a locked-DB write) were enough to starve every
+        # command for a minute or more. The work is I/O-bound -- threads sit
+        # blocked on sockets and DB locks, not on the CPU -- so a wider pool is
+        # nearly free and keeps interactive slots available under background load.
+        default_workers = min(24, max(12, cpu * 3))
+        self.max_workers = max(1, max_workers or configured_workers or default_workers)
         self.max_queue = max(1, max_queue or configured_queue or 128)
         self.thread_name_prefix = thread_name_prefix
         self._queue: queue.PriorityQueue[_QueueItem] = queue.PriorityQueue(self.max_queue)

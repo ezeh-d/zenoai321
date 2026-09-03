@@ -20,6 +20,7 @@ translates the response back into a plain `AgentTurn`.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -27,6 +28,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from reyes_agent import config, personality
+
+_LOG = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import anthropic
@@ -164,26 +167,91 @@ def _request_timeout() -> Any:
         return float(config.AI_REQUEST_TIMEOUT_S)
 
 
-def _http_client() -> Any:
-    """A pooled HTTP client whose warm connection SURVIVES between commands.
+_ssl_context_cache: Any = None
+_ssl_context_lock = threading.Lock()
 
-    httpx's default keepalive_expiry is 5s, so a warmed connection was evicted
-    within seconds and almost every model command paid a fresh connect (and
-    occasionally a stale-connection stall). Holding the keepalive connection
-    for ~2 minutes -- refreshed by warmup's periodic ping -- means back-to-back
-    commands reuse ONE warm connection and stay ~1s instead of reconnecting.
-    Returns None if httpx isn't shaped as expected (callers fall back to the
-    plain timeout kwarg).
+
+def _ssl_context() -> Any:
+    """A TLS context that trusts the Windows certificate store too, not just certifi.
+
+    THE actual root cause of "ZENO is down / slow" on this owner's machine,
+    found by logging the real exception instead of httpx/openai's generic
+    "Connection error.": every model call was failing in ~0.2-0.4s with
+    `[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate`.
+    Antivirus SSL inspection (Avast, here) re-signs outbound HTTPS with its own
+    locally-generated CA and installs that CA into WINDOWS' certificate store --
+    which browsers and `urllib` (used by this file's own /api/providers/validate
+    probe, which always showed gemini healthy throughout this outage) consult
+    and trust. `httpx` -- and therefore the openai SDK every provider call goes
+    through -- verifies against `certifi`'s fixed, bundled CA list instead,
+    which does not and can never contain a locally-generated antivirus CA. So
+    EVERY call failed the handshake outright, instantly, every time, while a
+    lightweight urllib probe on the same host kept reporting the provider fine.
+    `truststore` is the usual fix for exactly this, but its SSLContext subclass
+    hit a confirmed RecursionError against this httpx/httpcore version pair
+    (wrap_socket recursing through httpcore's sync backend). Verified instead,
+    directly against the endpoint that was failing: a PLAIN ssl.SSLContext
+    (no subclassing) loaded from Windows' CA/ROOT stores via the stdlib's own
+    `ssl.enum_certificates` -- the same certificates a browser trusts -- works
+    (0.2-0.5s, 200, where the unmodified context failed every time). Windows'
+    ROOT store already carries every standard public CA alongside the AV's
+    injected one, so certifi's bundle is redundant here -- and ALSO loading it
+    via `load_default_certs()` was measured to make handshakes take 7-15s (one
+    outright timed out): two overlapping trust-anchor lists made OpenSSL's
+    chain-building pathologically slow. Windows certs alone is both correct
+    and fast; do not add load_default_certs() back without re-measuring.
+    Built once and cached: enumerating the certificate store is a syscall per
+    certificate, not free to repeat every request. Falls back to certifi's
+    default (`True`) off Windows or if anything here is unavailable.
+    """
+    global _ssl_context_cache
+    if _ssl_context_cache is not None:
+        return _ssl_context_cache
+    with _ssl_context_lock:
+        if _ssl_context_cache is not None:
+            return _ssl_context_cache
+        try:
+            import ssl
+
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            for store_name in ("CA", "ROOT"):
+                for cert_der, _encoding, trust in ssl.enum_certificates(store_name):
+                    if trust is True or (
+                        isinstance(trust, (set, frozenset))
+                        and ssl.Purpose.SERVER_AUTH.oid in trust
+                    ):
+                        try:
+                            ctx.load_verify_locations(cadata=cert_der)
+                        except ssl.SSLError:
+                            pass  # one malformed/duplicate store entry must not break the rest
+            _ssl_context_cache = ctx
+        except Exception:  # noqa: BLE001 -- ssl.enum_certificates is Windows-only
+            _ssl_context_cache = True
+    return _ssl_context_cache
+
+
+def _http_client() -> Any:
+    """An HTTP client that does NOT reuse a long-lived connection.
+
+    We originally held one keepalive connection for ~2 minutes to skip the
+    reconnect cost. On this owner's machine an SSL-inspecting security proxy
+    (Avast's aswMonFltProxy) forcibly resets idle TLS connections
+    (ConnectionResetError WinError 10054, seen repeatedly in the server log).
+    A connection kept for 120s is reset while idle, and the NEXT command reuses
+    that dead socket -> APIConnectionError -> the provider's circuit opens ->
+    the turn wastes time falling through fallbacks. A fresh connection per
+    request costs one extra handshake (~0.5-1s) but is never a reused-dead
+    socket. keepalive_expiry stays tiny so only a burst of retries within one
+    turn may reuse a connection. Returns None if httpx isn't shaped as
+    expected (callers fall back to the plain timeout kwarg).
     """
     try:
         import httpx
         return httpx.Client(
             timeout=_request_timeout(),
-            # Turns are serialized (one model call at a time), so a single
-            # kept-alive connection is enough and avoids reaching for a stale
-            # alternate from the pool.
-            limits=httpx.Limits(max_keepalive_connections=1, max_connections=10,
-                                keepalive_expiry=120.0),
+            verify=_ssl_context(),
+            limits=httpx.Limits(max_keepalive_connections=0, max_connections=10,
+                                keepalive_expiry=1.0),
         )
     except Exception:  # noqa: BLE001
         return None
@@ -579,6 +647,11 @@ def _run_gemini(
     except sdk.RateLimitError as exc:
         raise ProviderError("Rate limited -- give it a moment and try again.", retryable=True) from exc
     except sdk.APIConnectionError as exc:
+        # The SDK's own message is usually just "Connection error." -- worthless
+        # for telling a genuine outage apart from e.g. a proxy reset. Log the
+        # real underlying exception (the socket/TLS layer's own error) so a
+        # failure here is diagnosable from the log instead of a guess.
+        _LOG.warning("gemini connection error: %r (cause: %r)", exc, exc.__cause__)
         raise ProviderError(
             "Couldn't reach the model provider. Check your connection.", retryable=True
         ) from exc

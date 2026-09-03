@@ -58,8 +58,17 @@ _DEFAULT_ROUTES: dict[str, tuple[str, ...]] = {
 # a longer cooldown. Without this, "route around a degraded provider" meant
 # permanently, and a provider that recovered was never used again.
 _BREAKER_THRESHOLD = 3
-_BREAKER_COOLDOWN_S = 60.0
-_BREAKER_MAX_COOLDOWN_S = 900.0
+# Recovery has to be FAST for the primary provider. A transient blip (an
+# SSL-proxy connection reset, a burst of rate-limit 429s while ZENO warms) can
+# trip three failures and open gemini's breaker even though gemini is actually
+# healthy -- a live probe answers in ~700ms right after. With the old 900s max
+# backoff, every turn in that window fell through to the slow local model and
+# ZENO felt broken for up to 15 minutes after a one-second hiccup. Keep the
+# cooldown short so a half-open probe re-tries the real provider within seconds
+# and closes the breaker the moment it succeeds; a genuinely down provider just
+# gets re-probed a little more often, which is cheap.
+_BREAKER_COOLDOWN_S = 15.0
+_BREAKER_MAX_COOLDOWN_S = 60.0
 
 # These failures cannot heal while the process keeps using the same loaded
 # credential. Treating them like a transient outage caused ZENO to retry a
@@ -238,27 +247,33 @@ def chain_for(kind: str = "general") -> list[str]:
     This is what makes fallback real. `route()` returns the single best
     choice; this returns the ordered list the caller walks when one fails,
     so a dead provider costs one attempt instead of the whole turn.
+
+    Ordering is the CONFIGURED preference, filtered to drop only providers
+    whose breaker is fully OPEN. An earlier version moved every HALF_OPEN
+    provider to the back of the list, reasoning that a "recovering" provider
+    should not block a "healthy" one -- but CLOSED only means "hasn't failed
+    _BREAKER_THRESHOLD times in a row", not fast or actually healthy. MEASURED:
+    a fast, working Gemini (0.3s) sat HALF_OPEN after one transient blip while
+    local Ollama -- CLOSED, because it wasn't outright FAILING, just answering
+    correctly in 30-40s+ every time -- got promoted ahead of it. run_turn stops
+    at the first provider that returns successfully, so Ollama's slow-but-real
+    answer meant Gemini was never even attempted, every single turn, for as
+    long as Ollama kept eventually succeeding. That is what read as "ZENO got
+    slow" even though the actually-fast provider was one probe away the whole
+    time. A HALF_OPEN provider gets its one probe in its normal preferred
+    position instead -- the honest behavior the breaker is supposed to give it.
     """
     kind = (kind or "general").strip().lower()
     if kind not in TASK_KINDS:
         kind = "general"
     avail = available_providers()
     with _lock:
-        snapshot = {p: (s.breaker, s.avg_latency) for p, s in _stats.items()}
+        snapshot = {p: s.breaker for p, s in _stats.items()}
 
-    usable, probes = [], []
-    for provider in _configured_route(kind):
-        if not avail.get(provider):
-            continue
-        state = snapshot.get(provider, (CLOSED, 0.0))[0]
-        if state == OPEN:
-            continue
-        (probes if state == HALF_OPEN else usable).append(provider)
-    # Healthy providers first, recovering ones last: a probe should not sit
-    # in front of a provider known to be working.
-    ordered = usable + probes
-    if not ordered and avail.get(config.MODEL_PROVIDER, config.MODEL_PROVIDER == "ollama"):
-        ordered = [config.MODEL_PROVIDER]
+    ordered = [
+        provider for provider in _configured_route(kind)
+        if avail.get(provider) and snapshot.get(provider, CLOSED) != OPEN
+    ]
     if not ordered:
         # Everything is open. Trying the configured provider anyway beats
         # refusing to answer -- the breaker exists to stop hammering, not to

@@ -28,7 +28,7 @@ def test_default_tool_payload_is_actually_compact() -> None:
 
     core = tool_definitions()
     names = {item["name"] for item in core}
-    assert len(core) <= 12
+    assert len(core) <= 13  # defense_mode joined the core set; keep this pinned to the real count
     assert len(json.dumps(core)) < 15_000
     assert {"enable_tools", "delegate", "open_app", "web_search", "build_project"} <= names
     assert "defense_mode" in names
@@ -44,7 +44,11 @@ def test_fast_chat_prompt_is_compact_and_keeps_safety_boundary() -> None:
 
     prompt = config.FAST_CHAT_SYSTEM_PROMPT
     assert len(prompt) < 2_500
-    assert len(config.SYSTEM_PROMPT) > 15_000
+    # SYSTEM_PROMPT was deliberately trimmed for consistent speed (was >15k
+    # chars); assert it stays in the new compact range instead of the old
+    # size, but still carries real content -- an empty/near-empty prompt
+    # would silently drop the safety boundary this test exists to protect.
+    assert 3_000 < len(config.SYSTEM_PROMPT) < 12_000
     assert "Never pretend" in prompt
     assert "Voice identity alone never authorizes" in prompt
 

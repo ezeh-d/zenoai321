@@ -10,6 +10,23 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
+# Every locally-run model ZENO uses (faster-whisper STT, the spatial-memory
+# sentence-transformers embedder) is already downloaded and cached on disk,
+# so it never NEEDS the network again -- but both libraries otherwise still
+# reach out to huggingface.co on load to check for updates. On this owner's
+# machine an SSL-inspecting security proxy cannot complete that handshake
+# (certificate verify failed / connection reset), and MEASURED, that failing
+# traffic destabilized the proxy enough to reset OTHER, unrelated HTTPS
+# connections too -- including the model provider's, which is what made a
+# genuinely healthy Gemini call fail and read as "ZENO is slow / AI down".
+# Set here, before ANY module in the process can import those libraries, so
+# every consumer (present and future) is covered, not just the one that
+# happened to be fixed first. A machine that has never downloaded a model
+# still gets one explicit failure on first use rather than silent network
+# chatter -- the fix is to download it once, then it works offline forever.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 ASSISTANT_NAME = os.environ.get("ASSISTANT_NAME", "ZENO")
 USER_NAME = os.environ.get("USER_NAME", "Boss")
 

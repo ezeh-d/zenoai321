@@ -2029,6 +2029,10 @@ def chat(req: ChatRequest) -> dict[str, Any]:
         timeout=config.AI_REQUEST_TIMEOUT_S + 60, with_context=True,
     )
     control.register(handle, label="Conversation", kind="brain")
+    # The owner's newest command wins: cancel any earlier conversation turn so
+    # this one runs now instead of queueing behind a slow/abandoned turn on the
+    # shared turn lock (that queueing is what made a 2s query take ~90s).
+    control.supersede(kinds=("brain", "voice"), keep_id=handle.id)
     try:
         return _background_result(handle, config.AI_REQUEST_TIMEOUT_S + 65)
     finally:
@@ -2114,6 +2118,9 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
             timeout=config.AI_REQUEST_TIMEOUT_S + 60, with_context=True,
         )
         control.register(handle, label="Conversation", kind="brain")
+        # Newest command wins -- see the /api/chat handler: don't let this stream
+        # queue behind a stale conversation turn on the shared turn lock.
+        control.supersede(kinds=("brain", "voice"), keep_id=handle.id)
         try:
             while True:
                 try:
@@ -2255,6 +2262,9 @@ def voice_turn(audio: UploadFile = File(...), speaker_audio: UploadFile | None =
 
         control = get_runtime_control()
         control.register(context.handle, label="Voice command", kind="voice")
+        # Newest command wins -- a fresh spoken command clears any stale
+        # conversation turn rather than queueing behind it on the turn lock.
+        control.supersede(kinds=("brain", "voice"), keep_id=context.handle.id)
         try:
             context.progress("transcribing")
             try:

@@ -65,14 +65,41 @@ def _reset_breaker_for_tests() -> None:
     _record_cloud_success()
 
 
+def _interactive_turn_active() -> bool:
+    """True while a brain or voice conversation turn is already in flight.
+
+    No local wake model is configured on this install (openWakeWord shows
+    model_configured=false), so the browser's energy-based VAD has no cheap
+    local gate: every sound loud enough to cross its threshold -- a fan, a
+    cough, room noise -- reaches this function, roughly once a second,
+    around the clock. Local Whisper is CPU-bound, and measured on this
+    4-core machine, running it concurrently with the model HTTP call
+    stretched that call from ~1.5s to 34s (the thread answering the owner's
+    real command simply didn't get scheduled promptly) -- which is what read
+    as "ZENO is slow / AI unavailable". An ambient noise clip and the owner's
+    live command are never something to answer in the same instant, so
+    skipping the CPU-heavy local fallback while a real turn is running costs
+    nothing the owner would notice: the clip is overwhelmingly not speech
+    anyway, and VAD keeps listening for the next one.
+    """
+    try:
+        from reyes_agent.intelligence import get_runtime_control
+
+        return any(op.get("kind") in ("brain", "voice") for op in get_runtime_control().active())
+    except Exception:  # noqa: BLE001 -- never let this check break STT
+        return False
+
+
 def transcribe_result(audio: bytes) -> dict:
     if not audio:
         return {"transcript": "", "confidence": None}
     failures: list[str] = []
     cloud_ready = cloud.status()["state"] == "READY"
+    interactive_busy = _interactive_turn_active()
     for name, available, operation in (
         ("deepgram", cloud_ready and _cloud_allowed(), lambda: cloud.transcribe(audio)),
-        ("faster-whisper", local_whisper.ready(), lambda: local_whisper.transcribe(audio)),
+        ("faster-whisper", local_whisper.ready() and not interactive_busy,
+         lambda: local_whisper.transcribe(audio)),
     ):
         if not available:
             continue
