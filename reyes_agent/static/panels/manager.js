@@ -82,6 +82,16 @@ export class PanelManager {
   _route(evt) {
     const type = evt.type || evt.event_type || "";
     const payload = evt.payload || evt.data || {};
+    // Ragebait is a transient, owner-consented battle view. It is not a tool
+    // panel and must never be restored or poll while idle.
+    if (type === "ragebait.battle_started") {
+      this.open("ragebait", { reason: "ragebait:battle", focus: true });
+      return;
+    }
+    if (type === "ragebait.battle_finished" || type === "ragebait.disabled") {
+      for (const id of this.findByType("ragebait")) this.close(id);
+      return;
+    }
     if (type !== "execution.lifecycle") return;
     const tool = payload.tool || (payload.detail && payload.detail.tool) || "";
     if (!tool) return;

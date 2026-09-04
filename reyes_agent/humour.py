@@ -121,6 +121,22 @@ def directive(message: str, decision: cognition.Route, *, now: float | None = No
     global _last_light_at
 
     now = time.time() if now is None else now
+    # Ragebait is deliberately only a compact, local tonal instruction inside
+    # this same turn.  It owns consent and stop/serious precedence; it does
+    # not create a provider call, worker, listener, or tool path.
+    try:
+        from reyes_agent import ragebait
+
+        blocked = serious(message)
+        ragebait.handle(message, serious=blocked, now=now)
+        ragebait_nudge = ragebait.directive(
+            message, audience="owner_conversation", serious=blocked, now=now,
+        )
+        if ragebait_nudge:
+            return ragebait_nudge
+    except Exception:  # noqa: BLE001 -- optional personality must never block a turn
+        pass
+
     current = mode()
     if current == HUMOUR_OFF or serious(message):
         return ""
@@ -151,9 +167,16 @@ def directive(message: str, decision: cognition.Route, *, now: float | None = No
 
 def record_reply(message: str, reply: str) -> None:
     """Keep only recent explicitly humorous replies, locally and bounded."""
+    clean = " ".join(str(reply or "").split())
+    if clean:
+        try:
+            from reyes_agent import ragebait
+
+            ragebait.record_reply(clean)
+        except Exception:  # noqa: BLE001 -- keep a completed assistant turn safe
+            pass
     if intent(message) not in {"JOKE", "ANOTHER", "RETRY", "ROAST"}:
         return
-    clean = " ".join(str(reply or "").split())
     if not clean:
         return
     with _lock:
