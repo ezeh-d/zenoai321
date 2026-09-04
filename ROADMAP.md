@@ -2014,3 +2014,26 @@ visitor, evidence-pack, Defense Mode, guest conversation, capability-routing,
 provider-payload and Charm-routing regression set passes **162/162**. Python
 compilation and repository checks are recorded in the delivery commit. One
 pre-existing non-failing eMEM API-rename warning remains.
+
+---
+
+## Ragebait / Provocation Banter Mode — COMPLETE (2026-09-04)
+
+ZENO now has a local, consent-scoped Ragebait state machine for playful
+owner-to-ZENO banter. Intensity is bounded from 0 to 5, recent lines are held
+only in a bounded in-process history, and Ragebait resets off at restart.
+Explicit stop language and serious/sensitive context disable it before any
+response directive is generated. Ragebait never changes permissions,
+confirmation, tool routing, outbound messaging, or third-party communication.
+
+Battle state, intensity, and local motion reactions publish compact
+`ragebait.*` events through the existing Event Bus. The existing panel system
+opens a non-persistent, draggable Ragebait Battle view only on a real battle
+event and removes it when the battle completes or the mode is disabled. It has
+no polling loop, timer, new worker, microphone, or continuous animation.
+
+**Verification:** the Ragebait, humour, Charm, live-panel, proactive-panel and
+Phase 22 stability regression suite passes **150/150 in 13.96 seconds**.
+Python compilation and whitespace checks pass. The separate manual validation
+still required is to open, drag, minimize, restore, and close the battle panel
+on the target Windows WebView host during a real owner-started battle.
