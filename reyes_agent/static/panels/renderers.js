@@ -322,6 +322,29 @@ export const RENDERERS = {
     },
   },
 
+  // --- Ragebait: compact state from real local events, no polling --------
+  ragebait: {
+    mount(api) {
+      api.setStatus("waiting");
+      api.setBody(`<div class="zp-hint">Waiting for the next battle event.</div>`);
+    },
+    event(api, evt) {
+      const type = evType(evt);
+      if (!type.startsWith("ragebait.")) return;
+      const payload = evt.payload || evt.data || {};
+      const battle = payload.battle || {};
+      const round = Number(battle.round || 0);
+      const maximum = Number(battle.maximum_rounds || 5);
+      api.setStatus(battle.active ? "active" : "complete");
+      api.setBody(`<div class="zp-settings">
+        <div class="zp-setrow"><span>Round</span><b>${round} / ${maximum}</b></div>
+        <div class="zp-setrow"><span>Intensity</span><b>${Number(payload.intensity || 0)} / 5</b></div>
+        <div class="zp-setrow"><span>User</span><b>${Number(battle.user_score || 0).toFixed(1)}</b></div>
+        <div class="zp-setrow"><span>ZENO</span><b>${Number(battle.zeno_score || 0).toFixed(1)}</b></div>
+      </div>`);
+    },
+  },
+
   // --- honest fallback for registered-but-not-yet-rich panels ----------
   generic: {
     mount(api) {

@@ -48,6 +48,8 @@ PANELS: dict[str, dict[str, Any]] = {
                         persistent=True, kind="notifications"),
     "proactive":     _p("proactive", "Proactive", "✦", persistent=True,
                         kind="proactive"),
+    "ragebait":      _p("ragebait", "Ragebait Battle", "⚡", kind="ragebait",
+                        support="live"),
     "files":         _p("files", "Files", "▧", kind="files"),
     "browser":       _p("browser", "Browser", "◐", kind="browser",
                         support="state"),
