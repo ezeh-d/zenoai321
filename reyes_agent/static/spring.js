@@ -39,6 +39,33 @@
   function opt(o, k) { return (o && o[k] != null) ? o[k] : SPRING_DEFAULTS[k]; }
 
   /*
+   * stepSpring — ONE physics step of a damped spring toward `target`, given
+   * the current {x, v}. Pulled out of springTo()'s inner loop so continuous
+   * "chase" motion (cursor-following eyes, a HUD lean that tracks live
+   * velocity) shares the exact same math as springTo's fire-and-forget
+   * animations, instead of a second hand-rolled approximation. `target` may
+   * change every call -- unlike springTo, this never "completes"; the caller
+   * decides when motion is negligible (e.g. via restSpeed/restDelta on the
+   * returned state) and can stop calling it.
+   *   state = ZenoSpring.stepSpring(state, target, dt, "smooth");
+   *   el.style.transform = `translate3d(${state.x}px,0,0)`;
+   */
+  function stepSpring(state, target, dt, cfg) {
+    var c = (typeof cfg === "string" ? PRESETS[cfg] : cfg) || PRESETS.smooth;
+    var stiffness = opt(c, "stiffness"), damping = opt(c, "damping"), mass = opt(c, "mass");
+    var x = state ? state.x : 0, v = state ? state.v : 0;
+    // Sub-step for stability exactly like springTo, so a dropped/slow frame
+    // (large dt) never overshoots into instability.
+    var clamped = Math.min(Math.max(dt, 0), 1 / 30);
+    var sub = Math.max(1, Math.ceil(clamped / (1 / 240))), h = clamped / sub;
+    for (var i = 0; i < sub; i++) {
+      var a = (-stiffness * (x - target) - damping * v) / mass;
+      v += a * h; x += v * h;
+    }
+    return { x: x, v: v };
+  }
+
+  /*
    * springTo — animate a value from `from` to `to` with a real spring, driven
    * by requestAnimationFrame (semi-implicit Euler, sub-stepped for stability).
    * Returns a cancel function. onUpdate(value, velocity) each frame.
@@ -113,6 +140,7 @@
     SPRING_DEFAULTS: SPRING_DEFAULTS,
     PRESETS: PRESETS,
     dampingFor: dampingFor,
+    stepSpring: stepSpring,
     springTo: springTo,
     springCSS: springCSS,
   };

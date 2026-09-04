@@ -191,7 +191,11 @@ export function initOrb(canvas) {
     root.classList.remove("eyes-" + currentEyes);
     currentEyes = expression;
     root.classList.add("eyes-" + currentEyes);
-    if (currentEyes === "closed") setEyeOffset(0, 0);
+    if (currentEyes === "closed") {
+      eyeTargetX = 0; eyeTargetY = 0;
+      eyeSpringX.x = 0; eyeSpringX.v = 0; eyeSpringY.x = 0; eyeSpringY.v = 0;
+      writeEyeTransform(0, 0);
+    }
   }
   root.classList.add("eyes-calm");
 
@@ -342,10 +346,15 @@ export function initOrb(canvas) {
   });
 
   // Cursor eyes intentionally have no permanent animation loop. Pointer
-  // events merely coalesce into one capped compositor transform, then one
-  // delayed neutral return. That is smoother than direct DOM writes yet does
-  // no work while the cursor is still, the orb is hidden, sleeping or the
-  // performance profile says the machine is under pressure.
+  // events coalesce into one capped TARGET update (still throttled to
+  // effectiveEyeFps, unchanged), then a real spring (ZenoSpring.stepSpring,
+  // static/spring.js) chases that target every frame -- inertia and a
+  // slight overshoot on a fast flick, instead of the old direct-write snap
+  // -- but the chase RAF loop only runs WHILE still settling and stops the
+  // moment it's within rest distance of the target, so an idle cursor still
+  // costs nothing (same philosophy as before, now with real physics on the
+  // way there). Falls back to the old direct-write behavior if spring.js
+  // failed to load, so a missing/blocked script never breaks eye tracking.
   const eyesLayer = root.querySelector(".orb-eyes");
   let eyeTrackingEnabled = false;
   let eyeTrackingFps = "auto";
@@ -354,6 +363,10 @@ export function initOrb(canvas) {
   let eyeNeutralTimer = null;
   let pendingPointer = null;
   let lastEyeX = 0, lastEyeY = 0;
+  let eyeTargetX = 0, eyeTargetY = 0;
+  const eyeSpringX = { x: 0, v: 0 }, eyeSpringY = { x: 0, v: 0 };
+  let eyeSpringRaf = null, eyeSpringLastTs = null;
+  const EYE_REST_DELTA = 0.15, EYE_REST_SPEED = 0.4;
   function effectiveEyeFps() {
     if (eyeTrackingFps === "15" || eyeTrackingFps === "30") return Number(eyeTrackingFps);
     return eyePerformanceMode === "low_power" || root.classList.contains("lite") ? 15 : 30;
@@ -362,12 +375,44 @@ export function initOrb(canvas) {
     return eyeTrackingEnabled && root.style.display !== "none"
       && document.visibilityState === "visible" && currentEyes !== "closed";
   }
-  function setEyeOffset(x, y) {
+  function writeEyeTransform(x, y) {
     if (!eyesLayer) return;
     // Less than a quarter pixel is invisible, so avoid a compositor update.
     if (Math.abs(x - lastEyeX) < 0.25 && Math.abs(y - lastEyeY) < 0.25) return;
     lastEyeX = x; lastEyeY = y;
     eyesLayer.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0)`;
+  }
+  function eyeSpringSettled() {
+    return Math.abs(eyeSpringX.x - eyeTargetX) < EYE_REST_DELTA && Math.abs(eyeSpringX.v) < EYE_REST_SPEED
+      && Math.abs(eyeSpringY.x - eyeTargetY) < EYE_REST_DELTA && Math.abs(eyeSpringY.v) < EYE_REST_SPEED;
+  }
+  function stepEyeSpring(ts) {
+    eyeSpringRaf = null;
+    // Eyes may have closed or the orb been hidden mid-chase -- stop rather
+    // than keep animating toward a target nobody can see; setEyes/setActive
+    // below already reset the transform straight to center in that case.
+    if (!eyesMayTrack()) { eyeSpringLastTs = null; return; }
+    const dt = eyeSpringLastTs == null ? 1 / 60 : Math.min((ts - eyeSpringLastTs) / 1000, 1 / 30);
+    eyeSpringLastTs = ts;
+    const step = root.ZenoSpring && root.ZenoSpring.stepSpring;
+    if (step) {
+      Object.assign(eyeSpringX, step(eyeSpringX, eyeTargetX, dt, "smooth"));
+      Object.assign(eyeSpringY, step(eyeSpringY, eyeTargetY, dt, "smooth"));
+      writeEyeTransform(eyeSpringX.x, eyeSpringY.x);
+    } else {
+      // No spring engine available: preserve the original direct-write behavior.
+      writeEyeTransform(eyeTargetX, eyeTargetY);
+      eyeSpringX.x = eyeTargetX; eyeSpringY.x = eyeTargetY;
+    }
+    if (!step || !eyeSpringSettled()) {
+      eyeSpringRaf = requestAnimationFrame(stepEyeSpring);
+    } else {
+      eyeSpringLastTs = null; // fully stopped; next retarget starts a clean dt
+    }
+  }
+  function setEyeTarget(x, y) {
+    eyeTargetX = x; eyeTargetY = y;
+    if (eyeSpringRaf === null) eyeSpringRaf = requestAnimationFrame(stepEyeSpring);
   }
   function applyCursorEyes() {
     eyeUpdateTimer = null;
@@ -377,7 +422,7 @@ export function initOrb(canvas) {
     const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
     const x = Math.max(-1, Math.min(1, (point.x - cx) / Math.max(1, cx))) * 3.4;
     const y = Math.max(-1, Math.min(1, (point.y - cy) / Math.max(1, cy))) * 2.4;
-    setEyeOffset(x, y);
+    setEyeTarget(x, y);
   }
   function queueCursorEyes(event) {
     if (!eyesMayTrack()) return;
@@ -386,7 +431,9 @@ export function initOrb(canvas) {
       eyeUpdateTimer = setTimeout(applyCursorEyes, Math.round(1000 / effectiveEyeFps()));
     }
     clearTimeout(eyeNeutralTimer);
-    eyeNeutralTimer = setTimeout(() => { pendingPointer = null; setEyeOffset(0, 0); }, 850);
+    // Smooth recovery: retarget to center and let the spring ease back,
+    // instead of snapping straight to (0,0).
+    eyeNeutralTimer = setTimeout(() => { pendingPointer = null; setEyeTarget(0, 0); }, 850);
   }
   window.addEventListener("pointermove", queueCursorEyes, { passive: true });
   function setEyeTracking(options = {}) {
@@ -396,7 +443,12 @@ export function initOrb(canvas) {
     if (!eyesMayTrack()) {
       clearTimeout(eyeUpdateTimer); eyeUpdateTimer = null;
       clearTimeout(eyeNeutralTimer); eyeNeutralTimer = null;
-      pendingPointer = null; setEyeOffset(0, 0);
+      if (eyeSpringRaf !== null) { cancelAnimationFrame(eyeSpringRaf); eyeSpringRaf = null; }
+      eyeSpringLastTs = null;
+      pendingPointer = null;
+      eyeTargetX = 0; eyeTargetY = 0;
+      eyeSpringX.x = 0; eyeSpringX.v = 0; eyeSpringY.x = 0; eyeSpringY.v = 0;
+      writeEyeTransform(0, 0);
     }
   }
 
@@ -434,7 +486,11 @@ export function initOrb(canvas) {
     if (on) scheduleBlink();
     else clearTimeout(blinkTimer);
     setParticlesActive(on);
-    if (!on) setEyeOffset(0, 0);
+    if (!on) {
+      eyeTargetX = 0; eyeTargetY = 0;
+      eyeSpringX.x = 0; eyeSpringX.v = 0; eyeSpringY.x = 0; eyeSpringY.v = 0;
+      writeEyeTransform(0, 0);
+    }
   }
 
   return {

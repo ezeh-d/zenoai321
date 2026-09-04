@@ -1148,12 +1148,18 @@ body.focus #agent-team-overview { opacity: 0; }
   </div>
 </div>
 
+<script src="/static/spring.js"></script>
 <script type="module">
 import { initOrb } from "/static/orb.js?v=8";
 import * as voiceVAD from "/static/vad.js?v=2";
 import { createAudioFrameClient } from "/static/audio_frames.js?v=2";
 import { createAgentSpace } from "/static/agent_space.js?v=3";
 
+// Spring-based cursor eye tracking (orb.js) needs ZenoSpring; loaded above.
+// The full dashboard has no native window-drag bridge the way the Mini Orb
+// does (mini.html), so shake/dizziness detection stays scoped to the Mini
+// Orb HUD, where "dragging the HUD" is a real, native gesture -- nothing
+// here would be feeding it real samples.
 const orb = initOrb(document.getElementById("orb-canvas"));
 // Exposed for the dev overlay and for testing orb state/expressions
 // without driving a whole turn (same pattern as window.agentRing).

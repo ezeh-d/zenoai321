@@ -3,7 +3,12 @@
 <title>ZENO Mini Orb</title>
 <style>
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#dcecff;font:11px system-ui,sans-serif;cursor:grab;user-select:none}
-  body.dragging{cursor:grabbing} #orb-simple{width:130px!important;height:130px!important} #orb-canvas{position:fixed;inset:0;width:100%;height:100%}
+  body.dragging{cursor:grabbing} #orb-simple{width:130px!important;height:130px!important;transition:filter .4s ease} #orb-canvas{position:fixed;inset:0;width:100%;height:100%}
+  /* Virtual motion (static/motion_engine.js): subtle instability while dizzy/
+     shaking, entirely on the orb layer -- there is nothing else in this
+     minimal HUD to accidentally affect, and no important control to obscure. */
+  #orb-simple.zeno-shaking{filter:saturate(1.25) brightness(1.06)}
+  #orb-simple.zeno-dizzy{filter:saturate(.85) blur(.3px)}
   /* Panels spring in/out on opacity+transform (compositor-only). The CSS
      cubic-bezier is a fallback; spring.js upgrades it to a real spring linear()
      with the exact constants extracted from Framer Motion. */
@@ -11,11 +16,21 @@
   #live-view-badge{opacity:0;transform:translateX(-50%) translateY(-6px);transition:opacity .3s cubic-bezier(.22,1,.36,1),transform .3s cubic-bezier(.22,1,.36,1);position:fixed;left:50%;top:5px;z-index:9;padding:3px 8px;border-radius:999px;background:rgba(45,7,15,.92);border:1px solid rgba(255,95,109,.75);color:#ffd6dd;font:700 7px system-ui;letter-spacing:.08em;white-space:nowrap;pointer-events:none;will-change:opacity,transform}#live-view-badge.show{opacity:1;transform:translateX(-50%)}
 </style></head><body><canvas id="orb-canvas"></canvas><div id="live-view-badge">PHONE LIVE VIEW</div><div id="music-card"><img id="music-art" alt=""><span id="music-text"></span></div>
 <script src="/static/spring.js"></script>
+<script src="/static/motion_engine.js"></script>
 <script type="module">
 import { initOrb } from '/static/orb.js?v=8';
 import * as voiceVAD from '/static/vad.js?v=2';
 import { createAgentPresence } from '/static/agent_presence.js';
 const orb=initOrb(document.getElementById('orb-canvas'));
+// Virtual motion: window-drag shake/dizziness detection + a subtle lean on
+// the orb container. Entirely local (no network) except the rare, cooldown-
+// gated personality-line request motion_engine.js makes on its own -- see
+// physical_state.py. leanTarget is #orb-simple -- initOrb() appends this as
+// a SIBLING of #orb-canvas on document.body (verified live), not a child of
+// the canvas, and it is the element actually painted on screen; .orb-eyes is
+// ITS descendant, so this rotate() and the eyes' own translate3d() still
+// never touch the same element.
+if(window.ZenoMotion)window.ZenoMotion.start({leanTarget:document.getElementById('orb-simple')});
 // Spring-ease the mini panels' show/hide, using the exact spring constants
 // extracted from Framer Motion (static/spring.js). Falls back to the CSS
 // cubic-bezier above if spring.js didn't load. Toggling '.show' now springs
@@ -109,7 +124,7 @@ function flushMove(){
   Promise.resolve(move).catch(()=>{}).finally(()=>{moveInFlight=false;if(queuedMove)requestAnimationFrame(flushMove);});
 }
 document.addEventListener('mousedown',e=>{const a=api();if(!a)return;dragging=true;moved=false;startX=e.screenX;startY=e.screenY;document.body.classList.add('dragging');if(a.begin_orb_drag)a.begin_orb_drag(e.screenX,e.screenY,window.outerWidth||210).catch(()=>{});});
-document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX-startX,dy=e.screenY-startY;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;queuedMove={screenX:e.screenX,screenY:e.screenY};requestAnimationFrame(flushMove);});
+document.addEventListener('mousemove',e=>{if(!dragging)return;const dx=e.screenX-startX,dy=e.screenY-startY;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;queuedMove={screenX:e.screenX,screenY:e.screenY};requestAnimationFrame(flushMove);window.dispatchEvent(new CustomEvent('zeno:hud-drag',{detail:{screenX:e.screenX,screenY:e.screenY}}));});
 document.addEventListener('mouseup',()=>{if(!dragging)return;dragging=false;document.body.classList.remove('dragging');const a=api();if(a){const end=a.end_orb_drag||a.snap_orb;if(end)Promise.resolve(end.call(a)).catch(()=>{});}});
 document.addEventListener('click',()=>{if(!moved)void openDashboard();});
 window.addEventListener('pywebviewready',()=>{const a=api();if(a&&a.restore_orb_position)a.restore_orb_position().catch(()=>{});});

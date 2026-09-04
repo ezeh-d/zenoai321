@@ -1148,6 +1148,15 @@ class GestureRequest(BaseModel):
     gesture: str
 
 
+class PhysicalEventRequest(BaseModel):
+    """From static/motion_engine.js: a coarse event label plus two 0..1
+    scores it already computed locally -- never raw cursor/window
+    coordinates, which this endpoint has no use for and must not receive."""
+    event: str
+    dizziness: float = 0.0
+    shake_intensity: float = 0.0
+
+
 class MouseRequest(BaseModel):
     x: float           # 0..1 normalized across screen width
     y: float           # 0..1 normalized across screen height
@@ -1220,6 +1229,22 @@ def gesture_action(req: GestureRequest) -> dict[str, Any]:
     name, args = mapping
     result = run_tool(name, args)
     return {"ok": True, "action": f"{name}:{args.get('action', '')}", "result": result}
+
+
+@app.post("/api/personality/physical-event")
+def physical_event(req: PhysicalEventRequest) -> dict[str, Any]:
+    """The motion engine reports a shake/dizzy/recovered moment; ZENO decides
+    (cooldown + "is real work happening" check, both in physical_state.py)
+    whether that is worth a short in-character line. The caller speaks it
+    via the EXISTING /api/tts if `reacted` is true -- this endpoint never
+    touches audio itself."""
+    from reyes_agent import physical_state
+
+    dizziness = max(0.0, min(1.0, req.dizziness))
+    shake_intensity = max(0.0, min(1.0, req.shake_intensity))
+    return physical_state.maybe_react(
+        req.event, dizziness=dizziness, shake_intensity=shake_intensity,
+    )
 
 
 @app.get("/")

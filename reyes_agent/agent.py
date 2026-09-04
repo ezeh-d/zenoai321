@@ -210,6 +210,25 @@ def _run_agent_impl(
         except Exception:  # noqa: BLE001 -- language must never break a turn
             _language = None
 
+    # Humor is a modular capability, not part of the main prompt: this stays
+    # empty on every ordinary turn, and only ever adds a few lines when the
+    # owner explicitly asked for a joke/roast/battle or one is already in
+    # progress. See reyes_agent/humor.py.
+    humor_context = ""
+    try:
+        from reyes_agent import humor as _humor
+
+        _humor_intent = _humor.classify_intent(latest) if latest else None
+        if _humor_intent == "stop_battle":
+            _humor.stop_battle()
+        elif _humor_intent in ("dark_battle", "comeback_battle"):
+            _battle = _humor.start_battle(_humor_intent)
+            humor_context = _humor.build_context(_humor_intent, _battle)
+        elif _humor_intent or _humor.get_battle_state().active:
+            humor_context = _humor.build_context(_humor_intent or "", _humor.get_battle_state())
+    except Exception:  # noqa: BLE001 -- a broken humor check must never cost a turn
+        humor_context = ""
+
     _route = None
     tools = [] if config.MODEL_PROVIDER == "ollama" else tool_definitions(groups=enabled_groups)
     if tools and latest:
@@ -401,7 +420,7 @@ def _run_agent_impl(
     except Exception:  # noqa: BLE001
         memory_context = system_prompt_block()
     system = ((config.FAST_CHAT_SYSTEM_PROMPT if fast_chat else config.SYSTEM_PROMPT)
-              + memory_context + matched_skill_context)
+              + memory_context + matched_skill_context + humor_context)
 
     # WHO ZENO IS travels with every turn, including the fast path.
     #
