@@ -215,6 +215,7 @@ def _run_agent_impl(
     # owner explicitly asked for a joke/roast/battle or one is already in
     # progress. See reyes_agent/humor.py.
     humor_context = ""
+    _humor_battle_live = False
     try:
         from reyes_agent import humor as _humor
 
@@ -224,8 +225,18 @@ def _run_agent_impl(
         elif _humor_intent in ("dark_battle", "comeback_battle"):
             _battle = _humor.start_battle(_humor_intent)
             humor_context = _humor.build_context(_humor_intent, _battle)
+            _humor_battle_live = True
         elif _humor_intent or _humor.get_battle_state().active:
-            humor_context = _humor.build_context(_humor_intent or "", _humor.get_battle_state())
+            _state = _humor.get_battle_state()
+            humor_context = _humor.build_context(_humor_intent or "", _state)
+            _humor_battle_live = _state.active
+        if _humor_battle_live:
+            # battle_score (reyes_agent/tools/humor_tools.py) lives in its own
+            # "humor" group, not core -- ordinary turns never carry it. Without
+            # this the model had HUMOR MODE instructions telling it to call a
+            # tool it was never actually given, and improvised fake tool-call-
+            # shaped JSON as plain reply text instead (observed live).
+            enabled_groups.add("humor")
     except Exception:  # noqa: BLE001 -- a broken humor check must never cost a turn
         humor_context = ""
 
@@ -294,12 +305,19 @@ def _run_agent_impl(
             charm_relevant = is_charm_request(latest)
         except Exception:  # noqa: BLE001 -- optional routing aid cannot break chat
             pass
+    # A humor battle needs the battle_score TOOL to keep score deterministically
+    # (see humor.py) -- the fast/no-tools path left the model with nothing real
+    # to call, and it improvised fake tool-call-shaped JSON as plain reply text
+    # instead (observed live: a hallucinated {"name":"battle_score",...} blob
+    # printed to the owner). humor_context is non-empty exactly when a battle
+    # is starting or already active, so this is a precise, not a blanket, gate.
     fast_chat = bool(
         decision is not None
         and decision.path == "FAST"
         and decision.modes == ("CHAT",)
         and not charm_relevant
         and not presentation_relevant
+        and not humor_context
     )
     if fast_chat or not latest:
         tools = []

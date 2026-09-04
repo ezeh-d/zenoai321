@@ -153,6 +153,7 @@ TOOL_GROUPS: dict[str, str] = {
     # Context-specific local intelligence: activated deterministically in
     # agent.py before provider schemas are built, never carried on ordinary
     # conversation turns.
+    "battle_score": "humor",
     "charm_reply": "charm", "charm_analyze": "charm",
     "charm_set_mode": "charm", "charm_status": "charm",
     "charm_feedback": "charm", "charm_coach": "charm",
