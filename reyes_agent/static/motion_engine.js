@@ -176,7 +176,7 @@
     var spring = root.ZenoSpring || null;
     var leanEl = typeof opts.leanTarget === "string"
       ? document.querySelector(opts.leanTarget) : opts.leanTarget;
-    var reactCooldownMs = 25000; // mirrors physical_state.py's server-side cooldown
+    var reactCooldownMs = 12000; // mirrors ragebait.py's _MOTION_COOLDOWN_S server-side cooldown
     var lastReactAt = 0;
     var raf = 0;
 
@@ -209,31 +209,26 @@
 
     function maybeReact(reaction) {
       if (!reaction) return;
-      // /api/personality/physical-event and /api/tts are loopback-only
-      // (reyes_agent/remote_access/boundary.py's allowlist does not cover
-      // them -- neither has phone-session auth, unlike /api/phone/tts).
-      // A remote caller (the phone companion) gets this flag from start()
-      // so it never fires a request the server would 403 anyway; the LOCAL
-      // visual lean/wobble above still runs either way.
+      // /api/personality/physical-event forwards to reyes_agent/ragebait.py's
+      // on_motion() -- the EXISTING, consent-scoped (owner must have said
+      // "ragebait me" first) local reaction state, not a second personality
+      // system. It returns an emotion tag, never spoken text: Ragebait's
+      // reactions are visual/state, not unprompted TTS, so there is no
+      // /api/tts call here (motion_engine.js does not own any voice output).
+      // reactRemote:false (the phone companion) skips the request entirely --
+      // that endpoint is loopback-only, see remote_access/boundary.py.
       if (opts.reactRemote === false) return;
       var now = Date.now();
-      if (now - lastReactAt < reactCooldownMs) return; // client-side mirror of the server cooldown
+      if (now - lastReactAt < reactCooldownMs) return; // client-side mirror of ragebait's own cooldown
       lastReactAt = now;
       fetch("/api/personality/physical-event", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ event: reaction, dizziness: state.dizziness, shake_intensity: state.shakeIntensity }),
       }).then(function (r) { return r.ok ? r.json() : null; }).then(function (data) {
-        if (!data || !data.reacted || !data.text) return;
-        root.dispatchEvent(new CustomEvent("zeno:personality-line", { detail: { text: data.text, event: reaction } }));
-        if (isMuted()) return;
-        fetch("/api/tts", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: data.text, agent: "zeno" }),
-        }).then(function (r) { return r.ok ? r.blob() : null; }).then(function (blob) {
-          if (!blob) return;
-          var audio = new Audio(URL.createObjectURL(blob));
-          audio.play().catch(function () {}); // autoplay can be blocked; a missed quip is not an error
-        }).catch(function () {});
+        if (!data || !data.reacted) return;
+        root.dispatchEvent(new CustomEvent("zeno:personality-reaction", {
+          detail: { emotion: data.emotion || "", event: reaction },
+        }));
       }).catch(function () {});
     }
 

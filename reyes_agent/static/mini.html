@@ -24,8 +24,10 @@ import { createAgentPresence } from '/static/agent_presence.js';
 const orb=initOrb(document.getElementById('orb-canvas'));
 // Virtual motion: window-drag shake/dizziness detection + a subtle lean on
 // the orb container. Entirely local (no network) except the rare, cooldown-
-// gated personality-line request motion_engine.js makes on its own -- see
-// physical_state.py. leanTarget is #orb-simple -- initOrb() appends this as
+// gated /api/personality/physical-event call motion_engine.js makes on its
+// own -- forwards to the EXISTING reyes_agent/ragebait.py (consent-scoped:
+// only reacts once the owner has said "ragebait me"). leanTarget is
+// #orb-simple -- initOrb() appends this as
 // a SIBLING of #orb-canvas on document.body (verified live), not a child of
 // the canvas, and it is the element actually painted on screen; .orb-eyes is
 // ITS descendant, so this rotate() and the eyes' own translate3d() still

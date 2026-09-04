@@ -1233,18 +1233,22 @@ def gesture_action(req: GestureRequest) -> dict[str, Any]:
 
 @app.post("/api/personality/physical-event")
 def physical_event(req: PhysicalEventRequest) -> dict[str, Any]:
-    """The motion engine reports a shake/dizzy/recovered moment; ZENO decides
-    (cooldown + "is real work happening" check, both in physical_state.py)
-    whether that is worth a short in-character line. The caller speaks it
-    via the EXISTING /api/tts if `reacted` is true -- this endpoint never
-    touches audio itself."""
-    from reyes_agent import physical_state
+    """The motion engine (static/motion_engine.js) reports a real shake/dizzy/
+    recovered moment; ragebait.on_motion() decides whether that is worth a
+    reaction -- consent-scoped (only when the owner turned Ragebait on),
+    cooldown-limited, entirely local/synchronous, no model call. This is
+    deliberately the EXISTING reyes_agent/ragebait.py, not a second reaction
+    system: it already owns consent, cooldown and event redaction, and this
+    was its one missing piece -- on_motion() existed with test coverage but
+    had no live caller anywhere in the app until this endpoint."""
+    from reyes_agent import ragebait
 
-    dizziness = max(0.0, min(1.0, req.dizziness))
-    shake_intensity = max(0.0, min(1.0, req.shake_intensity))
-    return physical_state.maybe_react(
-        req.event, dizziness=dizziness, shake_intensity=shake_intensity,
-    )
+    if req.event not in ("shake", "dizzy", "recovered"):
+        return {"reacted": False, "reason": "unknown_event"}
+    result = ragebait.on_motion(f"motion.{req.event}")
+    if result is None:
+        return {"reacted": False, "reason": "cooldown_or_disabled"}
+    return {"reacted": True, "emotion": result.get("emotion", ""), "event": req.event}
 
 
 @app.get("/")

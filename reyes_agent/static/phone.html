@@ -24,18 +24,18 @@
 const $=id=>document.getElementById(id),params=new URLSearchParams(location.search),pairToken=params.get('token')||params.get('code')||'';
 // Motion reactions: strictly opt-in (a tap in Companion settings, never
 // requested on load) -- see ZenoMotion.requestPhoneMotionPermission's iOS
-// gate. Uses the exact same physical-event/personality pipeline as the
-// desktop HUD; audio still respects that endpoint's own mute/cooldown/
-// important-work checks, nothing phone-specific was added there.
+// gate. Uses the exact same /api/personality/physical-event pipeline as the
+// desktop HUD (forwards to ragebait.on_motion() -- consent-scoped and
+// cooldown-limited there, nothing phone-specific was added).
 let motionHandle=null;
 async function enableMotionReactions(){
   if(!window.ZenoMotion){note('motion-note','Motion engine failed to load.');return}
   const granted=await window.ZenoMotion.requestPhoneMotionPermission();
   if(!granted){note('motion-note','Motion permission was not granted.');return}
-  // reactRemote:false -- /api/personality/physical-event and /api/tts are
-  // loopback-only (no phone-session auth); a spoken reaction from the phone
-  // needs its own authenticated /api/phone/* route, not built yet. The
-  // visual lean/wobble on the header orb still works fully locally.
+  // reactRemote:false -- /api/personality/physical-event is loopback-only
+  // (no phone-session auth). A phone-driven Ragebait reaction would need its
+  // own authenticated /api/phone/* route, not built yet. The visual
+  // lean/wobble on the header orb still works fully locally either way.
   motionHandle=window.ZenoMotion.start({leanTarget:document.querySelector('.orb'),reactRemote:false});
   const attached=window.ZenoMotion.attachPhoneMotion(motionHandle);
   note('motion-note',attached?'Motion reactions are on.':'This browser has no motion sensors to use.');
