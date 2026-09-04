@@ -52,6 +52,22 @@ OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "").strip().rstrip("/")
 XAI_API_KEY = os.environ.get("XAI_API_KEY", "").strip()
 XAI_MODEL = os.environ.get("XAI_MODEL", "grok-4-latest").strip()
 
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+# Verified live against Groq's own /v1/models + a real tool-calling request
+# (2026-09-04) -- llama-3.1/3.3 chat models are gone from Groq's catalog,
+# so a remembered "llama-3.3-70b-versatile" default would have 404'd. Of the
+# models actually served: qwen3.6-27b leaked its <think> reasoning trace as
+# the visible answer (unusable for a chat/voice reply); groq/compound-mini
+# was fastest but is Groq's own agentic system with tools of its own, which
+# would sit ungoverned by ZENO's action_policy/confirmation underneath
+# ZENO's tool loop -- a real behavioral risk, not just a latency trade.
+# openai/gpt-oss-20b: fast (~0.6s), answers cleanly with no leaked reasoning
+# text, and returns standard OpenAI-shaped tool_calls when ZENO hands it a
+# tool schema (verified) -- the safe, predictable fit for the existing
+# _run_openai_compatible seam. Configurable so a future catalog change never
+# needs a source edit, just GROQ_MODEL in .env.
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b").strip()
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 # Fast vs smart Gemini models. gemini-3.5-flash-lite is verified available on
 # this key and is a PINNED id (steadier than the moving -latest alias). The
@@ -442,6 +458,15 @@ TRUST_LOCAL_OWNER = _flag("ZENO_TRUST_LOCAL_OWNER")
 # command. So Gemini turns use ONE non-streamed completion by default -- fast
 # and reliable. Set ZENO_GEMINI_STREAMING=1 only if a future endpoint fixes it.
 GEMINI_STREAMING = _flag("ZENO_GEMINI_STREAMING")
+
+# Groq's streaming behaved inconsistently in testing (2026-09-04): one call
+# streamed cleanly, the next hung past a 20s read with no chunks -- the exact
+# failure shape that made Gemini's streaming unsafe (see above). Non-streaming
+# was reliable across repeats instead (~350-500ms warm), and Groq is already
+# fast enough non-streamed that the UX loss is small. Off by default for the
+# same reason as Gemini; set ZENO_GROQ_STREAMING=1 to retry once/if this
+# proves stable, or while investigating further.
+GROQ_STREAMING = _flag("ZENO_GROQ_STREAMING")
 
 AUTONOMY_DESTRUCTIVE_TOOLS = frozenset({"delete_file", "run_command"})
 AUTONOMY_OUTBOUND_TOOLS = frozenset({"send_slack_message"})

@@ -61,6 +61,7 @@ def _warm_cloud() -> None:
         "gemini": getattr(provider, "_get_gemini_client", None),
         "xai": getattr(provider, "_get_xai_client", None),
         "anthropic": getattr(provider, "_get_anthropic_client", None),
+        "groq": getattr(provider, "_get_groq_client", None),
     }
     getter = getters.get(config.MODEL_PROVIDER)
     if getter is None:
@@ -71,7 +72,7 @@ def _warm_cloud() -> None:
         return
     model = {
         "gemini": config.GEMINI_MODEL, "xai": config.XAI_MODEL,
-        "anthropic": config.ANTHROPIC_MODEL,
+        "anthropic": config.ANTHROPIC_MODEL, "groq": config.GROQ_MODEL,
     }.get(config.MODEL_PROVIDER, "")
     try:
         if config.MODEL_PROVIDER == "anthropic":

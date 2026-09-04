@@ -34,7 +34,7 @@ STATES = {
     NOT_CONFIGURED, CONFIGURED, VALIDATING, ONLINE, RATE_LIMITED, FAILED, DISABLED,
 }
 
-_PROVIDERS = ("anthropic", "openai", "xai", "gemini", "ollama")
+_PROVIDERS = ("anthropic", "openai", "xai", "gemini", "groq", "ollama")
 _DB_PATH = config.VAULT_PATH / "07-System" / "providers" / (
     "test-health.sqlite3" if config.ZENO_ENV == "test" else "health.sqlite3"
 )
@@ -49,6 +49,7 @@ def _credentials() -> dict[str, str]:
         "openai": config.OPENAI_API_KEY,
         "xai": config.XAI_API_KEY,
         "gemini": config.GEMINI_API_KEY,
+        "groq": config.GROQ_API_KEY,
         "ollama": "local-enabled" if (
             config.OLLAMA_ENABLED or config.MODEL_PROVIDER == "ollama"
         ) else "",
@@ -169,6 +170,9 @@ def _request_spec(provider: str) -> tuple[str, dict[str, str], str]:
                 {"Authorization": f"Bearer {creds[provider]}"}, "data")
     if provider == "xai":
         return ("https://api.x.ai/v1/models",
+                {"Authorization": f"Bearer {creds[provider]}"}, "data")
+    if provider == "groq":
+        return ("https://api.groq.com/openai/v1/models",
                 {"Authorization": f"Bearer {creds[provider]}"}, "data")
     if provider == "gemini":
         return (

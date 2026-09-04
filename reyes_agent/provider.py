@@ -100,6 +100,7 @@ _anthropic_client: Any = None
 _openai_client: Any = None
 _xai_client: Any = None
 _gemini_client: Any = None
+_groq_client: Any = None
 _ollama_client: Any = None
 _anthropic_sdk: Any = None
 _openai_sdk: Any = None
@@ -305,6 +306,20 @@ def _get_gemini_client() -> Any:
                     max_retries=0, **_transport_kwargs(),
                 )
     return _gemini_client
+
+
+def _get_groq_client() -> Any:
+    global _groq_client
+    if _groq_client is None:
+        with _client_init_lock:
+            if _groq_client is None:
+                if not config.GROQ_API_KEY:
+                    raise ProviderError("No GROQ_API_KEY set. Add one to .env, then restart.")
+                _groq_client = _openai_module().OpenAI(
+                    api_key=config.GROQ_API_KEY, base_url="https://api.groq.com/openai/v1",
+                    max_retries=0, **_transport_kwargs(),
+                )
+    return _groq_client
 
 
 def _get_ollama_client() -> Any:
@@ -611,6 +626,27 @@ def _run_xai(
         raise ProviderError(f"Model provider returned an error: {exc.message}") from exc
 
 
+def _run_groq(
+    history: list[dict], system: str, tools: list[dict], on_text: OnText | None
+) -> AgentTurn:
+    sdk = _openai_module()
+    try:
+        return _run_openai_compatible(
+            _get_groq_client(), config.GROQ_MODEL, history, system, tools, on_text,
+            stream=config.GROQ_STREAMING,
+        )
+    except sdk.AuthenticationError as exc:
+        raise ProviderError("That GROQ_API_KEY was rejected. Check it in .env.") from exc
+    except sdk.RateLimitError as exc:
+        raise ProviderError("Groq rate limited the request; falling back.", retryable=True) from exc
+    except sdk.APIConnectionError as exc:
+        raise ProviderError("Couldn't reach Groq. Check your connection.", retryable=True) from exc
+    except sdk.NotFoundError as exc:
+        raise ProviderError(f"Model '{config.GROQ_MODEL}' was not found.") from exc
+    except sdk.APIStatusError as exc:
+        raise ProviderError(f"Groq returned an error: {exc.message}") from exc
+
+
 def _run_openai(
     history: list[dict], system: str, tools: list[dict], on_text: OnText | None
 ) -> AgentTurn:
@@ -689,6 +725,7 @@ _RUNNERS = {
     "openai": _run_openai,
     "xai": _run_xai,
     "gemini": _run_gemini,
+    "groq": _run_groq,
     "ollama": _run_ollama,
 }
 # Immutable identity map for durable health evidence. Tests and controlled
@@ -721,7 +758,8 @@ def warm() -> dict[str, bool]:
         warmed["openai_sdk"] = False
     for name, getter in (
         ("gemini", _get_gemini_client), ("xai", _get_xai_client),
-        ("openai", _get_openai_client), ("ollama", _get_ollama_client),
+        ("openai", _get_openai_client), ("groq", _get_groq_client),
+        ("ollama", _get_ollama_client),
     ):
         try:
             getter()

@@ -42,13 +42,26 @@ from reyes_agent import config
 TASK_KINDS = ("general", "coding", "research", "vision", "reasoning", "offline")
 
 _DEFAULT_ROUTES: dict[str, tuple[str, ...]] = {
-    # preference order; first AVAILABLE provider wins
-    "coding":    ("anthropic", "openai", "xai", "gemini", "ollama"),
-    "reasoning": ("anthropic", "openai", "xai", "gemini", "ollama"),
-    "research":  ("gemini", "openai", "anthropic", "xai", "ollama"),
-    "vision":    ("gemini", "openai", "anthropic", "xai"),
+    # preference order; first AVAILABLE provider wins.
+    #
+    # "general" is what ordinary conversation actually resolves to (see
+    # agent.py: task_kind defaults to "general" whenever cognition.route()
+    # has not classified the turn as something more specific) -- Groq leads
+    # it: LPU inference on a plain instruct model, routinely the lowest
+    # latency in the whole chain for everyday chat, greetings and command
+    # understanding. Gemini is the proven second choice (this owner's existing,
+    # hardened path -- multimodal-capable too, so a text turn that later needs
+    # an image is still on a model that can see it), then the remaining cloud
+    # providers, then local Ollama as the final offline-capable fallback.
+    # "coding"/"reasoning" are UNCHANGED (still anthropic-led): those are
+    # ZENO's existing strong-reasoning routes, not the fast-chat path Groq is
+    # for, and Groq only needs to be reachable there as a late fallback.
+    "coding":    ("anthropic", "openai", "xai", "gemini", "groq", "ollama"),
+    "reasoning": ("anthropic", "openai", "xai", "gemini", "groq", "ollama"),
+    "research":  ("gemini", "groq", "openai", "anthropic", "xai", "ollama"),
+    "vision":    ("gemini", "openai", "anthropic", "xai"),  # Groq has no image input
     "offline":   ("ollama",),
-    "general":   ("gemini", "openai", "anthropic", "xai", "ollama"),
+    "general":   ("groq", "gemini", "openai", "anthropic", "xai", "ollama"),
 }
 
 
@@ -135,6 +148,7 @@ def available_providers() -> dict[str, bool]:
         "openai": bool(config.OPENAI_API_KEY),
         "xai": bool(config.XAI_API_KEY),
         "gemini": bool(config.GEMINI_API_KEY),
+        "groq": bool(config.GROQ_API_KEY),
         # Ollama needs no key. It remains opt-in so machines without the
         # daemon do not pay a connection timeout on every cloud outage.
         "ollama": config.OLLAMA_ENABLED or config.MODEL_PROVIDER == "ollama",
