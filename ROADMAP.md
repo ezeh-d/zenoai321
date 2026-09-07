@@ -2017,6 +2017,19 @@ pre-existing non-failing eMEM API-rename warning remains.
 
 ---
 
+## Free-tier startup repair — VERIFIED TARGETED FIX (2026-09-07)
+
+Cloud preload now constructs cached SDK clients once without inference requests.
+The former 45-second recurring cloud request (approximately 80 idle requests
+per hour) is removed. Explicit Ollama mode retains its local keepalive, with
+a 30-second transport timeout, no SDK retries and guaranteed client closure.
+Provider ordering and Claude's pending wake-prefix local routing are preserved.
+
+Verification: new tests reproduced both defects before repair. The startup,
+Groq provider and local-command suite passes 23 tests with one existing skip.
+This is not a complete free-tier benchmark: end-to-end voice, UI, first-token
+and physical desktop latency still require measurement on the running app.
+
 ## Ragebait / Provocation Banter Mode — COMPLETE (2026-09-04)
 
 ZENO now has a local, consent-scoped Ragebait state machine for playful

@@ -1,22 +1,8 @@
-"""Pays model cold-start costs up front instead of on the user's first turn.
+"""Prepare provider clients without consuming idle cloud inference quota.
 
-TWO DIFFERENT COLD STARTS
--------------------------
-1. OLLAMA unloads a model after ~5 minutes idle, and reloading
-   llama3.2:3b from disk takes ~35s vs ~6s warm. That 35s landed on
-   whatever message happened to follow a gap, which reads as random,
-   severe lag.
-
-2. CLOUD providers were assumed to have no cold start, and the keepalive
-   returned immediately for them. That was wrong in a way nobody measured
-   until 2026-08-07: the FIRST cloud turn of a session took 6.2s against a
-   1.4s warm median. The model is not the cost -- constructing the SDK
-   client, resolving DNS and completing the TLS handshake is. It is paid
-   once per process, and it was being paid by the owner's first sentence.
-
-So both are warmed now. The cloud ping is deliberately tiny (max_tokens=1,
-one word in) so the cost is a handshake, not a conversation, and it is
-scheduled rather than blocking so startup is never held hostage to it.
+Cloud SDK imports and client construction run once in a managed background
+job. DNS/TLS and inference wait for a real request. Explicit Ollama mode keeps
+its existing local model keepalive, with bounded requests and closed clients.
 """
 
 from __future__ import annotations
@@ -24,20 +10,13 @@ from __future__ import annotations
 from reyes_agent import config
 
 _PING_INTERVAL_SECONDS = 4 * 60  # inside Ollama's ~5 min default unload window
-# Cloud connections go idle and get closed by the peer too; a quiet re-ping
-# keeps the pooled TLS connection usable without being chatty. This MUST stay
-# under the HTTP client's keepalive_expiry (120s in provider._http_client) so
-# the warmed connection is refreshed before the pool evicts it -- otherwise
-# most commands reconnect (or stall on a half-open socket). The ping is a
-# max_tokens=1 request, so ~1 token/100s is a negligible cost for a connection
-# that stays warm turn-to-turn.
-_CLOUD_REFRESH_SECONDS = 45
 
 
 def _ping() -> None:
     import openai
 
-    client = openai.OpenAI(api_key="ollama", base_url=config.OLLAMA_BASE_URL)
+    client = openai.OpenAI(api_key="ollama", base_url=config.OLLAMA_BASE_URL,
+                           timeout=30.0, max_retries=0)
     try:
         client.chat.completions.create(
             model=config.OLLAMA_MODEL,
@@ -46,43 +25,15 @@ def _ping() -> None:
         )
     except Exception:  # noqa: BLE001 -- best-effort keepalive, never fatal
         pass
+    finally:
+        client.close()
 
 
 def _warm_cloud() -> None:
-    """Build the real client and complete one real handshake.
-
-    Uses the same `_get_*_client()` the live path uses, so the warmed client
-    is the one that actually serves the next turn -- warming a throwaway
-    client would prove nothing.
-    """
+    """Preload cached SDK clients; deliberately send no network request."""
     from reyes_agent import provider
 
-    getters = {
-        "gemini": getattr(provider, "_get_gemini_client", None),
-        "xai": getattr(provider, "_get_xai_client", None),
-        "anthropic": getattr(provider, "_get_anthropic_client", None),
-        "groq": getattr(provider, "_get_groq_client", None),
-    }
-    getter = getters.get(config.MODEL_PROVIDER)
-    if getter is None:
-        return
-    try:
-        client = getter()
-    except Exception:  # noqa: BLE001 -- a missing key is not a warmup failure
-        return
-    model = {
-        "gemini": config.GEMINI_MODEL, "xai": config.XAI_MODEL,
-        "anthropic": config.ANTHROPIC_MODEL, "groq": config.GROQ_MODEL,
-    }.get(config.MODEL_PROVIDER, "")
-    try:
-        if config.MODEL_PROVIDER == "anthropic":
-            client.messages.create(model=model, max_tokens=1,
-                                   messages=[{"role": "user", "content": "hi"}])
-        else:
-            client.chat.completions.create(model=model, max_tokens=1,
-                                           messages=[{"role": "user", "content": "hi"}])
-    except Exception:  # noqa: BLE001 -- the TLS/DNS cost is paid either way
-        pass
+    provider.warm()
 
 
 def start_background_keepalive() -> None:
@@ -99,6 +50,6 @@ def start_background_keepalive() -> None:
         )
         return
     scheduler.schedule(
-        "cloud-warmup", _warm_cloud, delay=1.0, interval=_CLOUD_REFRESH_SECONDS,
+        "cloud-warmup", _warm_cloud, delay=1.0,
         priority=80, timeout=30,
     )

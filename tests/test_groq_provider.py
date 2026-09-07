@@ -88,6 +88,8 @@ def test_error_classification_maps_to_the_right_provider_error(monkeypatch):
     import reyes_agent.provider as P
 
     sdk = P._openai_module()
+    # Classification exercises the SDK exception, independently of local keys.
+    monkeypatch.setattr(P, "_get_groq_client", lambda: object())
 
     class _Resp:
         status_code = 429
