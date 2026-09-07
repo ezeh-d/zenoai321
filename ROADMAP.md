@@ -2024,6 +2024,11 @@ The former 45-second recurring cloud request (approximately 80 idle requests
 per hour) is removed. Explicit Ollama mode retains its local keepalive, with
 a 30-second transport timeout, no SDK retries and guaranteed client closure.
 Provider ordering and Claude's pending wake-prefix local routing are preserved.
+An available fallback is now attempted after the first provider failure,
+eliminating two repeated failed requests and three seconds of backoff before
+that fallback. The final provider keeps bounded retries, and streamed partial
+answers never restart on another provider. Focused fallback/startup/provider
+tests pass 17 with one existing skip in the isolated checkout.
 
 Verification: new tests reproduced both defects before repair. The startup,
 Groq provider and local-command suite passes 23 tests with one existing skip.

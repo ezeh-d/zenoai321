@@ -806,7 +806,8 @@ def run_turn(
     up, while `model_router` computed a perfectly good fallback chain that
     nothing ever read. So one provider outage took ZENO down even with two
     other working API keys configured. Now the chain is walked: each
-    provider gets its retry budget for transient errors, and a provider
+    provider falls through immediately on failure when another candidate
+    exists; the final provider gets its retry budget for transient errors. A provider
     that is genuinely down (bad key, model gone, breaker open) is skipped
     so the next one answers.
 
@@ -830,7 +831,7 @@ def run_turn(
     last_exc: ProviderError | None = None
     emitted = False   # once ANY token reached the caller, switching would duplicate it
 
-    for provider in chain:
+    for provider_index, provider in enumerate(chain):
         runner = _RUNNERS[provider]
         is_production_runner = runner is _PRODUCTION_RUNNERS.get(provider)
         for attempt in range(_MAX_RETRY_ATTEMPTS):
@@ -869,6 +870,12 @@ def run_turn(
                     raise
                 if not exc.retryable:
                     break          # this provider is genuinely down: next one
+                if provider_index + 1 < len(chain):
+                    # Another configured provider is available. Try it now
+                    # rather than adding failed requests and 1s/2s sleeps to
+                    # this interaction. The final provider retains bounded
+                    # retries; partial output above never restarts elsewhere.
+                    break
                 if attempt == _MAX_RETRY_ATTEMPTS - 1:
                     break          # transient budget spent: next one
                 delay = _RETRY_BASE_DELAY_S * (2**attempt)
