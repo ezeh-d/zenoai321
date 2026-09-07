@@ -35,6 +35,8 @@ from typing import Any
 # that genuinely bites: the id is `hermes_comm`, so a plain "hermes" would
 # otherwise miss.
 ALIASES: dict[str, str] = {
+    "hunter": "hunter_x",
+    "hunter x": "hunter_x",
     "hermes": "hermes_comm",
     "hermes comm": "hermes_comm",
     "comms": "hermes_comm",

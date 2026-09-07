@@ -43,6 +43,7 @@ ESSENTIAL = ("enable_tools", "delegate")
 
 # Capability -> the tools it owns. Derived from real registered names.
 CAPABILITIES: dict[str, tuple[str, ...]] = {
+    "hunter_x": ("hunter_x",),
     "conversation": (),
     "charm": ("charm_reply", "charm_analyze", "charm_set_mode",
               "charm_status", "charm_feedback", "charm_coach"),
@@ -243,6 +244,7 @@ _INTENT: tuple[tuple[str, str], ...] = (
      r"(?:attack|scan|test|harden|secure|assess) (?:the |this |my )?"
      r"(?:target|host|server|box|network|ip|domain|web ?app|site|machine|system))\b"),
 
+    ("hunter_x", r"\b(?:hunter[ _-]?x|paper trad(?:e|ing)|backtest|forex|crypto spot|scan (?:the )?markets?)\b"),
     ("council", r"\b(?:council|all (?:my |the )?agents|everyone['’]?s view|"
                 r"ask (?:them|everyone)|executive meeting)\b"),
     ("agents", r"\b(?:who is|what does|who works under|role ?call|your agents?|"

@@ -39,6 +39,7 @@ def _p(pid, title, icon, *, singleton=True, persistent=False, support="live",
 
 
 PANELS: dict[str, dict[str, Any]] = {
+    "hunter_x": _p("hunter_x", "HUNTER X", "◇", kind="hunter_x", support="state"),
     "activity":      _p("activity", "Activity", "◷", persistent=True,
                         kind="activity"),
     "media":         _p("media", "Media", "♫", persistent=True, kind="media"),
@@ -88,6 +89,7 @@ PANELS: dict[str, dict[str, Any]] = {
 
 # --- capability -> panel (fallback when no finer tool rule matches) ----------
 CAPABILITY_PANEL: dict[str, str] = {
+    "hunter_x": "hunter_x",
     "media": "media",
     "browser": "browser", "web": "browser",
     "files": "files", "files_destructive": "files",

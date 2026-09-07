@@ -84,6 +84,10 @@ export class PanelManager {
     const payload = evt.payload || evt.data || {};
     // Ragebait is a transient, owner-consented battle view. It is not a tool
     // panel and must never be restored or poll while idle.
+    if (type === "hunter_x.update") {
+      this.open("hunter_x", { reason: "hunter_x:result", focus: false });
+      return;
+    }
     if (type === "ragebait.battle_started") {
       this.open("ragebait", { reason: "ragebait:battle", focus: true });
       return;

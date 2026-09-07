@@ -449,6 +449,7 @@ AGENT_ROLES: dict[str, str] = {
     "apex": "Gaming Director",
     "atlas": "Mission Control",
     "jarvis": "Systems Integration Director",
+    "hunter_x": "Trading Research and Paper Validation Specialist",
 }
 
 _workers: dict[str, AgentWorker] = {}

@@ -2017,6 +2017,21 @@ pre-existing non-failing eMEM API-rename warning remains.
 
 ---
 
+## HUNTER X — INITIAL RESEARCH/PAPER IMPLEMENTATION (2026-09-07)
+
+Native lazy specialist, existing tool/panel integration, stocks/crypto/forex
+research data, deterministic sizing/risk checks, atomic paper ledger,
+restart-safe idempotency and global stop, cost-aware chronological SMA
+backtests, fixed-parameter walk-forward windows, resampling, research notes
+and foundational arithmetic exam are implemented. Live orders are unavailable.
+Readiness remains UNPROVEN. Initial regression set: 137 passing tests.
+
+Public market observations were retrieved, but repeated live tests encountered
+timeouts/DNS failures and invalid Yahoo forex bars; the forex reference fallback
+is explicitly not an executable quote. Complete results and substantial
+remaining master-prompt work are tracked in `docs/hunter-x-report.md`.
+Do not mark the complete Hunter X master specification DONE.
+
 ## Free-tier startup repair — VERIFIED TARGETED FIX (2026-09-07)
 
 Cloud preload now constructs cached SDK clients once without inference requests.

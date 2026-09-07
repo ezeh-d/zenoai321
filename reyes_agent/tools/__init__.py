@@ -183,6 +183,7 @@ TOOL_GROUPS: dict[str, str] = {
     "add_campaign_actions": "campaigns", "preview_campaign": "campaigns",
     "approve_campaign": "campaigns", "run_campaign": "campaigns",
     "control_campaign": "campaigns", "retry_campaign_failures": "campaigns",
+    "hunter_x": "investing",
     # investing: portfolio_report core
     "set_investment_policy": "investing", "get_investment_policy": "investing",
     "record_holding": "investing", "check_trade_against_policy": "investing",
@@ -835,6 +836,9 @@ def load_plugins() -> list[str]:
         else:
             audit.log("plugin_load_failed", plugin=path.stem, error=message)
     return loaded
+
+
+from reyes_agent.tools import hunter_x_tools  # noqa: E402,F401
 
 
 def ensure_plugins_loaded() -> list[str]:

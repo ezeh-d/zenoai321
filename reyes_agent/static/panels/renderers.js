@@ -345,6 +345,19 @@ export const RENDERERS = {
     },
   },
 
+  hunter_x: {
+    mount(api) {
+      api.setStatus("waiting");
+      api.setBody('<div class="zp-hint">HUNTER X — research and paper simulation. Waiting for an actual result. Live trading is unavailable.</div>');
+    },
+    event(api, evt) {
+      if (evType(evt) !== "hunter_x.update") return;
+      const data = evt.payload || evt.data || {};
+      api.setStatus(data.status === "RUNNING" ? "active" : data.ok === false ? "error" : "complete");
+      api.setBody(`<div class="zp-hint">Research / simulation only · UNPROVEN</div><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(JSON.stringify(data, null, 2))}</pre>`);
+    },
+  },
+
   // --- honest fallback for registered-but-not-yet-rich panels ----------
   generic: {
     mount(api) {

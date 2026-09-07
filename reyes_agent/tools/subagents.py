@@ -25,10 +25,8 @@ tool registry and confirmation gate rather than getting a parallel one. A
 worker's tool set is a SUBSET of its parent's, so dropping a level can
 never reach a capability the parent lacked.
 
-Deliberately excluded: a "stocks"/trading specialist. Wrapping trade
-execution in a sub-agent doesn't change what it is -- see AGENT.md's
-running list of things REYES won't do regardless of how the request is
-framed.
+HUNTER X supplies research and explicit local paper simulations under the
+owner's September specification. It has no real-money execution tool.
 """
 
 from __future__ import annotations
@@ -69,6 +67,19 @@ def _active_specialist() -> str | None:
 ## no recursive/multi-level agents (see module docstring); ATLAS's own
 ## prompt just asks it to answer as terse coordination output, not chat.
 _SPECIALISTS: dict[str, dict] = {
+    "hunter_x": {
+        "description": "HUNTER X -- Stocks, crypto spot and forex research, deterministic risk and paper validation.",
+        "prompt": (
+            "You are HUNTER X, ZENO's trading research specialist. Use hunter_x for actual "
+            "data, calculations, research records and explicit local simulations. "
+            "Start with status. Public historical closes are not executable quotes. "
+            "Never invent prices, balances, training scores, credentials, broker support or profits. "
+            "Explain uncertainty and supporting/contradicting evidence. Accept NO TRADE. "
+            "Never invent a simulation acknowledgment, order ID or price on the owner's behalf. "
+            "Risk vetoes are final. Live orders are unavailable. Report research limitations."
+        ),
+        "tools": {"hunter_x", "get_investment_policy", "portfolio_report", "web_search"},
+    },
     "aris": {
         "description": "ARIS -- Research Intelligence. Digs into the vault, the web, and news to answer questions thoroughly.",
         "prompt": (
