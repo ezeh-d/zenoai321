@@ -47,8 +47,23 @@ function injectStyles() {
   const style = document.createElement("style");
   style.textContent = `
     #orb-simple {
-      position: fixed; top: 50%; left: 50%; width: 220px; height: 220px;
-      transform: translate(-50%, -50%); z-index: 0; pointer-events: none;
+      position: fixed; top: var(--orb-top, 50%); left: var(--orb-left, 50%);
+      width: 220px; height: 220px;
+      transform: translate(-50%, -50%) scale(var(--orb-scale, 1));
+      z-index: 0; pointer-events: none;
+      /* Docking (see setDocked) moves the orb out from behind an open panel
+         with one short, smooth transition rather than a hard teleport. */
+      transition: top .5s cubic-bezier(.3,.7,.3,1), left .5s cubic-bezier(.3,.7,.3,1),
+                  transform .5s cubic-bezier(.3,.7,.3,1);
+    }
+    /* Bottom-left: clear of the panel workspace, which is right-docked
+       (panels.css .zp-workspace: right:14px). */
+    #orb-simple.orb-dock-bl { --orb-top: calc(100% - 132px); --orb-left: 150px; --orb-scale: 0.62; }
+    /* Bottom-right: clear of a maximized panel (panels.css .zp-panel.zp-max:
+       left:3vw width:60vw, i.e. roughly the left two-thirds of the screen). */
+    #orb-simple.orb-dock-br { --orb-top: calc(100% - 132px); --orb-left: calc(100% - 150px); --orb-scale: 0.62; }
+    @media (prefers-reduced-motion: reduce) {
+      #orb-simple { transition: none; }
     }
     #orb-simple .orb-halo {
       position: absolute; inset: -34px; border-radius: 50%;
@@ -465,6 +480,26 @@ export function initOrb(canvas) {
     root.classList.toggle("lite", !!lite);
   }
 
+  // Move out from behind an open panel (master prompt: "ZENO must move out
+  // of the way"). "center" is the default idle position; the panel manager
+  // reports its own state on the "zeno:panels-state" window event (kept
+  // decoupled from panels/manager.js the same way orb state reaches other
+  // modules via visual_events.js -- neither module imports the other).
+  let currentDock = "center";
+  function setDocked(mode) {
+    const next = mode === "bottom-left" || mode === "bottom-right" ? mode : "center";
+    if (next === currentDock) return;
+    currentDock = next;
+    root.classList.remove("orb-dock-bl", "orb-dock-br");
+    if (next === "bottom-left") root.classList.add("orb-dock-bl");
+    else if (next === "bottom-right") root.classList.add("orb-dock-br");
+  }
+  window.addEventListener("zeno:panels-state", (event) => {
+    const detail = (event && event.detail) || {};
+    if (!detail.count) { setDocked("center"); return; }
+    setDocked(detail.hasMaximized ? "bottom-right" : "bottom-left");
+  });
+
   let agentEnergy = 0;
   // Energy now toggles on the ROOT so the static .orb-glow layer changes,
   // not the breathing core -- keeps the glow off the animated element.
@@ -498,6 +533,7 @@ export function initOrb(canvas) {
     pulse,
     setPerformanceMode,
     setActive,
+    setDocked,
     dispatchAgent,
     setAgentWorking,
     getAgentScreenPositions,

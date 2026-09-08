@@ -28,7 +28,7 @@ def test_default_tool_payload_is_actually_compact() -> None:
 
     core = tool_definitions()
     names = {item["name"] for item in core}
-    assert len(core) <= 13  # defense_mode joined the core set; keep this pinned to the real count
+    assert len(core) <= 14  # teaching_board joined the core set; keep this pinned to the real count
     assert len(json.dumps(core)) < 15_000
     assert {"enable_tools", "delegate", "open_app", "web_search", "build_project"} <= names
     assert "defense_mode" in names

@@ -322,7 +322,7 @@ _SPECIALISTS: dict[str, dict] = {
             "prep. Patient, precise, structured. Save study plans/summaries "
             "as notes when it's something the user will want to keep."
         ),
-        "tools": {"write_note", "search_vault_semantic"},
+        "tools": {"write_note", "search_vault_semantic", "teaching_board"},
     },
     "helios": {
         "description": "HELIOS -- Wellbeing Intelligence. Notices overwork/long sessions from real activity data and checks in; journaling support.",

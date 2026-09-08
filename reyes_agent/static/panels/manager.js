@@ -177,6 +177,7 @@ export class PanelManager {
     this._persist();
     this._log("panel.created", { id, type, reason: opts.reason || "manual" });
     if (!opts.mirror) this._broadcast("panel.opened", { type });
+    this._reportPanelState();
     return id;
   }
 
@@ -191,6 +192,7 @@ export class PanelManager {
     this._persist();
     this._log("panel.closed", { id });
     this._broadcast("panel.closed", { type: p.type });
+    this._reportPanelState();
   }
 
   focus(id) {
@@ -206,17 +208,17 @@ export class PanelManager {
   minimize(id) {
     const p = this.panels.get(id); if (!p) return;
     p.el.classList.add("zp-min"); p.el.classList.remove("zp-max");
-    this._syncDockbar(); this._persist();
+    this._syncDockbar(); this._persist(); this._reportPanelState();
   }
   maximize(id) {
     const p = this.panels.get(id); if (!p) return;
     p.el.classList.toggle("zp-max"); p.el.classList.remove("zp-min");
-    this.focus(id); this._persist();
+    this.focus(id); this._persist(); this._reportPanelState();
   }
   restore(id) {
     const p = this.panels.get(id); if (!p) return;
     p.el.classList.remove("zp-min", "zp-max");
-    this._syncDockbar(); this._persist();
+    this._syncDockbar(); this._persist(); this._reportPanelState();
   }
   pin(id) {
     const p = this.panels.get(id); if (!p) return;
@@ -377,6 +379,17 @@ export class PanelManager {
       fail: (e) => mgr._panelError(panel, e),
       open: (type, opts) => mgr.open(type, opts),
     };
+  }
+
+  // Tell ZENO's avatar (orb.js) whether it needs to move out of the way.
+  // Deliberately decoupled -- a plain window event, like the orb's own
+  // outbound visual_events.js bus, so neither module imports the other.
+  // A minimized panel lives only in the dockbar (display:none in the
+  // workspace), so it does not count as "in the way".
+  _reportPanelState() {
+    const visible = [...this.panels.values()].filter((p) => !p.el.classList.contains("zp-min"));
+    const detail = { count: visible.length, hasMaximized: visible.some((p) => p.el.classList.contains("zp-max")) };
+    try { window.dispatchEvent(new CustomEvent("zeno:panels-state", { detail })); } catch (_e) {}
   }
 
   _log(kind, data) {

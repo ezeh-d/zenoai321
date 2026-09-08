@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from reyes_agent.tools.messaging import context as messaging_context
 from reyes_agent.tools.messaging import desktop, intent, models, router
 
 
@@ -141,3 +144,101 @@ class TestRouter:
             platform="slack", destination="general", message="good night"))
         assert result.status == models.CANCELLED
         assert "nothing was sent" in result.say().lower()
+
+
+class TestContextualFollowUp:
+    """"Also tell him I'll meet him later" must resolve to the last verified
+    destination without repeating the name -- but every resolved send still
+    goes through router.send()'s own fresh open/navigate/verify, so a stale
+    guess here can fail to resolve; it can never land on the wrong person."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_context(self):
+        messaging_context.get_context().clear()
+        yield
+        messaging_context.get_context().clear()
+
+    def _sent(self, platform="slack", destination="Ayodeji"):
+        return models.SendResult(status=models.SENT, verified=True,
+                                 platform=platform, destination=destination,
+                                 message="hi")
+
+    def test_bare_reference_with_no_prior_target_asks_instead_of_guessing(self, monkeypatch):
+        from reyes_agent.tools.messaging_tools import send_message
+
+        monkeypatch.setattr(router, "send", lambda *_a, **_k: pytest.fail("must not send"))
+        result = json.loads(send_message("slack", "him", "I'll meet him later"))
+        assert result["status"] == "NEEDS_CLARIFICATION"
+
+    def test_follow_up_resolves_to_the_last_verified_destination(self, monkeypatch):
+        from reyes_agent.tools.messaging_tools import send_message
+
+        calls = []
+
+        def fake_send(request):
+            calls.append(request)
+            return self._sent(platform=request.platform, destination="Ayodeji")
+
+        monkeypatch.setattr(router, "send", fake_send)
+
+        first = json.loads(send_message("slack", "Ayodeji", "I'll be there soon"))
+        assert first["status"] == "SENT"
+        assert calls[0].destination == "Ayodeji"
+
+        second = json.loads(send_message("slack", "him", "I'll meet him later"))
+        assert second["status"] == "SENT"
+        # The resolved (real) name reached the router -- never the literal "him".
+        assert calls[1].destination == "Ayodeji"
+
+    def test_empty_destination_is_treated_as_a_follow_up_reference(self, monkeypatch):
+        from reyes_agent.tools.messaging_tools import send_message
+
+        calls = []
+        monkeypatch.setattr(router, "send", lambda request: (calls.append(request), self._sent())[1])
+        send_message("slack", "Ayodeji", "first message")
+        second = json.loads(send_message("slack", "", "second message"))
+        assert second["status"] == "SENT"
+        assert calls[1].destination == "Ayodeji"
+
+    def test_a_named_destination_never_needs_prior_context(self, monkeypatch):
+        from reyes_agent.tools.messaging_tools import send_message
+
+        monkeypatch.setattr(router, "send", lambda request: self._sent(destination=request.destination))
+        result = json.loads(send_message("slack", "General", "good night"))
+        assert result["status"] == "SENT"
+        assert result["destination"] == "General"
+
+    def test_a_platform_switch_refuses_to_reuse_the_other_platforms_target(self, monkeypatch):
+        from reyes_agent.tools.messaging_tools import send_message
+
+        monkeypatch.setattr(router, "send", lambda request: self._sent(platform=request.platform,
+                                                                       destination="Ayodeji"))
+        send_message("slack", "Ayodeji", "first message")
+        result = json.loads(send_message("whatsapp", "him", "second message"))
+        assert result["status"] == "NEEDS_CLARIFICATION"
+        assert "slack" in result["detail"]
+
+    def test_only_a_verified_sent_result_updates_the_context(self, monkeypatch):
+        """A TYPED-not-sent or failed attempt must not become the new 'him'."""
+        from reyes_agent.tools.messaging_tools import send_message
+
+        monkeypatch.setattr(router, "send", lambda request: models.SendResult(
+            status=models.SEND_UNVERIFIED, platform=request.platform,
+            destination=request.destination))
+        send_message("slack", "Ayodeji", "first message")
+        assert messaging_context.get_context().snapshot()["active"] is False
+
+    def test_type_message_also_resolves_a_follow_up_reference(self, monkeypatch):
+        from reyes_agent.tools.messaging_tools import send_message, type_message
+
+        monkeypatch.setattr(router, "send", lambda request: self._sent(
+            platform=request.platform, destination=request.destination or "Ayodeji"))
+        send_message("slack", "Ayodeji", "first message")
+
+        calls = []
+        monkeypatch.setattr(router, "send", lambda request: (calls.append(request),
+            models.SendResult(status=models.TYPED, verified=True,
+                              platform=request.platform, destination=request.destination))[1])
+        result = json.loads(type_message("slack", "her", "draft for her"))
+        assert result["status"] == "TYPED"
+        assert calls[0].destination == "Ayodeji"

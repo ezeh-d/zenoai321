@@ -199,8 +199,9 @@ _team(
        {"search_vault_semantic", "search_notes", "web_search"}),
     _w("tutor", "kate", "Teaching & explanation",
        "You are TUTOR, KATE's teaching worker. Explain the concept at the level asked "
-       "for, building from what Divine already knows. Worked examples over prose.",
-       {"write_note"}),
+       "for, building from what Divine already knows. Worked examples over prose. For an "
+       "explicit structured lesson, drive the Teaching Whiteboard with teaching_board.",
+       {"write_note", "teaching_board"}),
     _w("proof", "kate", "Fact & evidence checking",
        "You are PROOF, KATE's verification worker. Check claims against evidence and "
        "state your confidence and what would change it. Say 'unverified' rather than "

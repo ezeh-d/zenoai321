@@ -119,6 +119,26 @@
 #zeno-panels .zp-setrow { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid rgba(64,196,255,.08); }
 #zeno-panels .zp-setrow span { opacity: .65; }
 
+/* teaching whiteboard */
+#zeno-panels .zp-teach { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; }
+#zeno-panels .zp-teach-syllabus {
+  flex: 0 0 auto; max-height: 30%; overflow-y: auto; border-bottom: 1px solid rgba(64,196,255,.14);
+  padding-bottom: 6px; font-size: 11px;
+}
+#zeno-panels .zp-teach-item { padding: 2px 0; opacity: .75; }
+#zeno-panels .zp-teach-item.zp-teach-current { opacity: 1; color: #40c4ff; font-weight: 600; }
+#zeno-panels .zp-teach-board { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+#zeno-panels .zp-teach-block { border-left: 2px solid rgba(64,196,255,.3); padding: 4px 0 4px 8px; line-height: 1.45; }
+#zeno-panels .zp-teach-kind { font-size: 9.5px; letter-spacing: .4px; opacity: .55; margin-bottom: 2px; }
+#zeno-panels .zp-teach-block.zp-teach-title { border-left-color: #40c4ff; font-weight: 700; font-size: 13px; }
+#zeno-panels .zp-teach-block.zp-teach-key_point { border-left-color: #ffd166; }
+#zeno-panels .zp-teach-block.zp-teach-question, #zeno-panels .zp-teach-block.zp-teach-quiz { border-left-color: #c792ea; }
+#zeno-panels .zp-teach-block.zp-teach-summary { border-left-color: #39d98a; }
+#zeno-panels .zp-teach-code {
+  white-space: pre-wrap; word-break: break-word; font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px; background: rgba(64,196,255,.06); border-radius: 6px; padding: 6px 8px; margin: 0;
+}
+
 /* dockbar (minimized panels) */
 #zeno-panels .zp-dockbar {
   position: absolute; bottom: 14px; right: 14px; display: none; gap: 8px;

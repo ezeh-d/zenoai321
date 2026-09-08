@@ -840,6 +840,19 @@ def panels_route(tool: str = "", capability: str = "") -> dict[str, Any]:
     return panels.decide(tool=tool or None, capability=capability or None)
 
 
+@app.get("/api/panels/teaching")
+def panels_teaching() -> dict[str, Any]:
+    """Most recent Teaching Whiteboard session, so a (re)opened panel shows
+    real progress immediately instead of an empty board until the next
+    live teaching.* event."""
+    from reyes_agent import teaching
+
+    snapshot = teaching.latest()
+    if snapshot is None:
+        return {"ok": True, "active": False}
+    return {"ok": True, "active": True, **snapshot}
+
+
 @app.get("/api/news")
 def news_feed(topic: str = "", limit: int = 8) -> dict[str, Any]:
     """AI-FREE news retrieval so the News panel works even when every model

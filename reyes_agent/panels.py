@@ -40,6 +40,8 @@ def _p(pid, title, icon, *, singleton=True, persistent=False, support="live",
 
 PANELS: dict[str, dict[str, Any]] = {
     "hunter_x": _p("hunter_x", "HUNTER X", "◇", kind="hunter_x", support="state"),
+    "teaching":      _p("teaching", "Teaching Whiteboard", "▥", kind="teaching",
+                        support="live"),
     "activity":      _p("activity", "Activity", "◷", persistent=True,
                         kind="activity"),
     "media":         _p("media", "Media", "♫", persistent=True, kind="media"),
@@ -127,6 +129,7 @@ TOOL_PANEL: dict[str, str] = {
     "browser_screenshot": "browser", "browser_open": "browser",
     "browser_vision_click": "browser", "web_search": "browser",
     "live_news": "news", "get_news": "news",
+    "teaching_board": "teaching",
     "system_health": "system", "system_status": "system", "set_volume": "system",
     "convene_council": "agents",
 }

@@ -306,7 +306,7 @@ TOOL_GROUPS: dict[str, str] = {
 # the existing ``enable_tools('extended')`` on-demand round.
 CORE_TOOL_NAMES = frozenset({
     "enable_tools", "delegate", "open_app", "web_search", "build_project",
-    "learning_mode", "creator_project", "mastery_mode",
+    "learning_mode", "teaching_board", "creator_project", "mastery_mode",
     "foodie_mode", "phase3_status", "system_health",
     "proactive_control",
     # Defense/presentation mode is a one-word demo command ("defense mode") and

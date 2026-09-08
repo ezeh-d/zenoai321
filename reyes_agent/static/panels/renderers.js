@@ -358,6 +358,52 @@ export const RENDERERS = {
     },
   },
 
+  // --- Teaching Whiteboard: syllabus + live lesson blocks ---------------
+  teaching: {
+    async mount(api) {
+      api.setStatus("waiting");
+      api.setBody(`<div class="zp-teach">
+        <div class="zp-teach-syllabus"><div class="zp-hint">No lesson yet — say "teach me &lt;topic&gt;".</div></div>
+        <div class="zp-teach-board"></div>
+      </div>`);
+      try {
+        const d = await (await fetch("/api/panels/teaching")).json();
+        if (d.ok && d.active) this._render(api, d);
+      } catch (_e) {}
+    },
+    event(api, evt) {
+      const t = evType(evt);
+      if (!t.startsWith("teaching.")) return;
+      this._render(api, evPayload(evt));
+    },
+    _render(api, d) {
+      api.setStatus(d.status === "complete" ? "success" : d.status === "paused" ? "warning" : "active");
+      api.title(`Teaching Whiteboard — ${esc((d.subject || "").toUpperCase())}`);
+      const syllabus = (d.syllabus || []);
+      const done = new Set(d.completed || []);
+      const rows = syllabus.map((title, i) => {
+        const mark = done.has(title) ? "✓" : (i === d.lesson_index && d.status !== "complete") ? "●" : "○";
+        const cur = i === d.lesson_index && d.status !== "complete" ? " zp-teach-current" : "";
+        return `<div class="zp-teach-item${cur}"><span class="zp-mark">${mark}</span> ${i + 1}. ${esc(title)}</div>`;
+      }).join("");
+      const syl = api.body.querySelector(".zp-teach-syllabus");
+      if (syl) syl.innerHTML = rows || `<div class="zp-hint">No syllabus yet.</div>`;
+      const board = api.body.querySelector(".zp-teach-board");
+      if (board) {
+        const blocks = (d.blocks || []).map((b) => this._block(b)).join("");
+        board.innerHTML = blocks || `<div class="zp-hint">Waiting for the next board item.</div>`;
+        board.scrollTop = board.scrollHeight;
+      }
+    },
+    _block(b) {
+      const kind = esc(String(b.kind || "").replace("_", " ").toUpperCase());
+      const body = b.kind === "code" || b.kind === "output"
+        ? `<pre class="zp-teach-code">${esc(b.content)}</pre>`
+        : `<div>${esc(b.content)}</div>`;
+      return `<div class="zp-teach-block zp-teach-${esc(b.kind || "")}"><div class="zp-teach-kind">${kind}</div>${body}</div>`;
+    },
+  },
+
   // --- honest fallback for registered-but-not-yet-rich panels ----------
   generic: {
     mount(api) {

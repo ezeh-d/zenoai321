@@ -474,7 +474,7 @@ def _run_agent_impl(
     except Exception:
         pass
     if decision is not None:
-        from reyes_agent import cognition, creator_mode, design_intelligence, foodie_intelligence, humour, instinct, learning_mode, website_builder
+        from reyes_agent import cognition, creator_mode, design_intelligence, foodie_intelligence, humour, instinct, learning_mode, teaching, website_builder
 
         # Two short per-turn directives, both bounded: how hard to think, and
         # whether there is something genuinely worth pointing out. Kept tight
@@ -505,6 +505,9 @@ def _run_agent_impl(
         learning_nudge = learning_mode.directive(latest)
         if learning_nudge:
             system += "\n" + learning_nudge
+        teaching_nudge = teaching.directive(latest)
+        if teaching_nudge:
+            system += "\n" + teaching_nudge
         creator_nudge = creator_mode.directive(latest)
         if creator_nudge:
             system += "\n" + creator_nudge

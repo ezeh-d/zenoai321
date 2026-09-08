@@ -26,13 +26,21 @@ from reyes_agent.tools.messaging import intent, models, router
                        "focuses the app, navigates to the destination, types "
                        "and sends, then VERIFIES the message appeared. "
                        "Destination can be a channel, group, contact or DM in "
-                       "any language. Returns SENT only after verification."),
+                       "any language -- or a bare follow-up reference such as "
+                       "'him'/'her'/'them' (or omitted) to mean 'the person I "
+                       "was just messaging on this platform'; that still "
+                       "opens, navigates to, and verifies the resolved name "
+                       "fresh, so it never sends to the wrong chat. Returns "
+                       "SENT only after verification."),
           input_schema={"type": "object", "properties": {
               "platform": {"type": "string",
                            "enum": list(models.PLATFORMS)},
               "destination": {"type": "string",
                               "description": "Channel, group or person name, "
-                                             "exactly as the owner said it."},
+                                             "exactly as the owner said it -- "
+                                             "or 'him'/'her'/'them' for a "
+                                             "follow-up to the last person "
+                                             "messaged on this platform."},
               "message": {"type": "string"},
               "destination_type": {"type": "string",
                                    "enum": [models.CHANNEL, models.GROUP,
@@ -42,10 +50,22 @@ from reyes_agent.tools.messaging import intent, models, router
               "required": ["platform", "destination", "message"]})
 def send_message(platform: str, destination: str, message: str,
                  destination_type: str = "", account: str = "") -> str:
+    from reyes_agent.tools.messaging.context import get_context
+
+    ctx = get_context()
+    resolution = ctx.resolve(platform, destination)
+    if not resolution.ok:
+        return json.dumps({"status": "NEEDS_CLARIFICATION", "detail": resolution.reason,
+                           "spoken": f"Who do you mean? {resolution.reason}."}, default=str)
+    resolved_type = destination_type or resolution.destination_type
     result = router.send(models.SendRequest(
-        platform=(platform or "").strip().lower(), destination=destination,
-        message=message, destination_type=destination_type, account=account,
+        platform=(platform or "").strip().lower(), destination=resolution.destination,
+        message=message, destination_type=resolved_type, account=account,
         send=True))
+    if result.status == models.SENT:
+        # Record only a VERIFIED destination -- never a guess, and never one
+        # that only got as far as TYPED/SEND_UNVERIFIED/failed.
+        ctx.record(result.platform, result.destination, resolved_type)
     return json.dumps(result.as_dict(), default=str)
 
 
@@ -61,9 +81,16 @@ def send_message(platform: str, destination: str, message: str,
               "required": ["platform", "destination", "message"]})
 def type_message(platform: str, destination: str, message: str,
                  destination_type: str = "") -> str:
+    from reyes_agent.tools.messaging.context import get_context
+
+    resolution = get_context().resolve(platform, destination)
+    if not resolution.ok:
+        return json.dumps({"status": "NEEDS_CLARIFICATION", "detail": resolution.reason,
+                           "spoken": f"Who do you mean? {resolution.reason}."}, default=str)
     result = router.send(models.SendRequest(
-        platform=(platform or "").strip().lower(), destination=destination,
-        message=message, destination_type=destination_type, send=False))
+        platform=(platform or "").strip().lower(), destination=resolution.destination,
+        message=message, destination_type=destination_type or resolution.destination_type,
+        send=False))
     return json.dumps(result.as_dict(), default=str)
 
 
@@ -87,4 +114,8 @@ def plan_message_request(request: str, default_platform: str = "") -> str:
                        "computer, and whether each is running."),
           input_schema={"type": "object", "properties": {}})
 def messaging_status() -> str:
-    return json.dumps(router.status(), default=str)
+    from reyes_agent.tools.messaging.context import get_context
+
+    status = router.status()
+    status["last_destination"] = get_context().snapshot()
+    return json.dumps(status, default=str)

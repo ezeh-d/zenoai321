@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from reyes_agent.teaching import BLOCK_KINDS
 from reyes_agent.tools import register
 
 
@@ -43,6 +44,56 @@ def learning_mode(action: str, subject: str, level: str = "", goal: str = "", co
     if op in {"continue", "status", "progress", "map"}:
         return learning.format_path(current)
     return "Unknown learning action. Use start, continue, progress, map, or status."
+
+
+@register(
+    name="teaching_board",
+    description=(
+        "Drive the Teaching Whiteboard for an explicit, structured lesson (use for 'teach me X', a course, or a lecture -- "
+        "not a one-line explanation, which stays a normal reply). start opens a real syllabus you author for the topic; "
+        "push_block adds one visible board item (title/explanation/diagram/code/output/example/key_point/question/quiz/"
+        "exercise/answer/summary/progress) as you teach; complete_lesson checkpoints the current lesson and advances; "
+        "status shows exactly what is already covered so a later turn can resume without repeating or claiming false "
+        "completion; pause/resume mark an interruption. Progress persists locally across turns."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["start", "push_block", "complete_lesson", "status", "pause", "resume"]},
+            "subject": {"type": "string", "description": "The lesson topic, e.g. Python, Thermodynamics, UI UX."},
+            "syllabus": {"type": "array", "items": {"type": "string"},
+                        "description": "Ordered lesson titles for this topic. Required for action=start."},
+            "kind": {"type": "string", "enum": list(BLOCK_KINDS),
+                     "description": "Required for action=push_block."},
+            "content": {"type": "string", "description": "Required for action=push_block."},
+        },
+        "required": ["action", "subject"],
+    },
+    light=True,
+)
+def teaching_board(action: str, subject: str, syllabus: list[str] | None = None,
+                   kind: str = "", content: str = "") -> str:
+    from reyes_agent import teaching
+
+    op = str(action or "").strip().lower()
+    if op == "start":
+        return teaching.format_status(teaching.start(subject, syllabus or []))
+    if op == "push_block":
+        if not content.strip():
+            return "content is required for push_block."
+        snapshot = teaching.push_block(subject, kind, content)
+        return teaching.format_status(snapshot) if snapshot else (
+            "No active teaching session for that subject. Call action='start' with a syllabus first.")
+    if op == "complete_lesson":
+        snapshot = teaching.complete_lesson(subject)
+        return teaching.format_status(snapshot) if snapshot else (
+            "No active teaching session for that subject.")
+    if op in {"status", "pause", "resume"}:
+        snapshot = {"pause": teaching.pause, "resume": teaching.resume,
+                   "status": teaching.status}[op](subject)
+        return teaching.format_status(snapshot) if snapshot else (
+            "No active teaching session for that subject. Call action='start' with a syllabus first.")
+    return "Unknown teaching action. Use start, push_block, complete_lesson, status, pause, or resume."
 
 
 @register(
