@@ -135,6 +135,52 @@ def is_open() -> bool:
         return _context is not None
 
 
+def list_pages() -> list[dict[str, Any]]:
+    """Real, current tabs in ZENO's OWN automated browser -- not the owner's
+    separately-launched personal Chrome, which this process cannot see.
+    Empty (never stale) if no browser session is running."""
+    with _lock:
+        context = _context
+    if context is None:
+        return []
+    try:
+        pages = list(context.pages)
+    except Exception:  # noqa: BLE001
+        return []
+    active = pages[-1] if pages else None
+    out: list[dict[str, Any]] = []
+    for index, page in enumerate(pages):
+        try:
+            title = page.title()
+        except Exception:  # noqa: BLE001
+            title = ""
+        try:
+            url = page.url
+        except Exception:  # noqa: BLE001
+            url = ""
+        out.append({"index": index, "title": title, "url": url, "active": page is active})
+    return out
+
+
+def close_page(index: int) -> tuple[bool, str]:
+    """Close one real tab by its CURRENT index (from list_pages)."""
+    with _lock:
+        context = _context
+    if context is None:
+        return False, "no browser session is running"
+    try:
+        pages = list(context.pages)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+    if index < 0 or index >= len(pages):
+        return False, f"no tab at index {index} ({len(pages)} open)"
+    try:
+        pages[index].close()
+        return True, "closed"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+
+
 def invalidate_if_unhealthy(error: Exception | str) -> bool:
     """Discard a crashed Playwright context so the next request recreates it."""
     text = str(error).lower()

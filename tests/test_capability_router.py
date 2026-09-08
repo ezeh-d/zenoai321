@@ -28,7 +28,10 @@ class TestBudgetsHold:
         ("How are you doing today?", 3),
         ("What time is it?", 14),
         ("Open Chrome", 16),
-        ("Search YouTube for football highlights", 16),
+        # browser_tabs/browser_close_tab joined the browser capability (tab
+        # awareness -- "is that tab still open", "close that tab"); keep
+        # this pinned to the real, deliberately-grown count.
+        ("Search YouTube for football highlights", 18),
         ("Remember that my test colour is blue", 18),
         ("Look at my screen", 12),
         ("Fix this Python traceback", 16),

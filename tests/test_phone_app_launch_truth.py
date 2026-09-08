@@ -140,9 +140,38 @@ def test_explorer_launch_can_be_verified_without_permitting_explorer_close(monke
 
 
 def test_open_app_reports_failed_when_windows_postcondition_is_missing(monkeypatch) -> None:
+    # Isolated from whatever windows genuinely happen to be open on the
+    # machine running this test -- open_app now checks for an already-open
+    # match FIRST (dedup, see test_open_app_focuses_an_already_open_window),
+    # and this test is specifically about the no-match launch-failure path.
+    monkeypatch.setattr(system, "_find_existing_window", lambda _name: None)
     monkeypatch.setattr(system.os, "startfile", lambda _target: None)
     monkeypatch.setattr(system, "_verify_app_open", lambda *_args, **_kwargs: "")
 
     result = system.open_app("notepad")
     assert result.startswith("Failed:")
     assert "visible Windows window" in result
+
+
+def test_open_app_focuses_an_already_open_window_instead_of_launching_again(monkeypatch) -> None:
+    """spec: 'open Chrome' when Chrome is already running focuses it rather
+    than blindly opening a duplicate instance."""
+    process = SimpleNamespace(info={"pid": 808, "name": "chrome.exe"})
+    monkeypatch.setattr(system.psutil, "process_iter", lambda _attrs: [process])
+    monkeypatch.setattr(system, "_visible_windows", lambda: [(12345, 808, "GitHub - Google Chrome")])
+    started = {"called": False}
+    monkeypatch.setattr(system.os, "startfile", lambda *_a, **_k: started.__setitem__("called", True))
+
+    from reyes_agent.computer import window as computer_window
+    monkeypatch.setattr(computer_window, "activate", lambda _hwnd: (True, "brought to the front"))
+
+    result = system.open_app("chrome")
+    assert "already open" in result
+    assert "brought it to the front" in result
+    assert started["called"] is False  # never launched a second instance
+
+
+def test_find_existing_window_returns_none_with_no_match(monkeypatch) -> None:
+    monkeypatch.setattr(system.psutil, "process_iter", lambda _attrs: [])
+    monkeypatch.setattr(system, "_visible_windows", lambda: [(1, 1, "Some Other Window")])
+    assert system._find_existing_window("chrome") is None

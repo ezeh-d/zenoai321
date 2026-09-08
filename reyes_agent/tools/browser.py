@@ -209,6 +209,75 @@ def browser_screenshot(full_page: bool = False) -> str:
     return _run("browser_screenshot", action, timeout=35.0)
 
 
+@register(name="browser_tabs",
+          description=("List the real tabs currently open in ZENO's OWN automated browser (title, URL, which one is "
+                       "active) -- use this to answer 'is the X tab still open' or 'what tabs are open' honestly from "
+                       "live state rather than assuming. This does NOT see the owner's separately-launched personal "
+                       "Chrome/Edge -- only the persistent browser ZENO itself drives. Empty list if no session is "
+                       "running (never a remembered/stale answer)."),
+          input_schema={"type": "object", "properties": {}})
+def browser_tabs() -> str:
+    import json
+
+    def action() -> str:
+        tabs = bc.list_pages()
+        return json.dumps({"open": bool(tabs), "count": len(tabs), "tabs": tabs}, default=str)
+    return _run("browser_tabs", action, timeout=15.0)
+
+
+class _TabAmbiguous(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def resolve_tab_reference(tabs: list[dict], reference: str) -> dict:
+    """Pure resolution logic, kept separate from the threaded browser-runtime
+    call so it is directly unit-testable without Playwright. Never guesses:
+    raises _TabAmbiguous (a plain, honest message) rather than picking a tab
+    on a no-match or multi-match reference."""
+    if not tabs:
+        raise _TabAmbiguous("No browser session is running -- there is nothing to close.")
+    text = str(reference or "").strip()
+    if text.isdigit():
+        index = int(text)
+        match = next((t for t in tabs if t["index"] == index), None)
+        if match is None:
+            raise _TabAmbiguous(f"No tab at index {index} ({len(tabs)} open).")
+        return match
+    if text.casefold() in {"current", "active", "this one", "this tab", ""}:
+        return next((t for t in tabs if t["active"]), tabs[-1])
+    needle = text.casefold()
+    candidates = [t for t in tabs if needle in t["title"].casefold() or needle in t["url"].casefold()]
+    if not candidates:
+        raise _TabAmbiguous(f"No open tab matches '{reference}'. Open tabs: " +
+                            ", ".join(t["title"] or t["url"] for t in tabs))
+    if len(candidates) > 1:
+        raise _TabAmbiguous(f"'{reference}' matches more than one open tab: " +
+                            ", ".join(t["title"] or t["url"] for t in candidates) + ". Which one?")
+    return candidates[0]
+
+
+@register(name="browser_close_tab",
+          description=("Close one tab in ZENO's browser by its index from browser_tabs, or by a case-insensitive "
+                       "substring of its title/URL. Use 'current'/'active'/'this one' for the active tab. Refuses "
+                       "(rather than guessing) if the reference matches more than one tab or none."),
+          input_schema={"type": "object", "properties": {
+              "reference": {"type": "string", "description": "A tab index (e.g. '1'), 'current', or a title/URL substring."},
+          }, "required": ["reference"]})
+def browser_close_tab(reference: str) -> str:
+    def action() -> str:
+        try:
+            match = resolve_tab_reference(bc.list_pages(), reference)
+        except _TabAmbiguous as exc:
+            return exc.message
+        ok, detail = bc.close_page(match["index"])
+        if not ok:
+            return f"Could not close {match['title'] or match['url']!r}: {detail}"
+        return f"Closed {match['title'] or match['url']!r}; postcondition verified: {detail}."
+    return _run("browser_close_tab", action, timeout=15.0)
+
+
 @register(name="browser_vision_click", description="Find a reference image on the current page and click it.",
           input_schema={"type": "object", "properties": {"template_path": {"type": "string"}, "threshold": {"type": "number"}}, "required": ["template_path"]})
 def browser_vision_click(template_path: str, threshold: float = 0.75) -> str:

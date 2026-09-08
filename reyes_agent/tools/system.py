@@ -130,6 +130,41 @@ def _verify_app_open(expected: str, before_pids: set[int], *, timeout_s: float =
     return ""
 
 
+def _find_existing_window(name: str) -> tuple[int, str] | None:
+    """A visible window for an app that is ALREADY open, using the same
+    process/title matching evidence _verify_app_open uses for post-launch
+    verification -- so 'open Chrome' focuses the existing browser instead of
+    quietly starting a second one (spec: don't duplicate what's already
+    open). Only ever used to CHOOSE whether to launch; never closes or
+    changes anything by itself."""
+    target = Path(str(name)).stem.casefold().replace(".exe", "").strip()
+    compact = "".join(ch for ch in target if ch.isalnum())
+    if not compact:
+        return None
+    known_processes = {
+        proc.casefold()
+        for alias, names in _OPEN_APP_PROCESSES.items()
+        if alias == target
+        for proc in names
+    }
+    processes: dict[int, str] = {}
+    for process in psutil.process_iter(["pid", "name"]):
+        try:
+            processes[int(process.info["pid"])] = str(process.info.get("name") or "")
+        except (psutil.Error, OSError, ValueError):
+            continue
+    for hwnd, pid, title in _visible_windows():
+        title_compact = "".join(ch for ch in title.casefold() if ch.isalnum())
+        process_name = processes.get(pid, "")
+        process_compact = "".join(ch for ch in Path(process_name).stem.casefold() if ch.isalnum())
+        exact_known_process = process_name.casefold() in known_processes
+        title_matches = len(compact) >= 4 and compact in title_compact
+        process_matches = process_compact == compact or (len(compact) >= 5 and compact in process_compact)
+        if exact_known_process or title_matches or process_matches:
+            return hwnd, title
+    return None
+
+
 def _matching_close_windows(process_names: frozenset[str]) -> list[tuple[int, int, str]]:
     """Visible top-level windows owned by an exact allow-listed process.
 
@@ -308,10 +343,12 @@ def _resolve_start_app(name: str) -> tuple[str, str] | None:
     name="open_app",
     description=(
         "Launch an application by name (e.g. 'notepad', 'chrome', "
-        "'whatsapp', 'spotify') or full path. Resolves Store/UWP apps via "
-        "the Start Menu too, so it isn't limited to classic .exe programs. "
-        "ONLY use when the user explicitly asks to open/launch/start that "
-        "app -- never as a side effect of answering an unrelated question."
+        "'whatsapp', 'spotify') or full path. If a matching window is "
+        "already open, brings IT to the front instead of starting a second "
+        "instance. Resolves Store/UWP apps via the Start Menu too, so it "
+        "isn't limited to classic .exe programs. ONLY use when the user "
+        "explicitly asks to open/launch/start that app -- never as a side "
+        "effect of answering an unrelated question."
     ),
     input_schema={
         "type": "object",
@@ -326,6 +363,21 @@ def _resolve_start_app(name: str) -> tuple[str, str] | None:
     light=True,
 )
 def open_app(name_or_path: str) -> str:
+    # Reuse over duplicate: a window that already matches this app is
+    # brought forward rather than starting a second instance (spec: "open
+    # Chrome" when Chrome is already running focuses it, it doesn't launch
+    # another one). Never destructive -- worst case is a wrong focus, never
+    # a lost/closed window.
+    existing = _find_existing_window(name_or_path)
+    if existing is not None:
+        hwnd, title = existing
+        from reyes_agent.computer import window as _window
+
+        ok, detail = _window.activate(hwnd)
+        if ok:
+            return f"'{title}' was already open; brought it to the front ({detail})."
+        return f"'{title}' is already open, but I could not bring it to the front: {detail}"
+
     before_pids = {process.pid for process in psutil.process_iter(["pid"])}
     # Direct launch first -- fastest for classic apps and full paths.
     try:
