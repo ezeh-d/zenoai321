@@ -130,6 +130,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                 "list_project_files", "website_restore_checkpoint"),
     "creative": ("creator_project", "design_capabilities", "create_animation",
                  "animate_files", "generate_image", "learning_mode", "teaching_board",
+                 "write_lesson_to_notepad",
                  "find_where_to_sell", "draft_listing",
                  "mastery_mode", "foodie_mode"),
     "missions": ("create_mission", "list_missions", "simulate_mission",

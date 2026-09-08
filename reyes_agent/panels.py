@@ -129,7 +129,7 @@ TOOL_PANEL: dict[str, str] = {
     "browser_screenshot": "browser", "browser_open": "browser",
     "browser_vision_click": "browser", "web_search": "browser",
     "live_news": "news", "get_news": "news",
-    "teaching_board": "teaching",
+    "teaching_board": "teaching", "write_lesson_to_notepad": "teaching",
     "system_health": "system", "system_status": "system", "set_volume": "system",
     "convene_council": "agents",
 }

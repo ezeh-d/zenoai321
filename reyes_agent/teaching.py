@@ -61,9 +61,18 @@ def _connection():
                 completed_json TEXT NOT NULL DEFAULT '[]',
                 blocks_json TEXT NOT NULL DEFAULT '[]',
                 status TEXT NOT NULL DEFAULT 'active',
+                target TEXT NOT NULL DEFAULT '',
+                notepad_written INTEGER NOT NULL DEFAULT 0,
                 updated_at REAL NOT NULL
             )"""
         )
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(teaching_sessions)")}
+        # Additive migration for a session table created before target/
+        # notepad_written existed -- never drops or renames a column.
+        if "target" not in existing:
+            conn.execute("ALTER TABLE teaching_sessions ADD COLUMN target TEXT NOT NULL DEFAULT ''")
+        if "notepad_written" not in existing:
+            conn.execute("ALTER TABLE teaching_sessions ADD COLUMN notepad_written INTEGER NOT NULL DEFAULT 0")
         yield conn
         conn.commit()
     finally:
@@ -91,15 +100,17 @@ def _row_to_snapshot(row: tuple) -> dict[str, Any]:
     return {
         "subject": row[0], "syllabus": syllabus, "lesson_index": index,
         "lesson_title": syllabus[index] if index < len(syllabus) else "",
-        "completed": completed, "blocks": blocks, "status": row[5], "updated_at": row[6],
+        "completed": completed, "blocks": blocks, "status": row[5],
+        "target": row[7] or "", "notepad_written": int(row[8] or 0),
+        "updated_at": row[6],
     }
 
 
 def _row(subject: str) -> dict[str, Any] | None:
     with _lock, _connection() as conn:
         row = conn.execute(
-            "SELECT subject, syllabus_json, lesson_index, completed_json, blocks_json, status, updated_at "
-            "FROM teaching_sessions WHERE subject = ?", (subject,)
+            "SELECT subject, syllabus_json, lesson_index, completed_json, blocks_json, status, updated_at, "
+            "target, notepad_written FROM teaching_sessions WHERE subject = ?", (subject,)
         ).fetchone()
     return _row_to_snapshot(row) if row is not None else None
 
@@ -107,34 +118,42 @@ def _row(subject: str) -> dict[str, Any] | None:
 def _save(snapshot: dict[str, Any]) -> None:
     with _lock, _connection() as conn:
         conn.execute(
-            """INSERT INTO teaching_sessions(subject, syllabus_json, lesson_index, completed_json, blocks_json, status, updated_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO teaching_sessions(subject, syllabus_json, lesson_index, completed_json, blocks_json, status,
+                   target, notepad_written, updated_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(subject) DO UPDATE SET syllabus_json=excluded.syllabus_json,
                    lesson_index=excluded.lesson_index, completed_json=excluded.completed_json,
-                   blocks_json=excluded.blocks_json, status=excluded.status, updated_at=excluded.updated_at""",
+                   blocks_json=excluded.blocks_json, status=excluded.status, target=excluded.target,
+                   notepad_written=excluded.notepad_written, updated_at=excluded.updated_at""",
             (snapshot["subject"], json.dumps(snapshot["syllabus"]), snapshot["lesson_index"],
              json.dumps(snapshot["completed"]), json.dumps(snapshot["blocks"]),
-             snapshot["status"], snapshot["updated_at"]),
+             snapshot["status"], snapshot.get("target", ""), snapshot.get("notepad_written", 0),
+             snapshot["updated_at"]),
         )
 
 
-def start(subject: object, syllabus: list[object]) -> dict[str, Any]:
+def start(subject: object, syllabus: list[object], *, target: object = "") -> dict[str, Any]:
     """Begin (or explicitly restart) a structured lesson for one subject.
 
     `syllabus` is authored by the calling model turn for THIS topic -- there
     is no hardcoded course table to fall back on, so it must be real and
     sized to the topic (a five-topic Python overview and a thirty-lesson deep
     dive are both valid; padding or truncating to fit one screen is not).
+
+    `target` is "" for the whiteboard only, or "notepad" when the owner
+    explicitly asked to teach INTO Notepad -- see write_lesson_to_notepad.
     """
     key = subject_key(subject)
     clean_syllabus = [_clean(item, limit=_MAX_TITLE) for item in (syllabus or [])]
     clean_syllabus = [item for item in clean_syllabus if item][:_MAX_SYLLABUS]
     if not clean_syllabus:
         clean_syllabus = ["Overview"]
+    target_value = "notepad" if str(target or "").strip().casefold() == "notepad" else ""
     snapshot = {
         "subject": key, "syllabus": clean_syllabus, "lesson_index": 0,
         "lesson_title": clean_syllabus[0], "completed": [], "blocks": [],
-        "status": "active", "updated_at": time.time(),
+        "status": "active", "target": target_value, "notepad_written": 0,
+        "updated_at": time.time(),
     }
     _save(snapshot)
     _publish("teaching.started", snapshot)
@@ -180,11 +199,30 @@ def complete_lesson(subject: object) -> dict[str, Any] | None:
         event = "teaching.session_completed"
     else:
         snapshot["blocks"] = []
+        # A new lesson starts a fresh board, so "already written to Notepad"
+        # resets with it -- notepad_written always counts against the blocks
+        # of the CURRENT lesson, never a stale count from the previous one.
+        snapshot["notepad_written"] = 0
         snapshot["status"] = "active"
         event = "teaching.lesson_completed"
     snapshot["updated_at"] = time.time()
     _save(snapshot)
     _publish(event, snapshot)
+    return snapshot
+
+
+def set_notepad_written(subject: object, count: int) -> dict[str, Any] | None:
+    """Record how many of the CURRENT lesson's blocks have actually been
+    typed into Notepad. Called only by write_lesson_to_notepad after each
+    verified type_text call -- never speculatively, so a failed or partial
+    write is never counted as done."""
+    key = subject_key(subject)
+    snapshot = _row(key)
+    if snapshot is None:
+        return None
+    snapshot["notepad_written"] = max(0, min(int(count), len(snapshot["blocks"])))
+    snapshot["updated_at"] = time.time()
+    _save(snapshot)
     return snapshot
 
 
@@ -217,8 +255,8 @@ def latest() -> dict[str, Any] | None:
     instead of an empty board while waiting for the next live event."""
     with _lock, _connection() as conn:
         row = conn.execute(
-            "SELECT subject, syllabus_json, lesson_index, completed_json, blocks_json, status, updated_at "
-            "FROM teaching_sessions ORDER BY updated_at DESC LIMIT 1"
+            "SELECT subject, syllabus_json, lesson_index, completed_json, blocks_json, status, updated_at, "
+            "target, notepad_written FROM teaching_sessions ORDER BY updated_at DESC LIMIT 1"
         ).fetchone()
     return _row_to_snapshot(row) if row is not None else None
 
@@ -236,17 +274,25 @@ def format_status(snapshot: dict[str, Any]) -> str:
                      f"({len(snapshot['blocks'])} block(s) on the board so far)")
     else:
         lines.append("All lessons complete.")
+    if snapshot.get("target") == "notepad":
+        pending = len(snapshot["blocks"]) - snapshot.get("notepad_written", 0)
+        lines.append(f"Notepad: {snapshot.get('notepad_written', 0)} block(s) written, "
+                     f"{max(0, pending)} pending -- call write_lesson_to_notepad to flush them.")
     return "\n".join(lines)
+
+
+_NOTEPAD_HINT = re.compile(r"\bnotepad\b", re.I)
 
 
 def directive(message: str) -> str:
     """Bounded prompt aid appended to the existing agent turn -- never a new
     model call. Fixes the "stops after one screen" failure mode by making
     checkpoint-and-resume the default shape of an explicit lesson request."""
-    text = _clean(message).casefold()
-    if not re.search(r"\b(teach|lesson|lecture|course|syllabus|whiteboard)\b", text):
+    text = _clean(message)
+    lowered = text.casefold()
+    if not re.search(r"\b(teach|lesson|lecture|course|syllabus|whiteboard)\b", lowered):
         return ""
-    return (
+    base = (
         "[Teaching Whiteboard: this is an explicit lesson request. If this subject has no active session yet, call "
         "teaching_board(action='start', subject=<topic>, syllabus=[...]) with a real ordered list of lesson titles you "
         "construct for THIS topic -- as many as the topic genuinely needs, never padded or truncated to fit one reply. "
@@ -257,8 +303,17 @@ def directive(message: str) -> str:
         "reply at the close of one lesson and wait rather than dumping the whole course in a single turn. If this is a "
         "continuation (a new turn on a subject already started, or the user says continue/keep going), call "
         "teaching_board(action='status', subject=<topic>) FIRST to see exactly what is already covered before teaching "
-        "the next lesson -- never repeat a completed lesson, and never say the course is finished while lessons remain.]"
+        "the next lesson -- never repeat a completed lesson, and never say the course is finished while lessons remain."
     )
+    if _NOTEPAD_HINT.search(text):
+        base += (
+            " The owner asked for this IN NOTEPAD, so also pass target='notepad' to the start call, and after pushing "
+            "each lesson's blocks call write_lesson_to_notepad(subject=<topic>) to actually type them in -- it appends "
+            "only the blocks not yet written, verifies each one, and stops (reporting exactly how far it got) rather "
+            "than guessing, if Notepad loses focus or a block fails to type. Never say the writing is complete while "
+            "write_lesson_to_notepad reports pending blocks."
+        )
+    return base + "]"
 
 
 def _publish(event_type: str, payload: dict[str, Any]) -> None:

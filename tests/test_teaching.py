@@ -193,6 +193,177 @@ def test_teaching_panel_is_routed_and_registered() -> None:
     assert panels.PANELS["teaching"]["support"] == "live"
 
 
+def test_notepad_target_and_progress_persist_and_reset_on_lesson_advance() -> None:
+    from reyes_agent import teaching
+
+    restore = _isolated_vault()
+    try:
+        started = teaching.start("Python", ["Variables", "Loops"], target="notepad")
+        assert started["target"] == "notepad"
+        assert started["notepad_written"] == 0
+
+        teaching.push_block("Python", "title", "Variables")
+        teaching.push_block("Python", "explanation", "A variable stores a value.")
+        after_write = teaching.set_notepad_written("Python", 1)
+        assert after_write["notepad_written"] == 1
+        rendered = teaching.format_status(after_write)
+        assert "Notepad: 1 block(s) written, 1 pending" in rendered
+
+        # Advancing the lesson clears the board AND the notepad progress --
+        # a stale count from lesson 1 must never carry into lesson 2.
+        after_lesson = teaching.complete_lesson("Python")
+        assert after_lesson["notepad_written"] == 0
+        assert after_lesson["blocks"] == []
+    finally:
+        restore()
+
+
+def test_non_notepad_session_has_no_notepad_target() -> None:
+    from reyes_agent import teaching
+
+    restore = _isolated_vault()
+    try:
+        started = teaching.start("History", ["Ancient Rome"])
+        assert started["target"] == ""
+        rendered = teaching.format_status(started)
+        assert "Notepad:" not in rendered
+    finally:
+        restore()
+
+
+def test_teaching_directive_mentions_notepad_only_when_asked() -> None:
+    from reyes_agent import teaching
+
+    with_notepad = teaching.directive("Teach me Python in Notepad.")
+    assert "write_lesson_to_notepad" in with_notepad
+    assert "target='notepad'" in with_notepad
+
+    without_notepad = teaching.directive("Teach me Python.")
+    assert "write_lesson_to_notepad" not in without_notepad
+    assert "notepad" not in without_notepad.casefold()
+
+
+def test_write_lesson_to_notepad_requires_a_notepad_targeted_session() -> None:
+    from reyes_agent.tools.teaching_notepad import write_lesson_to_notepad
+
+    restore = _isolated_vault()
+    try:
+        assert "No active teaching session" in write_lesson_to_notepad("Nothing Started")
+        from reyes_agent import teaching
+        teaching.start("Chemistry", ["Atoms"])  # no target='notepad'
+        result = write_lesson_to_notepad("Chemistry")
+        assert "wasn't started for Notepad" in result
+    finally:
+        restore()
+
+
+def test_write_lesson_to_notepad_writes_only_pending_blocks_once(monkeypatch) -> None:
+    from reyes_agent import teaching
+    from reyes_agent.computer import window
+    from reyes_agent.tools import hands_tools
+    from reyes_agent.tools.teaching_notepad import write_lesson_to_notepad
+
+    restore = _isolated_vault()
+    try:
+        teaching.start("Python", ["Variables"], target="notepad")
+        teaching.push_block("Python", "title", "Variables")
+        teaching.push_block("Python", "code", "x = 10")
+
+        monkeypatch.setattr(window, "find_by_title", lambda _title: [(123, "Untitled - Notepad")])
+        monkeypatch.setattr(window, "is_foreground", lambda _handle: True)
+        typed = []
+        monkeypatch.setattr(hands_tools, "type_text",
+                            lambda text: (typed.append(text), '{"ok": true}')[1])
+        monkeypatch.setattr(hands_tools, "press_keys", lambda _keys: '{"ok": true}')
+
+        result = write_lesson_to_notepad("Python")
+        assert "Wrote 2 new block(s)" in result
+        assert len(typed) == 2
+        assert "Variables" in typed[0] and "x = 10" in typed[1]
+
+        # Calling again with nothing new pushed must NOT retype anything.
+        typed.clear()
+        again = write_lesson_to_notepad("Python")
+        assert "Nothing new to write" in again
+        assert typed == []
+    finally:
+        restore()
+
+
+def test_write_lesson_to_notepad_stops_and_checkpoints_on_a_failed_type(monkeypatch) -> None:
+    from reyes_agent import teaching
+    from reyes_agent.computer import window
+    from reyes_agent.tools import hands_tools
+    from reyes_agent.tools.teaching_notepad import write_lesson_to_notepad
+
+    restore = _isolated_vault()
+    try:
+        teaching.start("Python", ["Variables"], target="notepad")
+        teaching.push_block("Python", "title", "Variables")
+        teaching.push_block("Python", "explanation", "A variable stores a value.")
+        teaching.push_block("Python", "code", "x = 10")
+
+        monkeypatch.setattr(window, "find_by_title", lambda _title: [(123, "Untitled - Notepad")])
+        monkeypatch.setattr(window, "is_foreground", lambda _handle: True)
+        monkeypatch.setattr(hands_tools, "press_keys", lambda _keys: '{"ok": true}')
+
+        calls = {"n": 0}
+
+        def flaky_type(_text):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return '{"ok": false, "detail": "focus moved to another window"}'
+            return '{"ok": true}'
+
+        monkeypatch.setattr(hands_tools, "type_text", flaky_type)
+
+        result = write_lesson_to_notepad("Python")
+        assert "Stopped after writing 1 new block(s)" in result
+        assert "focus moved" in result
+
+        snapshot = teaching.status("Python")
+        assert snapshot["notepad_written"] == 1  # the failed 2nd block was never counted
+
+        # A retry only sends the still-pending blocks (2 and 3), never block 1 again.
+        calls["n"] = 0
+        monkeypatch.setattr(hands_tools, "type_text", lambda _text: '{"ok": true}')
+        retried = write_lesson_to_notepad("Python")
+        assert "Wrote 2 new block(s)" in retried
+        assert teaching.status("Python")["notepad_written"] == 3
+    finally:
+        restore()
+
+
+def test_write_lesson_to_notepad_reports_when_notepad_cannot_be_focused(monkeypatch) -> None:
+    from reyes_agent import teaching
+    from reyes_agent.computer import window
+    from reyes_agent.tools import system as system_tools
+    from reyes_agent.tools.teaching_notepad import write_lesson_to_notepad
+
+    restore = _isolated_vault()
+    try:
+        teaching.start("Python", ["Variables"], target="notepad")
+        teaching.push_block("Python", "title", "Variables")
+
+        monkeypatch.setattr(window, "find_by_title", lambda _title: [])
+        monkeypatch.setattr(system_tools, "open_app", lambda _name: "Couldn't find an app matching 'notepad'.")
+
+        result = write_lesson_to_notepad("Python")
+        assert "could not bring Notepad to the foreground" in result
+        assert teaching.status("Python")["notepad_written"] == 0
+    finally:
+        restore()
+
+
+def test_write_lesson_to_notepad_tool_is_registered_and_reachable_from_kate() -> None:
+    from reyes_agent.tools import TOOLS
+    from reyes_agent.tools import subagents
+
+    assert "write_lesson_to_notepad" in TOOLS
+    kate = subagents._SPECIALISTS["kate"]
+    assert "write_lesson_to_notepad" in kate["tools"]
+
+
 def _run_all() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     failures = 0
