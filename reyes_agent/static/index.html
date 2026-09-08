@@ -1428,6 +1428,10 @@ let frontendMessageCount = 0;
 function recordFrontendMessage() { if (performanceAuditEnabled) frontendMessageCount++; }
 
 let turnActive = false;
+// Which agent's speech (if any) currently owns the talk-bar text -- so
+// voice_stopped only restores the bar if IT was the one that changed it,
+// never clobbering an unrelated status set in between.
+let activeSpeakerAgent = '';
 let assistantBubble = null;
 
 // --- settings: developer mode + performance mode, persisted locally ------
@@ -5526,6 +5530,32 @@ if (window.EventSource) {
         }[p.state];
         if (visual) orb.setState(visual);
         window.zenoConversationState = p.state;
+      }
+    }
+    // Talk bar = conversation control (master prompt s64-65): show WHO is
+    // actually speaking, driven by voice_manager's real agent.speaking /
+    // agent.voice_stopped events -- never a guess, and never silent about a
+    // specialist talking so the owner is never left wondering who it is.
+    if (type === 'agent.speaking') {
+      const p = update.payload || {};
+      const who = String(p.agent || 'zeno').toLowerCase();
+      activeSpeakerAgent = who;
+      if (micStatusEl) {
+        micStatusEl.textContent = who === 'zeno'
+          ? 'ZENO is speaking...'
+          : `[${who.replace(/_/g, ' ').toUpperCase()}] Speaking...`;
+      }
+    }
+    if (type === 'agent.voice_stopped') {
+      const p = update.payload || {};
+      const who = String(p.agent || 'zeno').toLowerCase();
+      if (micStatusEl && activeSpeakerAgent === who) {
+        activeSpeakerAgent = '';
+        if (!turnActive) {
+          micStatusEl.textContent = listeningMode
+            ? 'Listening -- just talk, no wake word needed'
+            : 'Always listening -- say "Zeno"...';
+        }
       }
     }
     if (type.startsWith('confirmation.') || type.startsWith('tool.')) refreshPending();
