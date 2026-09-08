@@ -140,7 +140,7 @@ CAPABILITIES: dict[str, tuple[str, ...]] = {
                     "evolution_report", "awareness_status", "digital_dna",
                     "voice_profile_status", "ocr_capabilities",
                     "universal_tool_health", "universal_tool_catalog",
-                    "universal_tool_resolve"),
+                    "universal_tool_resolve", "list_open_windows"),
     "presentation": ("t21_services", "t21_remember", "siwes_evidence",
                      "prepare_for_visit", "start_visitor_session", "set_serious_mode",
                      "defense_mode", "visit_topic"),

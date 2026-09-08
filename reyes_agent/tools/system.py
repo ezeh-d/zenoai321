@@ -450,6 +450,42 @@ def list_processes(limit: int = 30) -> str:
 
 
 @register(
+    name="list_open_windows",
+    description=(
+        "List real, currently visible top-level windows on this desktop -- title, owning process, whether it is the "
+        "foreground (active) window, and whether it is minimized. Read-only; queried live every call, never a "
+        "remembered/stale list. Use this to answer 'is X open', 'what's open right now', or to verify a window's real "
+        "state before acting on it, instead of assuming from earlier conversation."
+    ),
+    input_schema={"type": "object", "properties": {
+        "limit": {"type": "integer", "description": "Max windows to return. Default 40."},
+    }},
+    light=True,
+)
+def list_open_windows(limit: int = 40) -> str:
+    import json
+
+    from reyes_agent.computer import window as _window
+
+    try:
+        cap = max(1, min(200, int(limit) if limit is not None else 40))
+    except (TypeError, ValueError):
+        cap = 40
+    processes: dict[int, str] = {}
+    for process in psutil.process_iter(["pid", "name"]):
+        try:
+            processes[int(process.info["pid"])] = str(process.info.get("name") or "")
+        except (psutil.Error, OSError, ValueError):
+            continue
+    rows = []
+    for hwnd, pid, title in _visible_windows()[:cap]:
+        state = _window.status(hwnd)
+        rows.append({"title": title, "process": processes.get(pid, ""), "pid": pid,
+                     "foreground": state["foreground"], "minimized": state["minimized"]})
+    return json.dumps({"count": len(rows), "windows": rows}, default=str)
+
+
+@register(
     name="delete_file",
     description="Permanently delete one file. This is irreversible and retains ZENO's high-impact confirmation safeguard.",
     input_schema={
