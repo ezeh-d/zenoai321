@@ -120,3 +120,30 @@ def test_agent_space_voice_command_is_local_and_event_driven(monkeypatch) -> Non
     reply = web._fast_local_reply("show me all your agents")
     assert reply is not None
     assert events == [{"type": "agent_space", "mode": "space", "focus": ""}]
+
+
+def test_every_registered_specialist_has_a_real_identity_not_the_fallback() -> None:
+    """Every id in agent_runtime.AGENT_ROLES must have an explicit entry in
+    _IDENTITIES -- HUNTER X was missing (fell through to the generic
+    hash-coloured fallback with icon "agent") despite being a fully
+    registered, named specialist. A silent fallback here means a real agent
+    quietly loses its role-appropriate colour/icon in the UI."""
+    from reyes_agent import agent_runtime, agent_space
+
+    for agent_id in agent_runtime.AGENT_ROLES:
+        identity = agent_space._identity(agent_id)
+        assert identity["icon"] != "agent", (
+            f"{agent_id!r} has no explicit _IDENTITIES entry and fell back to the "
+            "generic identity -- add one to agent_space._IDENTITIES")
+
+
+def test_hunter_x_has_a_distinct_identity() -> None:
+    from reyes_agent import agent_space
+
+    identity = agent_space._identity("hunter_x")
+    assert identity["name"] == "HUNTER X"
+    assert identity["icon"] == "markets"
+    # Must not collide with any other agent's colour.
+    other_colors = {agent_space._identity(aid)["color"]
+                    for aid in agent_space._IDENTITIES if aid != "hunter_x"}
+    assert identity["color"] not in other_colors

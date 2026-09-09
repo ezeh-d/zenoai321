@@ -28,6 +28,7 @@ _IDENTITIES: dict[str, dict[str, str]] = {
     "atlas": {"name": "ATLAS", "color": "#3b5a8a", "icon": "mission"},
     "helios": {"name": "HELIOS", "color": "#10b981", "icon": "wellness"},
     "jarvis": {"name": "JARVIS", "color": "#52e7ff", "icon": "systems"},
+    "hunter_x": {"name": "HUNTER X", "color": "#d4a017", "icon": "markets"},
 }
 _FALLBACK_COLORS = ("#38bdf8", "#c084fc", "#fb7185", "#fbbf24", "#34d399", "#60a5fa")
 _VISIBLE_EVENTS = {

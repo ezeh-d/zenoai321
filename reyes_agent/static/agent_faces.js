@@ -220,7 +220,34 @@ function hashIndex(id, len) {
   return h % len;
 }
 
-const faces = new Map();   // agentId -> { el, card, state, emotion, blinkTimer, reactionTimer }
+// A hash landing independently on style and accent collides far more often
+// than it looks: 6x6 = 36 combinations is a small space, and the classic
+// birthday-paradox math means the roster of named specialists already hit
+// real collisions (aris/tosin/atlas were all "slit+ring"; titan/apex/nova/
+// ultron were all "soft+notch") -- exactly the "recognisable without colour"
+// property this file exists for, broken by its own hash. A combined index
+// with linear probing to the next free slot keeps it deterministic (same
+// id always prefers the same slot) while guaranteeing every concurrently
+//-live face is actually unique, up to the full 36-combination space.
+const SILHOUETTE_SLOTS = FACE_STYLES.length * ACCENTS.length;
+const _usedSilhouettes = new Set();
+
+function claimSilhouette(id) {
+  const preferred = hashIndex(id, SILHOUETTE_SLOTS);
+  for (let step = 0; step < SILHOUETTE_SLOTS; step++) {
+    const slot = (preferred + step) % SILHOUETTE_SLOTS;
+    if (!_usedSilhouettes.has(slot)) {
+      _usedSilhouettes.add(slot);
+      return slot;
+    }
+  }
+  // Pool exhausted (>36 concurrently-live faces): degrade to the hash's
+  // own preference rather than fail. A repeat here is still distinguished
+  // by colour, exactly as an agent NOT in this module (ZENO) already is.
+  return preferred;
+}
+
+const faces = new Map();   // agentId -> { el, card, state, emotion, blinkTimer, reactionTimer, silhouetteSlot }
 
 /** Build (or return) one agent's face. Cheap: static DOM + CSS vars. */
 export function createFace(agentId, cfg = {}, opts = {}) {
@@ -232,8 +259,9 @@ export function createFace(agentId, cfg = {}, opts = {}) {
   const el = document.createElement("div");
   el.className = "zface";
   el.dataset.agent = agentId;
-  el.dataset.style = FACE_STYLES[hashIndex(agentId, FACE_STYLES.length)];
-  el.dataset.accent = ACCENTS[hashIndex(agentId + "a", ACCENTS.length)];
+  const silhouetteSlot = claimSilhouette(agentId);
+  el.dataset.style = FACE_STYLES[Math.floor(silhouetteSlot / ACCENTS.length)];
+  el.dataset.accent = ACCENTS[silhouetteSlot % ACCENTS.length];
   applyColor(el, cfg.color);
   if (opts.size) el.style.setProperty("--zf-size", opts.size + "px");
   el.innerHTML = `<div class="zf-accent"></div>`
@@ -255,7 +283,7 @@ export function createFace(agentId, cfg = {}, opts = {}) {
   card.append(el, name, role, state);
   applyColor(card, cfg.color);   // .zf-state label uses the same hue
   const face = { el, card, state: "idle", emotion: "neutral", stateEl: state,
-                blinkTimer: null, reactionTimer: null };
+                blinkTimer: null, reactionTimer: null, silhouetteSlot };
   faces.set(agentId, face);
   el.dataset.emotion = "neutral";
   scheduleBlink(agentId);
@@ -364,7 +392,10 @@ export function resumeBlinks() {
 
 export function destroyAll() {
   stopAll();
-  for (const f of faces.values()) f.card.remove();
+  for (const f of faces.values()) {
+    f.card.remove();
+    if (f.silhouetteSlot !== undefined) _usedSilhouettes.delete(f.silhouetteSlot);
+  }
   faces.clear();
 }
 
@@ -375,5 +406,6 @@ export function destroyFace(agentId) {
   clearTimeout(f.blinkTimer);
   clearTimeout(f.reactionTimer);
   f.card.remove();
+  if (f.silhouetteSlot !== undefined) _usedSilhouettes.delete(f.silhouetteSlot);
   faces.delete(agentId);
 }
