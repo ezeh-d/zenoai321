@@ -2312,6 +2312,17 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
           finishActivityChip(openChips.get(evt.id), evt.name, evt.result);
           openChips.delete(evt.id);
           if (openChips.size === 0) orb.setState('processing');
+          // Emotion Engine reaction to a REAL outcome (master prompt s10:
+          // "tool success -> satisfied", "tool failure -> concerned") --
+          // same failure-prefix vocabulary tools/__init__.py's
+          // classify_tool_result() already uses server-side, read here from
+          // the real result text rather than a second classification.
+          if (/^(error|failed|failure|blocked|denied|refused|unavailable|couldn'?t|could not|timed? ?out)/i
+            .test(String(evt.result || '').trim())) {
+            orb.setEmotion({ concern: 0.6, valence: 0.35, urgency: 0.3 });
+          } else {
+            orb.setEmotion({ valence: 0.72, confidence: 0.68, energy: 0.6 });
+          }
           if (callIdToAgent.has(evt.id) && window.agentRing) {
             const doneAgent = callIdToAgent.get(evt.id);
             window.agentRing.deactivate(doneAgent, evt.result || '');
@@ -2561,6 +2572,7 @@ function scheduleThinkingAcknowledgement(turnId, spoken) {
 async function requestBargeIn() {
   if (bargeInRequested) return;
   bargeInRequested = true;
+  orb.setState('interrupted');
   const detectedAt = Date.now() / 1000;
   if (activeSpeechStream) activeSpeechStream.cancel();
   cancelThinkingAcknowledgement();
@@ -5624,7 +5636,8 @@ if (window.EventSource) {
     }
     if (type.startsWith('confirmation.') || type.startsWith('tool.')) refreshPending();
     if (type === 'audio.recognized') showRecognizedAudio(update.payload || {});
-    if (type === 'wake.detected') void playDashboardWakeAck(update);
+    if (type === 'wake.detected') { orb.setState('notice'); void playDashboardWakeAck(update); }
+    if (type === 'agent.joined') orb.setState('calling_agent');
     if (type === 'audio.recognition_started') { systemAudioCaptureActive = update.payload?.source === 'system'; renderAwarenessIndicators(); }
     if (type === 'audio.recognition_finished') { systemAudioCaptureActive = false; renderAwarenessIndicators(); }
     if (type === 'awareness.settings_changed' && document.getElementById('settings-panel').classList.contains('open')) loadAwarenessSettings();

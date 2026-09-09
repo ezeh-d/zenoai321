@@ -36,6 +36,47 @@ const STATES = {
   learning:      { hue: 47,  spin: 18, eyes: "attentive" },
   reasoning:     { hue: 270, spin: 7,  eyes: "focused" },
   sleeping:      { hue: 210, spin: 40, eyes: "closed" },
+  // Emotion/expression breadth (master prompt s10/s12/s18-20): each reuses
+  // an existing eye shape rather than inventing new CSS -- expression stays
+  // a hue+spin+eyes swap, the same cheap mechanism every state above
+  // already uses, never a new render cost. Only ever set from a real
+  // trigger (s52: no fake emotion) -- see the wiring in index.html/mini.html
+  // for wake.detected -> notice, agent.joined -> calling_agent, and
+  // barge-in -> interrupted.
+  notice:        { hue: 32,  spin: 10, eyes: "attentive" },   // wake word just heard, before full LISTENING
+  happy:         { hue: 120, spin: 14, eyes: "bright" },
+  amused:        { hue: 45,  spin: 10, eyes: "bright" },
+  curious:       { hue: 190, spin: 13, eyes: "attentive" },
+  focused:       { hue: 259, spin: 14, eyes: "focused" },     // calmer/slower than thinking -- sustained concentration
+  serious:       { hue: 220, spin: 24, eyes: "focused" },
+  concerned:     { hue: 15,  spin: 20, eyes: "concerned" },   // milder, sustained cousin of error
+  surprised:     { hue: 320, spin: 5,  eyes: "bright" },
+  warning:       { hue: 40,  spin: 18, eyes: "concerned" },
+  interrupted:   { hue: 356, spin: 5,  eyes: "concerned" },   // urgent -- fast spin, same family as error
+  calling_agent: { hue: 270, spin: 8,  eyes: "scanning" },    // reaching out to a specialist
+  moving:        { hue: 187, spin: 4,  eyes: "calm" },
+  standby:       { hue: 200, spin: 45, eyes: "calm" },        // available but quiet -- NOT closed like sleeping
+  boot:          { hue: 187, spin: 3,  eyes: "closed" },
+  // Full expression vocabulary for the dimensional Emotion Engine below
+  // (master prompt s3) -- same cheap hue/spin/eyes mechanism throughout.
+  smile:         { hue: 130, spin: 16, eyes: "bright" },
+  laugh:         { hue: 50,  spin: 6,  eyes: "bright" },
+  smug:          { hue: 280, spin: 12, eyes: "focused" },
+  proud:         { hue: 45,  spin: 12, eyes: "bright" },
+  excited:       { hue: 330, spin: 4,  eyes: "bright" },
+  shocked:       { hue: 300, spin: 2,  eyes: "bright" },
+  confused:      { hue: 270, spin: 12, eyes: "scanning" },
+  deep_thinking: { hue: 259, spin: 20, eyes: "focused" },      // slower/heavier than thinking -- sustained, not reactive
+  whispering:    { hue: 190, spin: 10, eyes: "calm" },
+  worried:       { hue: 20,  spin: 22, eyes: "concerned" },
+  annoyed:       { hue: 15,  spin: 14, eyes: "concerned" },
+  angry:         { hue: 5,   spin: 8,  eyes: "concerned" },
+  suspicious:    { hue: 265, spin: 16, eyes: "scanning" },
+  embarrassed:   { hue: 340, spin: 18, eyes: "attentive" },
+  bored:         { hue: 210, spin: 34, eyes: "calm" },
+  sleepy:        { hue: 215, spin: 30, eyes: "calm" },
+  waking:        { hue: 187, spin: 6,  eyes: "attentive" },
+  celebrating:   { hue: 100, spin: 3,  eyes: "bright" },
 };
 
 const SPECIALIST_IDS = ["aris", "tosin", "stark", "zeal", "titan", "apex", "nova", "hermes_comm", "oracle", "atlas", "ultron", "kate", "helios"];
@@ -178,6 +219,102 @@ const _STATE_EVENT = {
 };
 function _emitVisual(ev, detail) { try { _visualBus && _visualBus.emit(ev, detail); } catch (_) {} }
 
+// States driven directly by real, authoritative pipeline events -- the
+// Emotion Engine's derived expression must NEVER silently override one of
+// these mid-turn. Voice/task correctness always outranks a mood swing.
+const _EMOTION_PROTECTED_STATES = new Set([
+  "listening", "understanding", "thinking", "acting", "waiting", "processing",
+  "speaking", "error", "notice", "calling_agent", "interrupted", "boot",
+]);
+
+// === Dimensional Emotion Engine (living-character master prompt s2/s15) ===
+// Continuous internal state, not just named states -- callers nudge
+// dimensions (setEmotion), this derives the best-matching named expression
+// from STATES above with momentum (never snaps) and decays toward a
+// baseline over time (different rates per dimension) so ZENO doesn't stay
+// pinned in one emotion forever. This is genuinely additive: it drives
+// setState() the same way any other caller does, and is deliberately never
+// invoked for the voice-critical states (listening/speaking/thinking/etc.)
+// -- those stay driven directly by real pipeline events, unaffected. Only
+// callers that explicitly opt into emotional reactions (tool success/
+// failure, notifications, idle life) use it.
+const EMOTION_DIMENSIONS = ["valence", "arousal", "confidence", "curiosity",
+  "focus", "urgency", "amusement", "concern", "energy", "social_engagement"];
+const EMOTION_BASELINE = { valence: 0.55, arousal: 0.35, confidence: 0.6, curiosity: 0.4,
+  focus: 0.4, urgency: 0.1, amusement: 0.2, concern: 0.1, energy: 0.6, social_engagement: 0.5 };
+// Per-dimension decay rate toward baseline (s15: different emotions decay at
+// different speeds) -- urgency/concern/amusement/arousal are transient
+// reactions; confidence/energy/valence are closer to a mood and drift back
+// slowly.
+const EMOTION_DECAY_PER_S = { valence: 0.03, arousal: 0.06, confidence: 0.015, curiosity: 0.05,
+  focus: 0.03, urgency: 0.12, amusement: 0.08, concern: 0.09, energy: 0.02, social_engagement: 0.04 };
+const _clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+function _deriveExpression(s) {
+  // Ordered most-specific-first; first match wins. Thresholds are
+  // deliberately not razor-thin -- real emotional state rarely sits exactly
+  // on a boundary, and flapping between two adjacent expressions every tick
+  // would look broken, not alive.
+  if (s.urgency > 0.7 && s.concern > 0.55) return "warning";
+  if (s.concern > 0.65 && s.arousal > 0.55) return "angry";
+  if (s.concern > 0.55 && s.valence < 0.35) return "worried";
+  if (s.concern > 0.4 && s.arousal < 0.45) return "annoyed";
+  if (s.confidence > 0.7 && s.amusement > 0.55) return "smug";
+  if (s.arousal > 0.75 && s.valence > 0.65 && s.social_engagement > 0.5) return "celebrating";
+  if (s.arousal > 0.7 && s.valence > 0.6) return "excited";
+  if (s.arousal > 0.75 && s.valence < 0.45) return "shocked";
+  if (s.arousal > 0.55 && s.valence > 0.5 && s.confidence < 0.4) return "surprised";
+  if (s.amusement > 0.7 && s.arousal > 0.5) return "laugh";
+  if (s.amusement > 0.5 && s.valence > 0.55) return "amused";
+  if (s.confidence > 0.65 && s.valence > 0.6 && s.social_engagement > 0.5) return "proud";
+  if (s.valence > 0.7 && s.energy > 0.5) return "happy";
+  if (s.valence > 0.6 && s.energy > 0.35) return "smile";
+  if (s.curiosity > 0.65 && s.focus < 0.55) return "curious";
+  if (s.curiosity > 0.5 && s.confidence < 0.4) return "confused";
+  if (s.curiosity > 0.45 && s.concern > 0.35) return "suspicious";
+  if (s.focus > 0.7 && s.arousal < 0.4) return "deep_thinking";
+  if (s.focus > 0.55) return "focused";
+  if (s.valence < 0.4 && s.social_engagement < 0.35) return "embarrassed";
+  if (s.energy < 0.25 && s.arousal < 0.3) return "sleepy";
+  if (s.energy < 0.35 && s.social_engagement < 0.3 && s.curiosity < 0.3) return "bored";
+  if (s.arousal < 0.3 && s.energy < 0.4) return "serious";
+  return "idle";
+}
+
+function _createEmotionEngine(onDerived) {
+  const state = { ...EMOTION_BASELINE };
+  let lastTickMs = null;
+
+  function apply(deltas, { immediate = false } = {}) {
+    for (const key of EMOTION_DIMENSIONS) {
+      if (!(key in deltas)) continue;
+      const target = _clamp01(deltas[key]);
+      // Nudge toward target rather than snapping -- this IS the momentum
+      // (s15): one strongly-worded event moves the needle, it does not
+      // teleport ZENO from bored to ecstatic in one frame.
+      state[key] = immediate ? target : state[key] + (target - state[key]) * 0.6;
+    }
+    onDerived(_deriveExpression(state), { ...state });
+  }
+
+  function tickDecay(nowMs) {
+    if (lastTickMs === null) { lastTickMs = nowMs; return; }
+    // Clamp elapsed time -- a hidden/backgrounded tab must not "catch up"
+    // in one enormous jump the moment it becomes visible again.
+    const dt = Math.min(2, (nowMs - lastTickMs) / 1000);
+    lastTickMs = nowMs;
+    let changed = false;
+    for (const key of EMOTION_DIMENSIONS) {
+      const before = state[key];
+      state[key] = before + (EMOTION_BASELINE[key] - before) * Math.min(1, EMOTION_DECAY_PER_S[key] * dt * 4);
+      if (Math.abs(state[key] - before) > 0.002) changed = true;
+    }
+    if (changed) onDerived(_deriveExpression(state), { ...state });
+  }
+
+  return { apply, tickDecay, snapshot: () => ({ ...state }) };
+}
+
 export function initOrb(canvas) {
   injectStyles();
   // The canvas element stays in the DOM (index.html references it) but
@@ -235,8 +372,26 @@ export function initOrb(canvas) {
     setParticleCount({ idle: 12, listening: 22, understanding: 24, thinking: 30,
       acting: 32, waiting: 12, success: 18, processing: 30, speaking: 24,
       error: 12, searching: 28, coding: 30, creating: 26, communicating: 22,
-      learning: 24, reasoning: 30, sleeping: 10 }[name] || 14);
+      learning: 24, reasoning: 30, sleeping: 10,
+      notice: 20, happy: 22, amused: 24, curious: 20, focused: 18, serious: 12,
+      concerned: 14, surprised: 28, warning: 16, interrupted: 20, calling_agent: 24,
+      moving: 16, standby: 6, boot: 8,
+      smile: 18, laugh: 26, smug: 14, proud: 20, excited: 30, shocked: 30,
+      confused: 16, deep_thinking: 16, whispering: 10, worried: 16, annoyed: 14,
+      angry: 22, suspicious: 14, embarrassed: 12, bored: 6, sleepy: 8, waking: 14,
+      celebrating: 32 }[name] || 14);
   }
+
+  // Dimensional Emotion Engine instance for this orb. Derived expressions
+  // only ever call setState -- the same entry point every other caller
+  // already uses -- and only when the orb isn't mid-way through a real,
+  // event-driven interaction (see _EMOTION_PROTECTED_STATES above).
+  const emotionEngine = _createEmotionEngine((expression) => {
+    if (!_EMOTION_PROTECTED_STATES.has(currentState)) setState(expression);
+  });
+  let emotionTickTimer = setInterval(() => {
+    if (document.visibilityState === "visible") emotionEngine.tickDecay(performance.now());
+  }, 2500);
 
   // One small canvas and a fixed object pool: no particle DOM nodes, no
   // allocations or physics in the draw path, no blur filter. Idle/waiting
@@ -544,7 +699,15 @@ export function initOrb(canvas) {
       setTimeout(() => root.classList.remove("blinking"), 130);
     },
     auditMetrics: () => ({ particle_loop: particleTimer !== null, blink_timer: blinkTimer !== null,
-      eye_tracking_timer: eyeUpdateTimer !== null }),
+      eye_tracking_timer: eyeUpdateTimer !== null, emotion_ticker: emotionTickTimer !== null }),
     specialists: SPECIALIST_IDS.slice(),
+    // Dimensional Emotion Engine (living-character master prompt s2/s15).
+    // deltas is a partial {dimension: 0..1} object -- only named dimensions
+    // move, everything else keeps its current value and keeps decaying
+    // toward baseline on its own. {immediate:true} skips the momentum
+    // smoothing (e.g. a hard reset), otherwise the change eases in.
+    setEmotion: (deltas, opts) => emotionEngine.apply(deltas || {}, opts || {}),
+    getEmotionState: () => emotionEngine.snapshot(),
+    getState: () => currentState,
   };
 }
