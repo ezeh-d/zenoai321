@@ -193,6 +193,7 @@
   .action-card .name { font-weight: 700; font-size: 12px; }
   .action-card .desc { color: var(--text-dim); font-size: 11px; margin: 4px 0 8px; word-break: break-word; }
   .action-card .row { display: flex; gap: 6px; }
+  .action-card .notice-count { font-weight: 400; opacity: 0.6; font-size: 11px; }
   .action-card button { flex: 1; border: none; border-radius: 7px; padding: 6px 0; font-size: 11px; font-weight: 700; cursor: pointer; }
   .btn-approve { background: var(--ok); color: #063014; }
   .btn-deny { background: var(--danger); color: #360a0f; }
@@ -2623,10 +2624,21 @@ async function speakInBrowser(text, { finishTurn = true, resetAudio = true } = {
       micStatusEl.textContent = 'Voice unavailable — ElevenLabs not configured';
     }
   } catch (e) {
-    speechStream.cancel();
     // Network hiccup: stay silent rather than switching voice mid-sentence.
+    //
+    // This used to reference an undefined `speechStream` (a leftover from a
+    // different scope) and threw ReferenceError here, which crashed the
+    // WHOLE turn with a "Connection lost" error on any TTS failure -- e.g. a
+    // 502 from the voice provider -- hiding a perfectly good text reply
+    // behind a scary, misleading error message. Nothing needs to run here:
+    // this function does not own activeSpeechStream (see below).
   } finally {
-    if (activeSpeechStream === speechStream) activeSpeechStream = null;
+    // speakInBrowser is called once PER CLAUSE by createStreamingSpeech's
+    // chained queue (see enqueue() below) -- a multi-sentence reply calls
+    // this function several times across the life of ONE turn. It must
+    // NOT touch activeSpeechStream: that is the whole speechStream object
+    // for the turn, owned and cleared by runTurn/requestBargeIn, not by
+    // any single clause's playback finishing.
     if (speechFetchController === controller) speechFetchController = null;
   }
   // Audio has finished (or never started). Only the browser knows this
@@ -5258,6 +5270,13 @@ async function refreshPending() {
 const noticesPanelEl = document.getElementById('notices-panel');
 
 let noticesSignature = '';
+// Ambient "noticed while you were away" is a GLANCE, not a management
+// console (master prompt s2/s39): show a handful of the most recent real
+// notices and point to the rest rather than covering the workspace with
+// identical-looking cards. The backend already collapses identical repeats
+// into one notice with a rising `count` (proactive_store.upsert_notice); this
+// cap is for genuinely distinct notices piling up unattended.
+const NOTICES_VISIBLE_CAP = 5;
 function renderNotices(items) {
   const signature = JSON.stringify(items);
   if (signature === noticesSignature) return;
@@ -5266,16 +5285,27 @@ function renderNotices(items) {
     noticesPanelEl.innerHTML = '<div class="empty-note">Nothing noteworthy right now.</div>';
     return;
   }
+  // list_notices() already orders newest-first (updated_at DESC), so a
+  // straight slice keeps the most recent ones visible.
+  const shown = items.slice(0, NOTICES_VISIBLE_CAP);
+  const hidden = items.length - shown.length;
   noticesPanelEl.innerHTML = '';
-  for (const n of items) {
+  for (const n of shown) {
     const card = document.createElement('div');
     card.className = 'action-card';
-    card.innerHTML = `<div class="name">${escapeHtml(n.check_name)}</div>
-                <div class="desc">${escapeHtml(n.message)}</div>
+    const count = Number(n.count || 1);
+    card.innerHTML = `<div class="name">${escapeHtml(n.title || 'ZENO')}${count > 1 ? ` <span class="notice-count">×${count}</span>` : ''}</div>
+                <div class="desc">${escapeHtml(n.summary || '')}</div>
                 <div class="row">
                   <button class="btn-approve" data-id="${n.id}">Dismiss</button>
                 </div>`;
     noticesPanelEl.appendChild(card);
+  }
+  if (hidden > 0) {
+    const more = document.createElement('div');
+    more.className = 'empty-note';
+    more.textContent = `+${hidden} more -- ask "what did I miss?" to see the rest.`;
+    noticesPanelEl.appendChild(more);
   }
   for (const btn of noticesPanelEl.querySelectorAll('button[data-id]')) {
     btn.addEventListener('click', async () => {

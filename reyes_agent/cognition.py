@@ -443,9 +443,19 @@ def _route_uncached(message: str, *, has_active_task: bool = False,
     elif coding_work:
         deep = True
         reasons.append("coding/system work needs the coding specialist")
-    elif learning_hits and design_hits:
+    elif learning_hits:
+        # Any explicit "teach me"/"from zero"/"study plan" phrasing now
+        # engages the Teaching Whiteboard (teaching.py), which is
+        # topic-independent -- not only design. This used to require
+        # design_hits too, a leftover from when a real curriculum only
+        # existed for design subjects; that left a plain "Teach me Python"
+        # on the FAST path, where "[Routing: FAST. Answer directly and
+        # briefly...]" competed with and beat the teaching directive,
+        # silently skipping the whiteboard/syllabus flow for exactly the
+        # spec's own example. A one-line factual question ("what is
+        # kerning?") still stays FAST -- it does not match _LEARNING_MARKERS.
         deep = True
-        reasons.append("design learning path needs a structured lesson")
+        reasons.append("explicit lesson request needs the structured Teaching Whiteboard path")
     elif design_deep_hits:
         deep = True
         reasons.append("coherent design system or identity needs a structured process")
