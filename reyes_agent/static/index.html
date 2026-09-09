@@ -331,6 +331,12 @@
 #settings-panel.open { animation: reyes-pop .28s cubic-bezier(.2,.8,.2,1) both; }
 
 .msg { animation: reyes-rise .3s ease both; }
+/* Which agent said this -- shown only when it isn't ZENO (master prompt
+   s39/s40: the user must never have to wonder who is speaking). */
+.msg.assistant[data-speaker]::before {
+  content: attr(data-speaker) ' \2022 '; opacity: 0.65; font-weight: 700; font-size: 11px;
+  letter-spacing: .04em; color: var(--accent, #35c1ff);
+}
 .tool-chip { animation: reyes-rise .3s ease both; transition: color .2s, border-color .2s; }
 
 header .dot { animation: reyes-pulse 2.8s ease-in-out infinite; }
@@ -2234,6 +2240,7 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
   // permanently wedging the composer.
   let sawText = false;
   let fullReply = '';
+  currentReplyAgent = 'zeno';
   const dispatchedAgents = new Set();
   // Keyed by tool_call id, not a single "last" chip -- with parallel
   // delegate() calls, several 'tool' events can arrive before any
@@ -2312,10 +2319,17 @@ async function runTurn(text, voiceIdentity = null, voiceIdentityProof = '') {
             callIdToAgent.delete(evt.id);
           }
         } else if (evt.type === 'text') {
+          if (evt.agent) currentReplyAgent = evt.agent;
           if (!sawText) {
             sawText = true;
             thinkingBubble.textContent = '';
             assistantBubble = thinkingBubble; // reuse the same bubble, no flash/jump
+            // A specialist's reply is labelled with who is actually
+            // speaking, same as the talk bar/TTS voice below -- the user
+            // must never have to wonder who just answered (master prompt s39).
+            if (currentReplyAgent !== 'zeno') {
+              assistantBubble.dataset.speaker = agentDisplayName(currentReplyAgent);
+            }
             orb.setState('speaking');
           }
           assistantBubble.textContent += evt.text;
@@ -2594,14 +2608,14 @@ async function speakInBrowser(text, { finishTurn = true, resetAudio = true } = {
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, agent: 'zeno' }),
+      body: JSON.stringify({ text, agent: currentReplyAgent }),
       signal: controller.signal,
     });
     if (res.ok) {
       const url = URL.createObjectURL(await res.blob());
       _ttsAudioEl.src = url;
       orb.setState('speaking');
-      if (ambientEnabled) compactMicStatus('SPEAKING', 'ZENO is responding');
+      if (ambientEnabled) compactMicStatus('SPEAKING', `${agentDisplayName(currentReplyAgent)} is responding`);
       reportTurn(speakingTurn, { state: 'SPEAKING', source: 'browser.tts' });
       await new Promise((resolve) => {
         let finished = false;
@@ -2845,6 +2859,17 @@ const STANDBY_PHRASES = [
 // command -- a self-trigger loop, and the single most likely way
 // persistent listening goes wrong.
 let lastSpokenText = '';
+// Which agent's voice speaks the CURRENT reply -- 'zeno' unless a summoned
+// specialist owns this turn (master prompt s6/s39: Kate speaks directly in
+// her own voice, ZENO does not re-speak/narrate it). Reset per-turn in the
+// SSE loop below so a previous specialist reply can never leak into the
+// next ordinary ZENO turn.
+let currentReplyAgent = 'zeno';
+const AGENT_DISPLAY_NAMES = { zeno: 'ZENO', hermes_comm: 'HERMES' };
+function agentDisplayName(agentId) {
+  const id = String(agentId || 'zeno');
+  return AGENT_DISPLAY_NAMES[id] || id.replace(/_/g, ' ').toUpperCase();
+}
 function looksLikeSelfEcho(text) {
   if (!lastSpokenText) return false;
   const said = lastSpokenText.toLowerCase().replace(/[^a-z0-9 ]/g, '');

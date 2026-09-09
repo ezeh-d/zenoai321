@@ -86,18 +86,24 @@ def test_natural_summon_standby_and_council_never_start_workers(monkeypatch):
     manager = agent_presence.reset_for_tests()
     monkeypatch.setattr(agent_runtime, "ensure_worker",
                         lambda *_args, **_kwargs: pytest.fail("visual summon started a worker"))
-    assert agent_presence.handle_command("ZENO, get the security guy.") == "STARK is here."
+    reply, voice = agent_presence.handle_command("ZENO, get the security guy.")
+    assert reply == "STARK is here." and voice == "stark"
     assert manager.active_ids() == ["stark"]
-    assert "already here" in agent_presence.handle_command("Call STARK again.").casefold()
-    reply = agent_presence.handle_command("Bring KATE and ORACLE.")
+    reply, voice = agent_presence.handle_command("Call STARK again.")
+    assert "already here" in reply.casefold() and voice == "stark"
+    reply, voice = agent_presence.handle_command("Bring KATE and ORACLE.")
     assert "KATE" in reply and "ORACLE" in reply
+    assert voice == ""  # two agents summoned together -- no single voice
     assert manager.snapshot()["last_addressed"] == "oracle"
-    assert "standing by" in agent_presence.handle_command("STARK, standby.").casefold()
+    reply, voice = agent_presence.handle_command("STARK, standby.")
+    assert "standing by" in reply.casefold() and voice == ""
     assert set(manager.active_ids()) == {"kate", "oracle"}
     assert agent_presence.handle_command("ZENO, standby.") is None
-    assert "council" in agent_presence.handle_command("Call the council.").casefold()
+    reply, voice = agent_presence.handle_command("Call the council.")
+    assert "council" in reply.casefold() and voice == ""
     assert len(manager.active_ids()) <= manager.snapshot()["maximum"]
-    assert "standing by" in agent_presence.handle_command("All agents standby.").casefold()
+    reply, voice = agent_presence.handle_command("All agents standby.")
+    assert "standing by" in reply.casefold() and voice == ""
     assert manager.active_ids() == []
 
 

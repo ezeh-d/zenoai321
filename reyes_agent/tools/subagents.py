@@ -571,7 +571,7 @@ def call_worker(worker: str, task: str) -> str:
     return agent_teams.run_worker(parent, worker.strip().lower(), task)
 
 
-def _run_specialist(specialist: str, spec: dict, task: str) -> str:
+def _run_specialist(specialist: str, spec: dict, task: str, *, history: list[dict] | None = None) -> str:
     from reyes_agent.provider import ProviderError, run_turn
     try:
         from reyes_agent.agent_runtime import current_task_cancel_check
@@ -654,7 +654,12 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
     )
     capability_scope.__enter__()
 
-    history: list[dict] = [{"role": "user", "content": task}]
+    # A caller-supplied history (a live "call" conversation) is APPENDED to
+    # and kept, so the specialist remembers earlier turns of this same call
+    # session; delegate()'s existing one-shot behaviour is unchanged when no
+    # history is passed (default None), each call still starts fresh.
+    history = history if history is not None else []
+    history.append({"role": "user", "content": task})
 
     try:
         for _ in range(_MAX_SUBAGENT_TOOL_ROUNDS):
@@ -662,6 +667,7 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
             _publish_agent_visual_state(specialist, "thinking", task=task[:200])
             turn = run_turn(history, system=system, tools=allowed_tools, cancel_check=current_task_cancel_check)
             if not turn.wants_tool:
+                history.append({"role": "assistant", "content": turn.text})
                 return turn.text
 
             history.append(
@@ -705,3 +711,21 @@ def _run_specialist(specialist: str, spec: dict, task: str) -> str:
             agent_teams.restore_scope(scope_token)
 
     return f"'{specialist}' stopped after too many tool rounds without a final answer."
+
+
+def specialist_conversation_turn(specialist: str, message: str, *, history: list[dict]) -> str:
+    """Run ONE turn of a live "call" conversation as `specialist` (master
+    prompt s6: Kate owns the turn once summoned, in her own voice, without
+    ZENO re-processing or re-speaking it). Reuses the exact prompt/tool/
+    capability-scope machinery delegate() already uses for a one-shot task
+    -- this is not a second agent runtime, only a persistent `history` so
+    the specialist remembers earlier turns of the same call session.
+
+    `history` is the caller's own per-agent list (agent_presence.history_for)
+    and is mutated in place; the caller decides when to discard it (on
+    dismiss).
+    """
+    spec = _SPECIALISTS.get(specialist)
+    if spec is None:
+        return f"No specialist named '{specialist}'. Available: {', '.join(_SPECIALISTS)}."
+    return _run_specialist(specialist, spec, message, history=history)

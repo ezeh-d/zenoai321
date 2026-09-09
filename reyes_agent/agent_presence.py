@@ -62,6 +62,10 @@ class AgentPresenceManager:
         self._lock = threading.RLock()
         self._active: dict[str, Presence] = {}
         self._last_addressed = ""
+        # Per-agent conversation history for a "call" session (master prompt
+        # s6/s36): bounded, and discarded on dismiss -- a specialist that
+        # leaves does not keep an ever-growing private transcript around.
+        self._histories: dict[str, list[dict]] = {}
 
     @staticmethod
     def resolve(value: str) -> str:
@@ -124,6 +128,7 @@ class AgentPresenceManager:
                 agent = self.resolve(raw)
                 if agent and self._active.pop(agent, None) is not None:
                     removed.append(agent)
+                    self._histories.pop(agent, None)
             if self._last_addressed in removed:
                 self._last_addressed = next(reversed(self._active), "")
         for agent in removed:
@@ -184,6 +189,22 @@ class AgentPresenceManager:
         with self._lock:
             return list(self._active)
 
+    def active_conversational_agent(self) -> str:
+        """Which summoned specialist currently owns the conversational turn,
+        or "" if none (ZENO owns it). Only an agent still present counts --
+        a stale last_addressed pointing at someone already dismissed must
+        never silently keep routing turns to them."""
+        with self._lock:
+            agent = self._last_addressed
+            return agent if agent in self._active else ""
+
+    def history_for(self, agent: str) -> list[dict]:
+        """The bounded, mutable conversation history for one "call" session.
+        Returns the SAME list object so appends by the caller persist across
+        turns; callers must not replace it, only append/read."""
+        with self._lock:
+            return self._histories.setdefault(agent, [])
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -238,8 +259,14 @@ def _mentioned_agents(text: str) -> list[str]:
     return list(dict.fromkeys(agent for _index, agent in sorted(found)))
 
 
-def handle_command(message: str) -> str | None:
-    """Handle only explicit summon/dismiss language; return ``None`` otherwise."""
+def handle_command(message: str) -> tuple[str, str] | None:
+    """Handle only explicit summon/dismiss language; return ``None`` otherwise.
+
+    Returns (reply_text, voicing_agent) -- voicing_agent is "" for ZENO's own
+    voice, or one specialist id when that specialist should speak its own
+    acknowledgement (master prompt s4: "KATE: 'I am here, boss.'" -- said in
+    HER voice, not narrated by ZENO).
+    """
     text = " ".join(str(message or "").split())
     normalized = " ".join(re.sub(r"[^a-z0-9_ ]+", " ", text.casefold()).split())
     if not normalized:
@@ -251,7 +278,8 @@ def handle_command(message: str) -> str | None:
         return None
     if re.search(r"\b(?:all agents|everyone|the council)\b.*\b(?:standby|dismiss|leave|go)\b", normalized):
         result = manager.standby_all()
-        return "All summoned agents are standing by." if result["removed"] else "No sub-agent is currently summoned."
+        reply = "All summoned agents are standing by." if result["removed"] else "No sub-agent is currently summoned."
+        return reply, ""
 
     names = _mentioned_agents(normalized)
     dismissing = bool(re.search(r"\b(?:standby|dismiss|send back|can go|may go|leave us|that s all)\b", normalized))
@@ -261,17 +289,21 @@ def handle_command(message: str) -> str | None:
     if dismissing and names:
         result = manager.dismiss(names)
         if not result["removed"]:
-            return "Those agents are already on standby."
+            return "Those agents are already on standby.", ""
         labels = [name.replace("hermes_comm", "Hermes").replace("_", " ").upper() for name in result["removed"]]
-        return f"{' and '.join(labels)} {'are' if len(labels) > 1 else 'is'} standing by."
+        return f"{' and '.join(labels)} {'are' if len(labels) > 1 else 'is'} standing by.", ""
     if summoning and re.search(r"\b(?:the |full )?council\b", normalized):
         result = manager.summon_council()
-        return ("The Council is here." if result["joined"] else
-                "The Council participants are already here.")
+        reply = "The Council is here." if result["joined"] else "The Council participants are already here."
+        return reply, ""  # no single voice speaks for a whole council
     if summoning and names:
         result = manager.summon(names)
+        joined_or_already = result["joined"] or (result["already_active"] if len(names) == 1 else [])
+        # Exactly one specialist addressed: THEY acknowledge, in their own
+        # voice, whether newly connected or already present.
+        voice = joined_or_already[0] if len(joined_or_already) == 1 else ""
         if not result["joined"]:
-            return "They are already here."
+            return "They are already here.", voice
         labels = [name.replace("hermes_comm", "Hermes").replace("_", " ").upper() for name in result["joined"]]
-        return f"{' and '.join(labels)} {'are' if len(labels) > 1 else 'is'} here."
+        return f"{' and '.join(labels)} {'are' if len(labels) > 1 else 'is'} here.", voice
     return None

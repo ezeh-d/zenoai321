@@ -19,6 +19,10 @@ from reyes_agent import config
 class FastReply:
     text: str
     intent: str
+    # "" = ZENO's own voice (default, backward compatible). Set to a
+    # specialist id when THAT agent should voice this reply -- e.g. Kate's
+    # own "I'm here" acknowledgement on being summoned (master prompt s4).
+    agent: str = ""
 
 
 _RESPONSES: dict[str, tuple[str, ...]] = {

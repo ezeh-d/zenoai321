@@ -1783,9 +1783,10 @@ def _fast_local_reply(message: str):
         from reyes_agent.voice.latency_governor import FastReply, reply_for
 
         normalized = " ".join(re.sub(r"[^a-z0-9_ ]+", " ", str(message).casefold()).split())
-        presence_reply = agent_presence.handle_command(message)
-        if presence_reply is not None:
-            return FastReply(presence_reply, "agent_presence")
+        presence_command = agent_presence.handle_command(message)
+        if presence_command is not None:
+            presence_reply, presence_voice = presence_command
+            return FastReply(presence_reply, "agent_presence", agent=presence_voice)
         mode, focus = "", ""
         if normalized in {"show me the agent space", "show agent space", "open agent space",
                           "show all your agents", "show me all your agents"}:
@@ -1946,21 +1947,47 @@ def _conversation_turn(
                 if callback:
                     callback({"type": "stage", "stage": stage})
 
+            # If a specialist was explicitly summoned and not yet dismissed
+            # (agent_presence), THEY own this conversational turn -- their
+            # own prompt, own tools, own voice -- rather than ZENO running
+            # its own turn and re-speaking a delegated answer (master prompt
+            # s6/s34: "ZENO does not need to repeat everything Kate says").
+            # _fast_local_reply already handled this message if it was
+            # itself a summon/dismiss command, so reaching here means it is
+            # an ordinary follow-up.
+            active_specialist = ""
+            try:
+                from reyes_agent import agent_presence
+
+                active_specialist = agent_presence.get_agent_presence().active_conversational_agent()
+            except Exception:  # noqa: BLE001 -- presence must never break a turn
+                active_specialist = ""
             try:
                 with measure("ai_turn"):
-                    run_agent(
-                        history,
-                        on_text=on_text if callbacks.get("text") else None,
-                        on_tool_call=on_tool_call,
-                        on_tool_result=on_tool_result,
-                        on_stage=on_stage,
-                        cancel_check=context.check_cancelled,
-                        turn_id=turn_id,
-                        # A voice turn is one ZENO will SAY, so it gets the
-                        # spoken-reply style. `voice_identity` is present
-                        # only on turns that arrived as speech.
-                        spoken=voice_identity is not None,
-                    )
+                    if active_specialist:
+                        from reyes_agent.tools.subagents import specialist_conversation_turn
+
+                        specialist_history = agent_presence.get_agent_presence().history_for(active_specialist)
+                        reply_text = specialist_conversation_turn(
+                            active_specialist, message, history=specialist_history)
+                        history.append({"role": "assistant", "content": reply_text})
+                        text_callback = callbacks.get("text")
+                        if text_callback:
+                            text_callback({"type": "text", "text": reply_text, "agent": active_specialist})
+                    else:
+                        run_agent(
+                            history,
+                            on_text=on_text if callbacks.get("text") else None,
+                            on_tool_call=on_tool_call,
+                            on_tool_result=on_tool_result,
+                            on_stage=on_stage,
+                            cancel_check=context.check_cancelled,
+                            turn_id=turn_id,
+                            # A voice turn is one ZENO will SAY, so it gets the
+                            # spoken-reply style. `voice_identity` is present
+                            # only on turns that arrived as speech.
+                            spoken=voice_identity is not None,
+                        )
                 reply = history[-1]["content"]
             except BaseException:
                 # An error is a real conversation state, not just an
@@ -2064,7 +2091,7 @@ def chat(req: ChatRequest) -> dict[str, Any]:
         _mark_fast_reply(turn_id)
         return {
             "reply": fast_reply.text, "tool_calls": [], "interrupted": False,
-            "local_fast_path": True, "intent": fast_reply.intent,
+            "local_fast_path": True, "intent": fast_reply.intent, "agent": fast_reply.agent,
         }
 
     from reyes_agent.worker_pool import PRIORITY_BRAIN, get_worker_pool
@@ -2117,7 +2144,7 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
         def immediate():
             _mark_fast_reply(turn_id)
             yield f"data: {json.dumps({'type': 'stage', 'stage': 'responding', 'local': True})}\n\n"
-            yield f"data: {json.dumps({'type': 'text', 'text': fast_reply.text, 'local': True, 'intent': fast_reply.intent})}\n\n"
+            yield f"data: {json.dumps({'type': 'text', 'text': fast_reply.text, 'local': True, 'intent': fast_reply.intent, 'agent': fast_reply.agent})}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'local': True})}\n\n"
 
         return StreamingResponse(immediate(), media_type="text/event-stream")
