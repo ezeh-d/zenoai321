@@ -1,7 +1,7 @@
 """Universal Live Panel System -- backend registry + decision engine.
 
 ZENO's UI is a web HUD (reyes_agent/static, served by web.py) wrapped by a thin
-PyQt shell. This module is the SERVER side of the panel system: it declares the
+pywebview shell (see desktop_app.py). This module is the SERVER side of the panel system: it declares the
 panel catalogue, maps ZENO's real capabilities/tools onto panels, and decides
 which panel a running command should surface. The browser side
 (static/panels/*) renders and manages them, driven by the existing unified
@@ -182,3 +182,73 @@ def registry() -> dict[str, Any]:
         "tool_panel": TOOL_PANEL,
         "version": 1,
     }
+
+
+# --- Panel Request API -------------------------------------------------------
+# An agent (master prompt s62-64: "agents request, ZENO/Panel Manager owns the
+# environment") asks for a workspace instead of inventing its own window. This
+# is deliberately separate from route_tool()/decide() above -- those infer a
+# panel from WHICH TOOL ran; this is an EXPLICIT ask with a reason and an
+# owner, for panels a tool-name mapping would not otherwise reach (e.g. Kate
+# opening the Files panel mid-explanation, not because a file tool ran).
+import threading
+import time
+
+_ownership_lock = threading.RLock()
+_OWNERSHIP: dict[str, dict[str, Any]] = {}  # panel type -> {agent, reason, task_id, opened_at}
+
+
+def request_panel(agent_id: str, panel_type: str, *, reason: str = "", task_id: str = "") -> dict[str, Any]:
+    """Validate and record one agent's request for a workspace, then tell the
+    browser side to actually open/focus it via the existing event bus (no new
+    IPC channel). ZENO/this module remains the authority: an unregistered
+    panel type is refused outright rather than silently doing nothing."""
+    agent = str(agent_id or "zeno").strip().casefold() or "zeno"
+    panel = str(panel_type or "").strip().casefold()
+    definition = PANELS.get(panel)
+    if definition is None:
+        return {"granted": False, "panel": panel,
+                "reason": f"no such panel '{panel_type}'. Registered: {', '.join(sorted(PANELS))}."}
+    with _ownership_lock:
+        _OWNERSHIP[panel] = {"agent": agent, "reason": str(reason or "")[:200],
+                             "task_id": str(task_id or "")[:80], "opened_at": time.time()}
+    _publish("panel.requested", {"agent": agent, "panel": panel, "reason": str(reason or "")[:200],
+                                 "task_id": str(task_id or "")[:80], "title": definition["title"]})
+    return {"granted": True, "panel": panel, "agent": agent, "definition": definition}
+
+
+def release_panels_for(agent_id: str) -> list[str]:
+    """An agent leaving the conversation (master prompt s75) releases what it
+    asked for -- and only what it asked for; a panel ZENO or another still-
+    active agent also owns is never touched here."""
+    agent = str(agent_id or "").strip().casefold()
+    if not agent:
+        return []
+    with _ownership_lock:
+        released = [panel for panel, info in _OWNERSHIP.items() if info["agent"] == agent]
+        for panel in released:
+            del _OWNERSHIP[panel]
+    if released:
+        _publish("panel.release_for_agent", {"agent": agent, "panels": released})
+    return released
+
+
+def owner_of(panel_type: str) -> str:
+    """Which agent currently owns a panel, or "" if unowned/unknown."""
+    with _ownership_lock:
+        info = _OWNERSHIP.get(str(panel_type or "").strip().casefold())
+        return info["agent"] if info else ""
+
+
+def reset_ownership_for_tests() -> None:
+    with _ownership_lock:
+        _OWNERSHIP.clear()
+
+
+def _publish(event_type: str, payload: dict[str, Any]) -> None:
+    try:
+        from reyes_agent import event_bus
+
+        event_bus.publish(event_type, payload, source="panels")
+    except Exception:  # noqa: BLE001 -- a panel request must never break a turn
+        pass

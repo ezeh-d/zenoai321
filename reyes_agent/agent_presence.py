@@ -137,6 +137,16 @@ class AgentPresenceManager:
                 "expression": "neutral", "requested_by": source,
             })
             self._publish("agent.removed", {"agent": agent, "requested_by": source})
+            # A leaving specialist's workspace is released too (master prompt
+            # s75) -- only what IT asked for; a panel ZENO or another still-
+            # active agent also owns is untouched (panels.release_panels_for
+            # matches by owner, not by panel type).
+            try:
+                from reyes_agent import panels
+
+                panels.release_panels_for(agent)
+            except Exception:  # noqa: BLE001 -- presence must never break on this
+                pass
         if removed:
             try:
                 from reyes_agent.unified_session import get_session_state

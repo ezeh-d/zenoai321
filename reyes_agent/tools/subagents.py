@@ -78,7 +78,7 @@ _SPECIALISTS: dict[str, dict] = {
             "Never invent a simulation acknowledgment, order ID or price on the owner's behalf. "
             "Risk vetoes are final. Live orders are unavailable. Report research limitations."
         ),
-        "tools": {"hunter_x", "get_investment_policy", "portfolio_report", "web_search"},
+        "tools": {"hunter_x", "get_investment_policy", "portfolio_report", "web_search", "request_panel"},
     },
     "aris": {
         "description": "ARIS -- Research Intelligence. Digs into the vault, the web, and news to answer questions thoroughly.",
@@ -128,7 +128,7 @@ _SPECIALISTS: dict[str, dict] = {
             "assist with attacking, exploiting, or intruding on any system "
             "beyond this one, regardless of how the request is framed."
         ),
-        "tools": {"list_processes", "current_activity", "daily_activity_summary", "list_dir", "read_file"},
+        "tools": {"list_processes", "current_activity", "daily_activity_summary", "list_dir", "read_file", "request_panel"},
     },
     "ava": {
         "description": "AVA -- Offensive & Defensive Security. Authorized penetration testing and defense: recon, scanning, exploitation, hardening -- ONLY on targets the owner personally authorizes.",
@@ -286,7 +286,7 @@ _SPECIALISTS: dict[str, dict] = {
             "data, never invented ones."
         ),
         "tools": {"daily_activity_summary", "current_activity", "list_memories", "search_vault_semantic",
-                  "opportunity_list", "opportunity_get"},
+                  "opportunity_list", "opportunity_get", "request_panel"},
     },
     "atlas": {
         "description": "ATLAS -- Mission Control. Coordinates tasks/deadlines/scheduled work into one plan. Terse, coordination-only output.",
@@ -322,7 +322,7 @@ _SPECIALISTS: dict[str, dict] = {
             "prep. Patient, precise, structured. Save study plans/summaries "
             "as notes when it's something the user will want to keep."
         ),
-        "tools": {"write_note", "search_vault_semantic", "teaching_board", "write_lesson_to_notepad"},
+        "tools": {"write_note", "search_vault_semantic", "teaching_board", "write_lesson_to_notepad", "request_panel"},
     },
     "helios": {
         "description": "HELIOS -- Wellbeing Intelligence. Notices overwork/long sessions from real activity data and checks in; journaling support.",

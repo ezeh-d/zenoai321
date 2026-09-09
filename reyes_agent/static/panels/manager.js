@@ -96,6 +96,22 @@ export class PanelManager {
       for (const id of this.findByType("ragebait")) this.close(id);
       return;
     }
+    // Explicit Panel Request API (master prompt s62-64): an agent asked for
+    // a workspace through panels.request_panel, distinct from the tool-name
+    // inference below. Tag the panel with its owner so a later dismiss
+    // (panel.release_for_agent) knows which panels are safe to minimize.
+    if (type === "panel.requested") {
+      const id = this.open(payload.panel, { reason: `agent:${payload.agent}`, focus: true });
+      const p = id && this.panels.get(id);
+      if (p) p.owner = payload.agent;
+      return;
+    }
+    if (type === "panel.release_for_agent") {
+      for (const p of this.panels.values()) {
+        if (p.owner === payload.agent) this.minimize(p.id);
+      }
+      return;
+    }
     if (type !== "execution.lifecycle") return;
     const tool = payload.tool || (payload.detail && payload.detail.tool) || "";
     if (!tool) return;
