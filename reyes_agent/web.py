@@ -2010,7 +2010,7 @@ def _conversation_turn(
                 except Exception:
                     pass
             _record_latency("full_task", _lat_t0)
-            return {"reply": reply, "tool_calls": tool_calls}
+            return {"reply": reply, "tool_calls": tool_calls, "agent": active_specialist}
     finally:
         if correlation_token is not None:
             try:
