@@ -1465,7 +1465,14 @@ devToggle.checked = devMode;
 perfToggle.checked = perfMode;
 orbToggle.checked = orbAnimated;
 devOverlay.classList.toggle('on', devMode);
-orb.setPerformanceMode(perfMode);
+// Automatic visual degradation under real system load (master prompt s29):
+// ZENO lowers animation quality on its OWN before that pressure shows up as
+// UI/voice lag, then restores whatever quality the owner chose once the
+// pressure clears -- refreshResourcePressure() below sets _autoLite from
+// live CPU/RAM/worker-backlog, never a manual choice.
+let _autoLite = false;
+function applyEffectivePerformanceMode() { orb.setPerformanceMode(perfMode || _autoLite); }
+applyEffectivePerformanceMode();
 orb.setActive(orbAnimated);  // off -> stops the render loop, static image shows
 orbToggle.addEventListener('change', () => {
   orbAnimated = orbToggle.checked;
@@ -1497,7 +1504,7 @@ devToggle.addEventListener('change', () => {
 perfToggle.addEventListener('change', () => {
   perfMode = perfToggle.checked;
   localStorage.setItem('reyes_perf_mode', perfMode ? '1' : '0');
-  orb.setPerformanceMode(perfMode);
+  applyEffectivePerformanceMode();
 });
 
 // --- Optional performance features --------------------------------------
@@ -5648,14 +5655,18 @@ if (window.EventSource) {
 // creating a second polling loop.
 let statusTimer = null;
 let nextFeatureLoadSample = 0;
+// Same measured thresholds as resource_governor.py's HIGH pressure (cpu>=90
+// there is server-process CPU; this is system-wide, so a slightly lower bar
+// degrades the UI a beat before the backend would reject heavy work).
 async function refreshFeatureLoadGuard() {
-  if (!featureSettings.cursor_eye_tracking || performance.now() < nextFeatureLoadSample) return;
+  if (performance.now() < nextFeatureLoadSample) return;
   nextFeatureLoadSample = performance.now() + 5000;
   try {
     const data = await (await fetch('/api/performance')).json();
     const busy = data.system_cpu_percent >= 75 || data.system_ram_percent >= 85
       || (data.workers && ((data.workers.active || 0) > 0 || (data.workers.queue_depth || 0) > 0));
-    if (orb.setEyeTracking) orb.setEyeTracking({ enabled: featureSettings.cursor_eye_tracking,
+    if (busy !== _autoLite) { _autoLite = busy; applyEffectivePerformanceMode(); }
+    if (featureSettings.cursor_eye_tracking && orb.setEyeTracking) orb.setEyeTracking({ enabled: true,
       fps: featureSettings.eye_tracking_fps, performanceMode: busy ? 'low_power' : featureSettings.performance_mode });
   } catch (_e) { /* optional guard must not disturb the dashboard */ }
 }
