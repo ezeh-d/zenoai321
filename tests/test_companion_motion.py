@@ -171,3 +171,95 @@ def test_walk_after_close_is_rejected_without_movement(controllers):
         controller.walk_to((0, 0), (10, 10), 0)
 
     assert moves == []
+
+
+def test_close_timeout_is_not_blocked_by_an_inflight_native_move(controllers):
+    worker_count_before = sum(
+        thread.name == "zeno-companion-motion" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+    move_started = threading.Event()
+    release_move = threading.Event()
+    close_returned = threading.Event()
+
+    def blocking_move(_x, _y):
+        move_started.set()
+        release_move.wait(1.0)
+        return True
+
+    controller = controllers(blocking_move)
+    controller.walk_to((0, 0), (10, 10), 0.2)
+    assert move_started.wait(1.0)
+    closer = threading.Thread(
+        target=lambda: (controller.close(timeout_s=0.01), close_returned.set())
+    )
+    closer.start()
+
+    returned_within_bound = close_returned.wait(0.15)
+    release_move.set()
+    closer.join(1.0)
+
+    assert returned_within_bound
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        current_count = sum(
+            thread.name == "zeno-companion-motion" and thread.is_alive()
+            for thread in threading.enumerate()
+        )
+        if current_count == worker_count_before:
+            break
+        time.sleep(0.005)
+    assert current_count == worker_count_before
+
+
+def test_new_walk_cannot_be_accepted_between_callback_claim_and_dispatch(
+    controllers, monkeypatch
+):
+    callback_claimed = threading.Event()
+    release_callback = threading.Event()
+    walk_attempted = threading.Event()
+    walk_accepted = threading.Event()
+    latest_completed = threading.Event()
+    callbacks = []
+    original_invoke = CompanionMotionController._invoke_callback
+
+    def pause_before_callback(callback, result):
+        if callback is old_callback:
+            callback_claimed.set()
+            release_callback.wait(1.0)
+        original_invoke(callback, result)
+
+    monkeypatch.setattr(
+        CompanionMotionController,
+        "_invoke_callback",
+        staticmethod(pause_before_callback),
+    )
+    controller = controllers(lambda _x, _y: True)
+
+    def old_callback(ok):
+        callbacks.append(("old", ok))
+
+    controller.walk_to((0, 0), (1, 1), 0, old_callback)
+    assert callback_claimed.wait(1.0)
+
+    def accept_latest_walk():
+        walk_attempted.set()
+        controller.walk_to(
+            (1, 1),
+            (2, 2),
+            0,
+            lambda ok: (callbacks.append(("latest", ok)), latest_completed.set()),
+        )
+        walk_accepted.set()
+
+    submitter = threading.Thread(target=accept_latest_walk)
+    submitter.start()
+    assert walk_attempted.wait(1.0)
+    accepted_before_old_dispatch = walk_accepted.wait(0.15)
+    release_callback.set()
+    submitter.join(1.0)
+
+    assert not accepted_before_old_dispatch
+    assert walk_accepted.is_set()
+    assert latest_completed.wait(1.0)
+    assert callbacks == [("old", True), ("latest", True)]
