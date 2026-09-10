@@ -2916,12 +2916,24 @@ window.zenoVoice = {
   get listening() { return listeningMode; },
 };
 
+// Tracks a real standby->wake transition (Phase 30/50: "Wake word...
+// small wake motion... then listening", not an instant jump). Only ever
+// set by setListeningUi('standby') itself, so this can never fire for an
+// ordinary idle->listening transition that was never actually asleep.
+let _wasStandby = false;
 function setListeningUi(state) {
   if (state === 'listening') {
     micStatusEl.textContent = 'Listening — just talk, no wake word needed';
-    if (!turnActive) orb.setState('listening');
+    if (_wasStandby) {
+      _wasStandby = false;
+      if (!turnActive) orb.setState('waking');
+      setTimeout(() => { if (!turnActive) orb.setState('listening'); }, 250);
+    } else if (!turnActive) {
+      orb.setState('listening');
+    }
   } else if (state === 'standby') {
     micStatusEl.textContent = 'Standing by — say "Zeno" to wake me';
+    _wasStandby = true;
     // Was 'idle' -- indistinguishable from ordinary idle even though a
     // dedicated 'standby' state already exists (living-character master
     // prompt Phase 30: a real "ZENO, standby" should visibly settle, not
@@ -5770,7 +5782,13 @@ if (performanceAuditEnabled) {
     auditFrames = 0; auditTotal = 0; auditWorst = 0; frontendMessageCount = 0; auditStarted = performance.now();
   }, 5000);
 }
-orb.setState('idle');
+// Boot experience (living-character master prompt Phase 51): a brief,
+// real "waking up" beat instead of landing straight on idle -- both
+// 'boot' and 'waking' already existed in STATES but were never actually
+// triggered anywhere in the app. Deliberately short (no cinematic intro).
+orb.setState('boot');
+setTimeout(() => { if (!turnActive) orb.setState('waking'); }, 400);
+setTimeout(() => { if (!turnActive) orb.setState('idle'); }, 900);
 async function initializeOnboarding() {
   const overlay = document.getElementById('onboarding-overlay');
   const stepsEl = document.getElementById('onboarding-steps');

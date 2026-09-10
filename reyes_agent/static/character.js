@@ -23,6 +23,8 @@
 // `initCharacter`; nothing that already calls methods on the returned
 // object needs to change.
 import { STATES, SPECIALIST_IDS, EMOTION_PROTECTED_STATES, createEmotionEngine, shouldIdleNudge } from "./character_brain.js";
+import { loadCharacterManifest } from "./character_manifest.js";
+import { createSpriteStateRenderer } from "./character_renderers.js";
 
 let stylesInjected = false;
 function injectStyles() {
@@ -147,6 +149,16 @@ function injectStyles() {
     #zeno-character.zc-pulse .zc-body { animation: zc-pulse-burst .5s ease-out; }
     #zeno-character.zc-motion:not(.lite).zc-pulse .zc-body { animation: zc-bob 2.6s ease-in-out infinite, zc-pulse-burst .5s ease-out; }
     @keyframes zc-pulse-burst { 0% { filter: brightness(1); } 30% { filter: brightness(1.5); } 100% { filter: brightness(1); } }
+
+    /* Sprite renderer (Stage A -- character_renderers.js). Inert until a
+       real manifest exists: .zc-sprite-active is only ever added once a
+       manifest actually loads, so the CSS-box .zc-body above stays exactly
+       as it renders today for everyone without supplied art. */
+    #zeno-character .zc-sprite { display: none; position: absolute; inset: 0;
+      width: 100%; height: 100%; object-fit: contain; pointer-events: none;
+      user-select: none; -webkit-user-drag: none; }
+    #zeno-character.zc-sprite-active .zc-body { display: none; }
+    #zeno-character.zc-sprite-active .zc-sprite { display: block; }
   `;
   document.head.appendChild(style);
 }
@@ -207,11 +219,27 @@ export function initCharacter(canvas) {
     currentHue = s.hue;
     root.style.setProperty("--zc-hue", String(currentHue));
     setEyes(s.eyes || "calm");
+    if (spriteRenderer) spriteRenderer.setExpression(nextState);
     // Idle behavior engine (Phase 16): any REAL state change resets the
     // idle clock -- only genuine, sustained idleness (not a real event
     // ZENO just reacted to) should ever produce an idle attention blip.
     if (nextState !== "idle") idleSinceMs = _now();
   }
+
+  // Sprite renderer (Stage A, character_renderers.js): activates itself
+  // ONLY once a real manifest actually loads -- see character_manifest.js.
+  // Until real art is supplied this fetch always resolves to null (404),
+  // so this is a no-op today and the CSS-box body keeps rendering exactly
+  // as it does now. Dropping in a manifest + cropped sprites is the only
+  // step needed to switch a running install over; no code change.
+  let spriteRenderer = null;
+  loadCharacterManifest().then((manifest) => {
+    if (!manifest) return;
+    spriteRenderer = createSpriteStateRenderer(root, manifest);
+    spriteRenderer.mount();
+    spriteRenderer.setExpression(currentState);
+    root.classList.add("zc-sprite-active");
+  }).catch(() => {});
 
   // Same dimensional Emotion Engine the orb uses (character_brain.js) --
   // derived expressions only ever call setState, and never override a
@@ -447,6 +475,12 @@ export function initCharacter(canvas) {
     root.classList.add("zc-pointing-" + side);
     clearTimeout(pointTimer);
     pointTimer = setTimeout(() => root.classList.remove("zc-pointing-l", "zc-pointing-r"), holdMs);
+    // Stage A: if a real pointing sprite exists, show it too (harmless
+    // no-op if the sprite renderer isn't active, or the manifest has no
+    // "_pointing" entry -- see createSpriteStateRenderer). Stage B will
+    // replace this with real arm/hand articulation driven by the same
+    // (x, y) target instead of a swapped image.
+    if (spriteRenderer) spriteRenderer.setPointing(side, holdMs);
   }
   window.addEventListener("zeno:panel-opened", (event) => {
     const center = event && event.detail && event.detail.center;
@@ -479,7 +513,8 @@ export function initCharacter(canvas) {
       gaze_offset: { x: gazeCurX, y: gazeCurY },
       walking: root.classList.contains("zc-walking"),
       pointing: root.classList.contains("zc-pointing-l") ? "l"
-        : root.classList.contains("zc-pointing-r") ? "r" : null }),
+        : root.classList.contains("zc-pointing-r") ? "r" : null,
+      sprite_active: !!spriteRenderer }),
     specialists: SPECIALIST_IDS.slice(),
     setEmotion: (deltas, opts) => emotionEngine.apply(deltas || {}, opts || {}),
     getEmotionState: () => emotionEngine.snapshot(),
