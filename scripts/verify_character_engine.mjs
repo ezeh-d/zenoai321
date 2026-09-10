@@ -123,5 +123,27 @@ check("a cursor well outside the dead zone moves the eyes toward it",
 zc.setEyeTracking({ enabled: false });
 check("setEyeTracking({enabled:false}) recenters the gaze", zc.auditMetrics().gaze_enabled === false);
 
-console.log(failures === 0 ? "ALL 10 CASES PASSED" : `${failures} CASE(S) FAILED`);
+// 9) Panel spatial awareness: lookAt() moves the eyes toward a given point
+// regardless of the cursor-tracking preference (gaze is off here, from the
+// step above) -- this is ZENO reacting to something real, not passive
+// cursor-following.
+zc.lookAt(1400, 700, { holdMs: 5000 });
+await new Promise((r) => setTimeout(r, 100));
+const lookAtOffset = zc.auditMetrics().gaze_offset;
+check("lookAt() moves the eyes even while cursor gaze is disabled",
+  lookAtOffset.x > 0.5, JSON.stringify(lookAtOffset));
+
+// 10) The real trigger: panels/manager.js dispatches zeno:panel-opened with
+// the new panel's actual center -- character.js must react to that exact
+// event without any glue code in index.html/mini.html. The stub character
+// rect is anchored at {top:0, height:128}, so its own center is y=64 --
+// a panel centered at y=600 is BELOW that, so the eyes should ease toward
+// a positive y offset (looking down-right, matching x too).
+fireWindowEvent("zeno:panel-opened", { detail: { type: "music", center: { x: 1500, y: 600 } } });
+await new Promise((r) => setTimeout(r, 400)); // let the eased chase fully converge from test 9's target
+const panelLookOffset = zc.auditMetrics().gaze_offset;
+check("a real zeno:panel-opened event makes the character look toward the panel",
+  panelLookOffset.x > 0.5 && panelLookOffset.y > 0.5, JSON.stringify(panelLookOffset));
+
+console.log(failures === 0 ? "ALL 12 CASES PASSED" : `${failures} CASE(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

@@ -410,6 +410,27 @@ export function initCharacter(canvas) {
     }
   }
 
+  // Panel spatial awareness ("ZENO should look toward panels" / Phase 25):
+  // a deliberate, event-driven glance toward a real screen point, reusing
+  // the SAME damped gaze mechanism above rather than a second system --
+  // and unlike cursor-tracking, this fires regardless of the user's eye-
+  // tracking preference, since it's ZENO reacting to something that just
+  // happened, not passive cursor-following.
+  function lookAt(x, y, { holdMs = 1800 } = {}) {
+    const rect = root.getBoundingClientRect ? root.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+    const dx = x - cx, dy = y - cy;
+    const nx = Math.max(-1, Math.min(1, dx / 400));
+    const ny = Math.max(-1, Math.min(1, dy / 400));
+    setGazeTarget(nx * GAZE_MAX_X, ny * GAZE_MAX_Y);
+    clearTimeout(gazeNeutralTimer);
+    gazeNeutralTimer = setTimeout(() => setGazeTarget(0, 0), holdMs);
+  }
+  window.addEventListener("zeno:panel-opened", (event) => {
+    const center = event && event.detail && event.detail.center;
+    if (center && typeof center.x === "number" && typeof center.y === "number") lookAt(center.x, center.y);
+  });
+
   return {
     setState,
     pulse,
@@ -422,6 +443,7 @@ export function initCharacter(canvas) {
     getAgentScreenPositions,
     setEyes,
     setEyeTracking,
+    lookAt,
     blink: () => {
       root.classList.add("blinking");
       setTimeout(() => root.classList.remove("blinking"), 130);

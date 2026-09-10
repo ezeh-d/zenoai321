@@ -33,10 +33,10 @@
 <script src="/static/spring.js"></script>
 <script src="/static/motion_engine.js"></script>
 <script type="module">
-import { initCharacter } from '/static/character.js?v=1';
+import { initZenoAvatar } from '/static/character_select.js?v=1';
 import * as voiceVAD from '/static/vad.js?v=2';
 import { createAgentPresence } from '/static/agent_presence.js';
-const orb=initCharacter(document.getElementById('orb-canvas'));
+const orb=initZenoAvatar(document.getElementById('orb-canvas'));
 // Virtual motion: window-drag shake/dizziness detection + a subtle lean on
 // the character container. Entirely local (no network) except the rare,
 // cooldown-gated /api/personality/physical-event call motion_engine.js makes

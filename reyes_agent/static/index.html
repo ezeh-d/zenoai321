@@ -999,6 +999,10 @@ body.focus #agent-team-overview { opacity: 0; }
       <label class="switch"><input type="checkbox" id="orb-toggle"><span class="track"></span></label>
     </div>
     <div class="toggle-row">
+      <span class="label">Compact avatar<span class="sub">Off = the 2D ZENO character (default). On = the small orb, for low-resource machines. Takes effect on next reload.</span></span>
+      <label class="switch"><input type="checkbox" id="avatar-compact-toggle"><span class="track"></span></label>
+    </div>
+    <div class="toggle-row">
       <span class="label">Developer mode<span class="sub">FPS, state, raw events</span></span>
       <label class="switch"><input type="checkbox" id="dev-toggle"><span class="track"></span></label>
     </div>
@@ -1157,17 +1161,19 @@ body.focus #agent-team-overview { opacity: 0; }
 
 <script src="/static/spring.js"></script>
 <script type="module">
-import { initCharacter } from "/static/character.js?v=1";
+import { initZenoAvatar, getAvatarMode, setAvatarMode } from "/static/character_select.js?v=1";
 import * as voiceVAD from "/static/vad.js?v=2";
 import { createAudioFrameClient } from "/static/audio_frames.js?v=2";
 import { createAgentSpace } from "/static/agent_space.js?v=3";
 
-// ZENO's desktop presence: the 2D cartoon character (character.js), not the
-// orb/sphere -- the user explicitly asked for "that type of 2d cartoon
-// character... not the mini orb". character.js exposes the same setState/
-// setEmotion/etc. API orb.js did (plus walkTo), so nothing below this line
-// needed to change beyond this import and the variable's source.
-const orb = initCharacter(document.getElementById("orb-canvas"));
+// ZENO's desktop presence: the 2D cartoon character by default -- the user
+// explicitly asked for "that type of 2d cartoon character... not the mini
+// orb" as the PRIMARY identity, with the orb demoted to an opt-in compact
+// mode for low-resource machines (character_select.js, boot-time choice).
+// Both renderers share the same setState/setEmotion/etc. API, so nothing
+// below this line needed to change beyond this import and the variable's
+// source.
+const orb = initZenoAvatar(document.getElementById("orb-canvas"));
 // Exposed for the dev overlay and for testing orb state/expressions
 // without driving a whole turn (same pattern as window.agentRing).
 window.zenoOrb = orb;
@@ -1449,6 +1455,7 @@ const settingsPanel = document.getElementById('settings-panel');
 const devToggle = document.getElementById('dev-toggle');
 const perfToggle = document.getElementById('perf-toggle');
 const orbToggle = document.getElementById('orb-toggle');
+const avatarCompactToggle = document.getElementById('avatar-compact-toggle');
 const devOverlay = document.getElementById('dev-overlay');
 
 // Default ON for every toggle below (only an explicit '0' turns one off) --
@@ -1470,6 +1477,16 @@ const textComposerEl = document.getElementById('text-composer');
 devToggle.checked = devMode;
 perfToggle.checked = perfMode;
 orbToggle.checked = orbAnimated;
+if (avatarCompactToggle) {
+  avatarCompactToggle.checked = getAvatarMode() === 'orb';
+  avatarCompactToggle.addEventListener('change', () => {
+    setAvatarMode(avatarCompactToggle.checked ? 'orb' : 'character');
+    // Boot-time choice (character_select.js) -- a live hot-swap mid-
+    // conversation is a riskier, jarrier change than what was asked for,
+    // so this takes effect on the next reload, same as the settings panel
+    // already tells the user.
+  });
+}
 devOverlay.classList.toggle('on', devMode);
 // Automatic visual degradation under real system load (master prompt s29):
 // ZENO lowers animation quality on its OWN before that pressure shows up as

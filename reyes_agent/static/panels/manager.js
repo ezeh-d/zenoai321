@@ -194,6 +194,19 @@ export class PanelManager {
     this._log("panel.created", { id, type, reason: opts.reason || "manual" });
     if (!opts.mirror) this._broadcast("panel.opened", { type });
     this._reportPanelState();
+    // Panel spatial awareness (living-character master prompt: "ZENO
+    // should look toward panels"): a real, one-shot signal carrying the
+    // NEW panel's actual on-screen center, decoupled from the ongoing
+    // docking event above -- neither this module nor the avatar imports
+    // the other. Only fires for a genuinely new panel, not a
+    // singleton-reuse/focus/minimize, so it reads as "ZENO noticed this
+    // just appeared," not a repeated tic.
+    try {
+      const rect = el.getBoundingClientRect();
+      window.dispatchEvent(new CustomEvent("zeno:panel-opened", {
+        detail: { type, center: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } },
+      }));
+    } catch (_e) {}
     return id;
   }
 
@@ -397,9 +410,10 @@ export class PanelManager {
     };
   }
 
-  // Tell ZENO's avatar (orb.js) whether it needs to move out of the way.
-  // Deliberately decoupled -- a plain window event, like the orb's own
-  // outbound visual_events.js bus, so neither module imports the other.
+  // Tell ZENO's avatar (character.js, or orb.js wherever still in use)
+  // whether it needs to move out of the way. Deliberately decoupled -- a
+  // plain window event, like the avatar's own outbound visual_events.js
+  // bus, so neither module imports the other.
   // A minimized panel lives only in the dockbar (display:none in the
   // workspace), so it does not count as "in the way".
   _reportPanelState() {
