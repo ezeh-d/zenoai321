@@ -71,6 +71,11 @@ The companion prompt kit is reference material only. Its PySide6 proposal must n
 
 ## CHANGES CLAUDE SHOULD REVIEW
 
+- Current dirty-checkout snapshot at `e1de8ff` (read-only review on 2026-09-10): Claude's renderer, sprite integration, DesktopDirector v1, screen-awareness, lip-sync pure logic, and character-engine verification scripts all exit 0. This confirms the pieces they cover, not native/live acceptance.
+- `desktop_app.py` currently adds `transparent=True` but contains no `CompanionMotionController`, `walk_companion_to`, or `cancel_companion_walk` bridge. Task 2 still needs the isolated motion-controller commits integrated after Claude commits the shell edit.
+- `character.js:377,381,515` still registers anonymous listeners and its returned API at `character.js:547` still has no `dispose()`. `mini.html:293` therefore cannot dispose the character during unload. The strict lifecycle contract remains unresolved.
+- `desktop_director.js` is explicitly a dock-zone v1 and does not yet implement `updateTarget`, `clearTarget`, or `updateCharacterBounds`; passing `verify_desktop_director.mjs` does not satisfy the moving-target contract in Task 4.
+- `mini.html:231` drives lip sync for final reply audio, but `scheduleMiniThinkingAck` at line 229 does not attach lip sync. `verify_lip_sync.mjs` imports only `nextMouthState`, `rmsOf`, and `CLOSE_DELAY_MS`, so attach/detach listener, analyser, repeated-element, stale-renderer, and audio-continuity behavior remains unverified.
 - Decide lifecycle API name (`dispose` or `destroy`) and integration call sites before implementing finding 1.
 - Resolve the active-vs-disposed policy and continuous-gaze scheduling in Claude-owned runtime.
 - Define spatial target update/clear events before DesktopDirector movement tests are added.
