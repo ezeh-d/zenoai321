@@ -83,6 +83,15 @@ function injectStyles() {
     #zeno-character.zc-walking .zc-arm-r { animation: zc-swing-r .5s ease-in-out infinite; }
     @keyframes zc-swing-l { 0%, 100% { transform: rotate(-16deg); } 50% { transform: rotate(16deg); } }
     @keyframes zc-swing-r { 0%, 100% { transform: rotate(16deg); } 50% { transform: rotate(-16deg); } }
+    /* Point gesture (living-character master prompt: "ZENO should point
+       toward panels") -- a class-driven pose on the SAME arm divs the walk
+       cycle already uses, not a new render cost. Placeholder-quality (no
+       hand shape yet), but the semantics are real: the correct arm lifts
+       and rotates toward the target side. Ready to be replaced by a real
+       pointing hand sprite once final art exists, with zero change to the
+       trigger logic in pointAt() below. */
+    #zeno-character.zc-pointing-l .zc-arm-l { transform: rotate(-70deg); }
+    #zeno-character.zc-pointing-r .zc-arm-r { transform: rotate(70deg); }
 
     #zeno-character .zc-leg { position: absolute; bottom: 0; width: 11px; height: 18px; border-radius: 5px;
       background: hsl(var(--zc-hue) 40% 28%); transform-origin: top center; transition: transform .3s ease; }
@@ -426,9 +435,25 @@ export function initCharacter(canvas) {
     clearTimeout(gazeNeutralTimer);
     gazeNeutralTimer = setTimeout(() => setGazeTarget(0, 0), holdMs);
   }
+  // Point gesture: choose the arm on the same side as the target so the
+  // pose reads as "pointing AT that side," not a random arm. Mirrors the
+  // walk cycle's arm classes -- one class swap, no render loop.
+  let pointTimer = null;
+  function pointAt(x, y, { holdMs = 1600 } = {}) {
+    const rect = root.getBoundingClientRect ? root.getBoundingClientRect() : { left: 0, width: 0 };
+    const cx = rect.left + rect.width / 2;
+    const side = x >= cx ? "r" : "l";
+    root.classList.remove("zc-pointing-l", "zc-pointing-r");
+    root.classList.add("zc-pointing-" + side);
+    clearTimeout(pointTimer);
+    pointTimer = setTimeout(() => root.classList.remove("zc-pointing-l", "zc-pointing-r"), holdMs);
+  }
   window.addEventListener("zeno:panel-opened", (event) => {
     const center = event && event.detail && event.detail.center;
-    if (center && typeof center.x === "number" && typeof center.y === "number") lookAt(center.x, center.y);
+    if (center && typeof center.x === "number" && typeof center.y === "number") {
+      lookAt(center.x, center.y);
+      pointAt(center.x, center.y);
+    }
   });
 
   return {
@@ -444,6 +469,7 @@ export function initCharacter(canvas) {
     setEyes,
     setEyeTracking,
     lookAt,
+    pointAt,
     blink: () => {
       root.classList.add("blinking");
       setTimeout(() => root.classList.remove("blinking"), 130);
@@ -451,7 +477,9 @@ export function initCharacter(canvas) {
     auditMetrics: () => ({ blink_timer: blinkTimer !== null, emotion_ticker: emotionTickTimer !== null,
       idle_ticker: idleTickTimer !== null, gaze_enabled: gazeEnabled,
       gaze_offset: { x: gazeCurX, y: gazeCurY },
-      walking: root.classList.contains("zc-walking") }),
+      walking: root.classList.contains("zc-walking"),
+      pointing: root.classList.contains("zc-pointing-l") ? "l"
+        : root.classList.contains("zc-pointing-r") ? "r" : null }),
     specialists: SPECIALIST_IDS.slice(),
     setEmotion: (deltas, opts) => emotionEngine.apply(deltas || {}, opts || {}),
     getEmotionState: () => emotionEngine.snapshot(),

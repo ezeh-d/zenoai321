@@ -145,5 +145,18 @@ const panelLookOffset = zc.auditMetrics().gaze_offset;
 check("a real zeno:panel-opened event makes the character look toward the panel",
   panelLookOffset.x > 0.5 && panelLookOffset.y > 0.5, JSON.stringify(panelLookOffset));
 
-console.log(failures === 0 ? "ALL 12 CASES PASSED" : `${failures} CASE(S) FAILED`);
+// 11) Point gesture: the arm on the SAME side as the target lifts, and it
+// clears automatically after the hold duration -- a real, semantic pose,
+// not a coin-flip animation.
+zc.pointAt(1500, 200); // target is to the right of the stub rect (center x=48)
+check("pointAt() lifts the arm on the target's side", zc.auditMetrics().pointing === "r", zc.auditMetrics().pointing);
+zc.pointAt(-500, 200); // now to the left
+check("pointAt() switches side when the target moves to the other side", zc.auditMetrics().pointing === "l", zc.auditMetrics().pointing);
+
+// 12) The real trigger: a zeno:panel-opened event drives BOTH the gaze and
+// the point gesture together, matching "ZENO looks toward it, then points."
+fireWindowEvent("zeno:panel-opened", { detail: { type: "browser", center: { x: 1800, y: 300 } } });
+check("a real zeno:panel-opened event also triggers the point gesture", zc.auditMetrics().pointing === "r");
+
+console.log(failures === 0 ? "ALL 14 CASES PASSED" : `${failures} CASE(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
