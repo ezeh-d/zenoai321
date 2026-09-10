@@ -37,7 +37,7 @@
 - `move(x: int, y: int) -> bool` performs the existing no-activate native movement. A false result ends the plan and reports `on_complete(False)` once.
 - One daemon worker handles every plan. A generation counter makes the latest walk win without spawning a thread per command.
 
-- [ ] **Step 1: Write pure motion tests**
+- [x] **Step 1: Write pure motion tests**
 
 ```python
 from reyes_agent.companion_motion import ease_in_out, interpolate_position
@@ -50,13 +50,13 @@ def test_interpolation_has_exact_endpoints_and_monotonic_middle():
     assert 0 < ease_in_out(0.25) < ease_in_out(0.75) < 1
 ```
 
-- [ ] **Step 2: Run the pure tests and observe the missing-module failure**
+- [x] **Step 2: Run the pure tests and observe the missing-module failure**
 
 Run: `python -m pytest tests/test_companion_motion.py -q`
 
 Expected: collection fails because `reyes_agent.companion_motion` does not exist.
 
-- [ ] **Step 3: Implement pure easing and interpolation**
+- [x] **Step 3: Implement pure easing and interpolation**
 
 ```python
 def ease_in_out(progress: float) -> float:
@@ -69,7 +69,7 @@ def interpolate_position(start, target, progress):
             round(start[1] + (target[1] - start[1]) * p))
 ```
 
-- [ ] **Step 4: Add controller lifecycle tests**
+- [x] **Step 4: Add controller lifecycle tests**
 
 ```python
 def test_latest_walk_wins_and_close_is_idempotent():
@@ -87,11 +87,11 @@ def test_latest_walk_wins_and_close_is_idempotent():
 
 Also cover cancel-before-completion, failed `move`, callback isolation, invalid duration normalization, 1,000 rapid replacements with one worker, and no movement after close.
 
-- [ ] **Step 5: Implement one condition-driven daemon worker**
+- [x] **Step 5: Implement one condition-driven daemon worker**
 
 Use `threading.Condition`, one `_Plan` dataclass, monotonic deadlines, bounded `fps` from 10–60, generation comparison before every move/callback, and callback execution outside the condition lock.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `python -m pytest tests/test_companion_motion.py -q`
 
