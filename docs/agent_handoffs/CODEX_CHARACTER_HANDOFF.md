@@ -2,7 +2,7 @@
 
 ## CURRENT CODEX TASK
 
-Independent contract tests, lifecycle/performance review, and gap-only research for Claude's 2D ZENO character integration. Baseline: `fb38214`.
+Independent contract tests, lifecycle/performance review, gap-only research, and the isolated native motion primitive for Claude's 2D ZENO character integration. Baseline: `fb38214`.
 
 ## FILES CODEX OWNS
 
@@ -10,6 +10,10 @@ Independent contract tests, lifecycle/performance review, and gap-only research 
 - `scripts/character_support/harness.test.mjs`
 - `scripts/verify_character_contracts_codex.mjs`
 - `scripts/verify_character_lifecycle_codex.mjs`
+- `reyes_agent/companion_motion.py`
+- `tests/test_companion_motion.py`
+- `docs/superpowers/specs/2026-09-10-zeno-living-companion-design.md`
+- `docs/superpowers/plans/2026-09-10-zeno-living-companion.md`
 - `docs/superpowers/plans/2026-09-10-zeno-character-support.md`
 - This handoff
 
@@ -43,7 +47,8 @@ The companion prompt kit is reference material only. Its PySide6 proposal must n
 - Deterministic, dependency-free browser boundary with fake chronological timer/RAF scheduling, runaway guard, listener accounting, distinct DOM roots and global restoration.
 - Real-module contract tests for event isolation/snapshot behavior, 1,000 subscription cycles, emotion bounds/decay/snapshot isolation, protected pipeline states, gaze/gesture geometry and timer replacement.
 - Executable known-gap tests. Normal mode reports TODOs; `--strict` makes them CI-failing. This prevents unresolved product behavior from being presented as green.
-- No production files changed. No asset pipeline created because Claude is actively adding manifest/renderer/art files in the shared checkout.
+- One production module, `reyes_agent/companion_motion.py`, added in this isolated branch. It uses one bounded daemon worker, condition-based plan replacement, monotonic easing, explicit cancellation, idempotent shutdown, and callback isolation. It does not import or modify the desktop shell, voice system, tools, renderer, or Claude-owned files.
+- No asset pipeline created because Claude is actively adding manifest/renderer/art files in the shared checkout.
 
 ## TESTS
 
@@ -52,6 +57,8 @@ The companion prompt kit is reference material only. Its PySide6 proposal must n
 - `node --no-warnings scripts/verify_character_lifecycle_codex.mjs --strict`: 7 pass, 4 accepted failures, 1 unresolved-policy TODO, exit 1. Accepted failures reproduce the runtime findings above; inactive emotion timing remains undecided.
 - Fresh broad run: `verify_character_engine.mjs`, `verify_character_select.mjs`, and `verify_orb_emotion_engine.mjs` all exited 0; the combined new Node run reported 24 pass and 5 expected TODO gaps.
 - `python -m pytest tests/test_visual_performance.py -q`: 4 pass, 1 pre-existing failure. The August test prohibits any `setInterval(` in `orb.js`; the September emotion-engine commit `d8a157b` intentionally added one. This is an obsolete source-text assertion on baseline `fb38214`, unrelated to this branch's changes. Claude/test owner should replace it with a behavioral work-rate assertion rather than globally permitting or forbidding timer syntax.
+- `python -m pytest tests/test_companion_motion.py -q`: 11 pass. Repeated five times: 11 pass on every run.
+- `python -m pytest tests/test_companion_motion.py tests/test_mini_overlay.py -q`: 16 pass after installing the repository-pinned `pywebview==6.2.1` into the isolated environment. The first attempt failed during collection solely because that declared dependency was absent.
 
 - Existing `verify_character_engine.mjs` showed one intermittent gaze failure during final verification: its fixed 400 ms wall-clock sleep observed only one damping frame (`x=0.81`, expected `>1`). Ten immediate isolated reruns all passed. Treat this as a pre-existing timing-sensitive test (1 observed failure in 11 final attempts), not proof of a runtime regression; migrate it onto the deterministic clock or a condition-based wait.
 
@@ -75,9 +82,13 @@ Research audit commands: `git ls-files | rg '(LICENSE|COPYING|NOTICE)'`, `git sh
 
 - `6604923` — deterministic browser harness and implementation plan
 - `f04e97b` — semantic/lifecycle contract tests
+- `3cccdc7` — approved living desktop companion design
+- `b7e1846` — concrete living companion implementation plan
+- `bb1d425` — bounded native motion controller and TDD suite
 - Final handoff commit is the commit containing this file.
 
 ## BLOCKERS
 
 - Claude's current uncommitted renderer/manifest/art state cannot be safely copied into this isolated branch. Integration verification belongs in Claude's checkout after cherry-picking these support commits.
+- Native bridge wiring, runtime disposal/gaze repair, spatial target tracking, selective click-through, and live voice/lip verification remain Claude-owned Tasks 2–6. The complete task cannot honestly be called integrated until those dirty active files are committed or explicitly handed off.
 - The video does not prove the claimed “full control” capability; that requires separate tool execution tests outside this character-support scope.
