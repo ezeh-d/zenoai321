@@ -3,12 +3,17 @@
 <title>ZENO Mini Orb</title>
 <style>
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#dcecff;font:11px system-ui,sans-serif;cursor:grab;user-select:none}
-  body.dragging{cursor:grabbing} #orb-simple{width:130px!important;height:130px!important;transition:filter .4s ease} #orb-canvas{position:fixed;inset:0;width:100%;height:100%}
+  body.dragging{cursor:grabbing} #zeno-character{transform:scale(0.9) scaleX(var(--zc-facing,1))!important;transition:filter .4s ease,top .01s,left .01s} #orb-canvas{position:fixed;inset:0;width:100%;height:100%}
+  /* The Mini Orb window itself is a fixed 210x210 native surface -- there is
+     no room to walk across, so the character stays anchored to its center
+     here (walkTo still exists on the API and is used on the full dashboard,
+     where there IS a real screen to walk across). */
+  #zeno-character{top:50%!important;left:50%!important}
   /* Virtual motion (static/motion_engine.js): subtle instability while dizzy/
-     shaking, entirely on the orb layer -- there is nothing else in this
+     shaking, entirely on the character layer -- there is nothing else in this
      minimal HUD to accidentally affect, and no important control to obscure. */
-  #orb-simple.zeno-shaking{filter:saturate(1.25) brightness(1.06)}
-  #orb-simple.zeno-dizzy{filter:saturate(.85) blur(.3px)}
+  #zeno-character.zeno-shaking{filter:saturate(1.25) brightness(1.06)}
+  #zeno-character.zeno-dizzy{filter:saturate(.85) blur(.3px)}
   /* Panels spring in/out on opacity+transform (compositor-only). The CSS
      cubic-bezier is a fallback; spring.js upgrades it to a real spring linear()
      with the exact constants extracted from Framer Motion. */
@@ -28,21 +33,21 @@
 <script src="/static/spring.js"></script>
 <script src="/static/motion_engine.js"></script>
 <script type="module">
-import { initOrb } from '/static/orb.js?v=8';
+import { initCharacter } from '/static/character.js?v=1';
 import * as voiceVAD from '/static/vad.js?v=2';
 import { createAgentPresence } from '/static/agent_presence.js';
-const orb=initOrb(document.getElementById('orb-canvas'));
+const orb=initCharacter(document.getElementById('orb-canvas'));
 // Virtual motion: window-drag shake/dizziness detection + a subtle lean on
-// the orb container. Entirely local (no network) except the rare, cooldown-
-// gated /api/personality/physical-event call motion_engine.js makes on its
-// own -- forwards to the EXISTING reyes_agent/ragebait.py (consent-scoped:
-// only reacts once the owner has said "ragebait me"). leanTarget is
-// #orb-simple -- initOrb() appends this as
-// a SIBLING of #orb-canvas on document.body (verified live), not a child of
-// the canvas, and it is the element actually painted on screen; .orb-eyes is
-// ITS descendant, so this rotate() and the eyes' own translate3d() still
-// never touch the same element.
-if(window.ZenoMotion)window.ZenoMotion.start({leanTarget:document.getElementById('orb-simple')});
+// the character container. Entirely local (no network) except the rare,
+// cooldown-gated /api/personality/physical-event call motion_engine.js makes
+// on its own -- forwards to the EXISTING reyes_agent/ragebait.py (consent-
+// scoped: only reacts once the owner has said "ragebait me"). leanTarget is
+// #zeno-character -- initCharacter() appends this as
+// a SIBLING of #orb-canvas on document.body (same DOM shape orb.js used),
+// not a child of the canvas, and it is the element actually painted on
+// screen; .zc-eyes is ITS descendant, so this rotate() and the eyes' own
+// transform still never touch the same element.
+if(window.ZenoMotion)window.ZenoMotion.start({leanTarget:document.getElementById('zeno-character')});
 // Spring-ease the mini panels' show/hide, using the exact spring constants
 // extracted from Framer Motion (static/spring.js). Falls back to the CSS
 // cubic-bezier above if spring.js didn't load. Toggling '.show' now springs
@@ -129,7 +134,8 @@ if(window.EventSource){
     agentPresence.consume(update);
     if(update.type==='performance.features_changed')applyMiniEyeSettings(update.payload||{});
     if(update.type==='audio.recognized')showRecognizedAudio(update.payload||{});
-    if(update.type==='wake.detected')void playCachedWakeAck(update);
+    if(update.type==='wake.detected'){orb.setState('notice');void playCachedWakeAck(update);}
+    if(update.type==='agent.joined')orb.setState('calling_agent');
     if(update.type==='live_desktop.started'||update.type==='live_desktop.connecting')setMiniLiveView(true,update.payload?.mode||'');
     if(update.type==='live_desktop.ended')setMiniLiveView(false);
     if(update.type==='conversation.state'){
@@ -231,7 +237,7 @@ function applyDashboardAudioOwner(active){
   // that release a short head start before the persistent orb reacquires.
   setTimeout(()=>{if(!wakeActive&&!dashboardOwnsMicrophone)void startWakeListener();},300);
 }
-function handleMiniSpeechStart(){if(miniReplyAudio&&voiceVAD.capabilities().echo_cancellation===true){const detectedAt=Date.now()/1000,audio=miniReplyAudio;audio.pause();if(typeof audio.onended==='function')audio.onended();const stoppedAt=Date.now()/1000;fetch('/api/turn/barge-in',{method:'POST'}).catch(()=>{});fetch('/api/diagnostics/barge-in',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({detected_at:detectedAt,audio_stopped_at:stoppedAt,source:'mini-orb'})}).catch(()=>{});}startWakeClip();}
+function handleMiniSpeechStart(){if(miniReplyAudio&&voiceVAD.capabilities().echo_cancellation===true){orb.setState('interrupted');const detectedAt=Date.now()/1000,audio=miniReplyAudio;audio.pause();if(typeof audio.onended==='function')audio.onended();const stoppedAt=Date.now()/1000;fetch('/api/turn/barge-in',{method:'POST'}).catch(()=>{});fetch('/api/diagnostics/barge-in',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({detected_at:detectedAt,audio_stopped_at:stoppedAt,source:'mini-orb'})}).catch(()=>{});}startWakeClip();}
 voiceVAD.onSpeechStart(handleMiniSpeechStart);voiceVAD.onSpeechEnd(detail=>{const discard=Boolean(detail&&detail.accepted===false);finishWakeClip(discard);if(discard)orb.setState('idle');});
 voiceVAD.onLevel(rms=>{if(rms>0.008&&!miniAudioProved){miniAudioProved=true;void reportMiniMic('MICROPHONE_READY','Live audio received from Mini Orb.',true);}});
 voiceVAD.onCaptureStopped(()=>{if(wakeActive){document.title='ZENO Mini Orb · MIC ERROR';void reportMiniMic('AUDIO_CAPTURE_FAILED','Mini Orb microphone stream ended unexpectedly.');stopWakeListener();if(wakeRecoveryAttempts<2){wakeRecoveryAttempts++;wakeRecoveryTimer=setTimeout(()=>{wakeRecoveryTimer=null;void startWakeListener();},900*wakeRecoveryAttempts);}}});
