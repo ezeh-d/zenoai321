@@ -114,6 +114,21 @@ export function deriveExpression(s) {
   return "idle";
 }
 
+// === Idle behavior engine (living-character master prompt Phase 16) ===
+// Adapted from simple-desktop-pet's idle-inactivity-timer pattern
+// (_research/character_engine/simple-desktop-pet/renderer/state-machine.js:
+// an idle timeout that settles the pet into a calmer pose, reset by any
+// real interaction) -- here it decides only WHETHER a small, natural
+// attention blip should fire, as a pure function of how long the character
+// has been genuinely idle. The caller (character.js) feeds the result into
+// the EXISTING dimensional Emotion Engine (setEmotion) rather than a
+// second, competing animation clock, so idle life can never fight a real,
+// event-driven expression (Phase 21: idle behavior is the lowest
+// priority). Pure and DOM-free so it is directly unit-testable.
+export function shouldIdleNudge(idleForMs, rand, thresholdMs = 25000, probability = 0.12) {
+  return idleForMs >= thresholdMs && rand < probability;
+}
+
 export function createEmotionEngine(onDerived) {
   const state = { ...EMOTION_BASELINE };
   let lastTickMs = null;

@@ -22,7 +22,7 @@
 // so index.html/mini.html only need their `initOrb` import swapped for
 // `initCharacter`; nothing that already calls methods on the returned
 // object needs to change.
-import { STATES, SPECIALIST_IDS, EMOTION_PROTECTED_STATES, createEmotionEngine } from "./character_brain.js";
+import { STATES, SPECIALIST_IDS, EMOTION_PROTECTED_STATES, createEmotionEngine, shouldIdleNudge } from "./character_brain.js";
 
 let stylesInjected = false;
 function injectStyles() {
@@ -198,6 +198,10 @@ export function initCharacter(canvas) {
     currentHue = s.hue;
     root.style.setProperty("--zc-hue", String(currentHue));
     setEyes(s.eyes || "calm");
+    // Idle behavior engine (Phase 16): any REAL state change resets the
+    // idle clock -- only genuine, sustained idleness (not a real event
+    // ZENO just reacted to) should ever produce an idle attention blip.
+    if (nextState !== "idle") idleSinceMs = _now();
   }
 
   // Same dimensional Emotion Engine the orb uses (character_brain.js) --
@@ -208,6 +212,25 @@ export function initCharacter(canvas) {
   });
   let emotionTickTimer = setInterval(() => {
     if (document.visibilityState === "visible") emotionEngine.tickDecay(performance.now());
+  }, 2500);
+
+  // Idle behavior engine (Phase 16, see character_brain.js's
+  // shouldIdleNudge -- adapted from simple-desktop-pet's idle-inactivity-
+  // timer). Runs on the SAME 2.5s cadence as emotion decay above (one
+  // timer tier, not a second animation clock): while genuinely idle for a
+  // while, occasionally nudge curiosity/social_engagement up a little so
+  // the existing Emotion Engine can naturally derive a brief "glance
+  // around" mood -- then its own decay pulls it back. setState() resets
+  // idleSinceMs the moment anything real happens, so this can never fire
+  // mid-task or fight a real event-driven expression.
+  const _now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  let idleSinceMs = _now();
+  let idleTickTimer = setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    if (currentState !== "idle") return;
+    if (shouldIdleNudge(_now() - idleSinceMs, Math.random())) {
+      emotionEngine.apply({ curiosity: 0.55, social_engagement: 0.5 });
+    }
   }, 2500);
 
   // Blink on a random human-ish cadence -- identical rhythm to the orb.
@@ -315,16 +338,77 @@ export function initCharacter(canvas) {
     root.style.display = on ? "block" : "none";
     if (on) scheduleBlink();
     else clearTimeout(blinkTimer);
+    if (!on) setGazeTarget(0, 0);
   }
 
-  // Cursor eye-tracking is deliberately NOT ported in this placeholder pass
-  // -- the orb's version depends on an optional spring engine tuned to a
-  // sphere's geometry, and it isn't part of what the user actually asked
-  // for (walking + distinct characteristics). setEyeTracking is kept as a
-  // real (if inert) part of the API so callers that already invoke it
-  // (index.html's settings wiring) don't throw; the same visible manual
-  // expressions (setEyes/setState/setEmotion) all work.
-  function setEyeTracking() {}
+  // === Gaze system (living-character master prompt Phase 11) ===
+  // Research (_research/CHARACTER_REPO_INDEX.md #1, #7) found no reference
+  // repo's cursor-gaze is separable from an opaque rigged-model runtime, so
+  // this is a real, from-scratch implementation for this character rather
+  // than a port -- but it targets the SAME properties Phase 11 calls out
+  // explicitly: damping (eased chase, never an instant snap), a dead zone
+  // (tiny cursor jitter near center is ignored), a reaction delay ("notices
+  // after a slight delay", not a robotic lock-on), a maximum offset (eyes
+  // cannot rotate past a small, readable range), and a return to neutral
+  // once the cursor stops moving. Off by default; index.html/mini.html
+  // already call setEyeTracking with the user's real saved preference, so
+  // this only ever runs when actually enabled.
+  const eyesLayer = root.querySelector(".zc-eyes");
+  const GAZE_DEAD_ZONE_PX = 40;
+  const GAZE_REACT_DELAY_MS = 120;
+  const GAZE_NEUTRAL_AFTER_MS = 1400;
+  const GAZE_MAX_X = 4.5, GAZE_MAX_Y = 3.2;
+  let gazeEnabled = false;
+  let gazeTargetX = 0, gazeTargetY = 0, gazeCurX = 0, gazeCurY = 0;
+  let gazeRaf = null, gazeDebounceTimer = null, gazeNeutralTimer = null, pendingPointer = null;
+  function writeGaze(x, y) {
+    gazeCurX = x; gazeCurY = y;
+    if (eyesLayer) eyesLayer.style.transform = `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px)`;
+  }
+  function stepGaze() {
+    gazeRaf = null;
+    const dx = gazeTargetX - gazeCurX, dy = gazeTargetY - gazeCurY;
+    if (Math.abs(dx) < 0.08 && Math.abs(dy) < 0.08) { writeGaze(gazeTargetX, gazeTargetY); return; }
+    // Eased chase, not a snap -- this IS the damping (same idea as the
+    // orb's real spring, simplified: a fixed-rate lerp is enough motion
+    // for a ~4px eye offset and needs no extra script dependency).
+    writeGaze(gazeCurX + dx * 0.18, gazeCurY + dy * 0.18);
+    gazeRaf = requestAnimationFrame(stepGaze);
+  }
+  function setGazeTarget(x, y) {
+    gazeTargetX = x; gazeTargetY = y;
+    if (gazeRaf === null) gazeRaf = requestAnimationFrame(stepGaze);
+  }
+  function applyGaze() {
+    if (!pendingPointer) return;
+    const p = pendingPointer; pendingPointer = null;
+    if (!gazeEnabled || currentEyes === "closed") return;
+    const rect = root.getBoundingClientRect ? root.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+    const dx = p.x - cx, dy = p.y - cy;
+    if (Math.hypot(dx, dy) < GAZE_DEAD_ZONE_PX) { setGazeTarget(0, 0); return; }
+    const nx = Math.max(-1, Math.min(1, dx / 400));
+    const ny = Math.max(-1, Math.min(1, dy / 400));
+    setGazeTarget(nx * GAZE_MAX_X, ny * GAZE_MAX_Y);
+  }
+  function onPointerMove(e) {
+    if (!gazeEnabled || currentEyes === "closed") return;
+    pendingPointer = { x: e.clientX, y: e.clientY };
+    clearTimeout(gazeDebounceTimer);
+    gazeDebounceTimer = setTimeout(applyGaze, GAZE_REACT_DELAY_MS);
+    clearTimeout(gazeNeutralTimer);
+    gazeNeutralTimer = setTimeout(() => setGazeTarget(0, 0), GAZE_NEUTRAL_AFTER_MS);
+  }
+  window.addEventListener("pointermove", onPointerMove, { passive: true });
+  function setEyeTracking(options = {}) {
+    gazeEnabled = !!(options && options.enabled);
+    if (!gazeEnabled) {
+      clearTimeout(gazeDebounceTimer); gazeDebounceTimer = null;
+      clearTimeout(gazeNeutralTimer); gazeNeutralTimer = null;
+      pendingPointer = null;
+      setGazeTarget(0, 0);
+    }
+  }
 
   return {
     setState,
@@ -343,6 +427,8 @@ export function initCharacter(canvas) {
       setTimeout(() => root.classList.remove("blinking"), 130);
     },
     auditMetrics: () => ({ blink_timer: blinkTimer !== null, emotion_ticker: emotionTickTimer !== null,
+      idle_ticker: idleTickTimer !== null, gaze_enabled: gazeEnabled,
+      gaze_offset: { x: gazeCurX, y: gazeCurY },
       walking: root.classList.contains("zc-walking") }),
     specialists: SPECIALIST_IDS.slice(),
     setEmotion: (deltas, opts) => emotionEngine.apply(deltas || {}, opts || {}),

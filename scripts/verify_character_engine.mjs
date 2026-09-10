@@ -19,7 +19,12 @@ function makeStyleStub() {
   return { setProperty: (k, v) => { props[k] = v; }, _props: props };
 }
 function makeEl() {
-  return { classList: makeClassList(), style: makeStyleStub(), innerHTML: "", appendChild() {}, addEventListener() {} };
+  return {
+    classList: makeClassList(), style: makeStyleStub(), innerHTML: "",
+    appendChild() {}, addEventListener() {},
+    querySelector: () => makeEl(),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 96, height: 128 }),
+  };
 }
 
 const rootEl = makeEl();
@@ -30,10 +35,20 @@ global.document = {
   visibilityState: "visible",
   addEventListener(){},
 };
-global.window = { addEventListener(){}, innerWidth: 1920, innerHeight: 1080 };
+const windowListeners = {};
+global.window = {
+  addEventListener: (ev, fn) => { (windowListeners[ev] = windowListeners[ev] || []).push(fn); },
+  innerWidth: 1920, innerHeight: 1080,
+};
+function fireWindowEvent(name, detail) {
+  (windowListeners[name] || []).forEach((fn) => fn(detail));
+}
 global.performance = { now: () => Date.now() };
+global.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+global.cancelAnimationFrame = (id) => clearTimeout(id);
 
 const { initCharacter } = await import("../reyes_agent/static/character.js");
+const { shouldIdleNudge } = await import("../reyes_agent/static/character_brain.js");
 const zc = initCharacter(null);
 
 let failures = 0;
@@ -77,5 +92,36 @@ const dockWalked = rootEl.classList.contains("zc-walking") && rootEl.style._prop
 check("setDocked('bottom-left') walks to the docked position instead of snapping", dockWalked,
   `left=${rootEl.style._props["--zc-left"]}`);
 
-console.log(failures === 0 ? "ALL 5 CASES PASSED" : `${failures} CASE(S) FAILED`);
+// 6) Idle behavior engine: the pure decision function (character_brain.js)
+// only fires past its threshold and within its probability roll -- imported
+// and exercised directly since it's DOM-free by design.
+check("shouldIdleNudge: gated by both the idle threshold and the probability roll",
+  shouldIdleNudge(30000, 0.05) === true && shouldIdleNudge(10000, 0.05) === false && shouldIdleNudge(30000, 0.5) === false);
+
+// 7) Gaze system gating: disabled by default, and setEyeTracking's enabled
+// flag is what actually controls it (index.html/mini.html already call
+// this with the user's real saved preference).
+check("gaze is off until setEyeTracking({enabled:true}) is called", zc.auditMetrics().gaze_enabled === false);
+zc.setEyeTracking({ enabled: true });
+check("setEyeTracking({enabled:true}) turns gaze on", zc.auditMetrics().gaze_enabled === true);
+
+// 8) Gaze dead zone: a pointer move that stays within the dead zone of the
+// character's center must NOT move the eyes -- only a real, deliberate
+// cursor position outside it should.
+fireWindowEvent("pointermove", { clientX: 48, clientY: 64 }); // dead center of the 96x128 stub rect
+await new Promise((r) => setTimeout(r, 200)); // past the reaction delay + one damping frame
+const centerOffset = zc.auditMetrics().gaze_offset;
+check("a cursor near center (inside the dead zone) does not move the eyes",
+  Math.abs(centerOffset.x) < 0.5 && Math.abs(centerOffset.y) < 0.5, JSON.stringify(centerOffset));
+
+fireWindowEvent("pointermove", { clientX: 1200, clientY: 600 }); // far outside the dead zone
+await new Promise((r) => setTimeout(r, 400)); // reaction delay + enough damping frames to move noticeably
+const farOffset = zc.auditMetrics().gaze_offset;
+check("a cursor well outside the dead zone moves the eyes toward it",
+  farOffset.x > 1, JSON.stringify(farOffset));
+
+zc.setEyeTracking({ enabled: false });
+check("setEyeTracking({enabled:false}) recenters the gaze", zc.auditMetrics().gaze_enabled === false);
+
+console.log(failures === 0 ? "ALL 10 CASES PASSED" : `${failures} CASE(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

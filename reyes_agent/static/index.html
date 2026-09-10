@@ -2905,7 +2905,11 @@ function setListeningUi(state) {
     if (!turnActive) orb.setState('listening');
   } else if (state === 'standby') {
     micStatusEl.textContent = 'Standing by — say "Zeno" to wake me';
-    if (!turnActive) orb.setState('idle');
+    // Was 'idle' -- indistinguishable from ordinary idle even though a
+    // dedicated 'standby' state already exists (living-character master
+    // prompt Phase 30: a real "ZENO, standby" should visibly settle, not
+    // look identical to normal idle).
+    if (!turnActive) orb.setState('standby');
   }
 }
 

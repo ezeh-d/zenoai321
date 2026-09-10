@@ -1,3 +1,8 @@
+# Cloned research repos (character-engine research) -- reference only,
+# never vendor their histories/dependencies into this repo. The index/map
+# markdown files ZENO's own research produces (_research/*.md) ARE kept.
+_research/character_engine/
+
 # Secrets - never commit
 .env
 .env.*
