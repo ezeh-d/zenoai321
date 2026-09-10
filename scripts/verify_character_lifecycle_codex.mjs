@@ -12,7 +12,8 @@ import { on, clear } from '../reyes_agent/static/visual_events.js';
 // event loop, before temporarily replacing timer globals inside each test.
 await new Promise(resolve => setImmediate(resolve));
 const strict = process.argv.includes('--strict');
-const gap = reason => strict ? {} : { todo: `CLAUDE-OWNED baseline gap: ${reason}` };
+const gap = (reason, { acceptance = true } = {}) => strict && acceptance
+  ? {} : { todo: `${acceptance ? 'CLAUDE-OWNED baseline gap' : 'POLICY PROBE'}: ${reason}` };
 
 function mounted(t) {
   const h = createHarness();
@@ -116,7 +117,8 @@ test('cursor gaze updates before continuous pointer movement ends', gap('trailin
   assert.ok(during > 0.5, `gaze stayed at ${during} during 960ms of movement`);
 });
 
-test('inactive character pauses emotion updates while its document stays visible', gap('setActive(false) does not gate emotion timer'), t => {
+test('policy probe: inactive character pauses emotion updates while its document stays visible',
+  gap('decide whether setActive(false) pauses emotion time', {acceptance:false}), t => {
   const {h, character} = mounted(t);
   character.setEmotion({energy:1}, {immediate:true});
   character.setActive(false);
@@ -159,12 +161,15 @@ test('runtime teardown releases owned timers, listeners and DOM across replaceme
     assert.fail('No runtime disposal method; removing DOM leaves timers/listeners registered');
   }
   dispose.call(character);
+  dispose.call(character);
   assert.equal(h.counts().timers, 0);
   assert.equal(h.counts().listeners, 0);
   assert.equal(h.roots().length, 0);
   for (let i = 0; i < 25; i++) {
     const next = initCharacter(null);
-    (next.dispose || next.destroy).call(next);
+    const nextDispose = next.dispose || next.destroy;
+    nextDispose.call(next);
+    nextDispose.call(next);
   }
   assert.equal(h.counts().timers, 0);
   assert.equal(h.counts().listeners, 0);

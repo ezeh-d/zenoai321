@@ -34,7 +34,7 @@ The companion prompt kit is reference material only. Its PySide6 proposal must n
 2. **Continuous cursor motion starves gaze.** `onPointerMove` at line 403 restarts a 120 ms trailing timer. In a deterministic 60-event/960 ms trace, gaze remained `0` until movement stopped, then reached `4.5`. Proposed minimal change: throttle/sample ongoing motion while retaining delayed acquisition and neutral timeout.
 3. **Inactive runtime still works.** `setActive(false)` at line 346 hides and cancels the primary blink timeout only. Emotion decayed from `1` to `0.936` over a simulated 5 s; pointer events still drove gaze to `{x:4.5,y:2.88}`; visibility restored one hidden-character blink timeout. Proposed change: central active/disposed gates for all callbacks, with an explicit policy for whether emotion time pauses or merely rendering work pauses.
 4. **Spatial contract is open-only.** The inspected seam contains `zeno:panel-opened` and aggregate `zeno:panels-state`, not panel moved/resized/closed target events. Existing methods recalculate from the current character rectangle when called, but no event updates a tracked target. Claude should define semantic spatial target update/clear events or a DesktopDirector subscription; avoid hardcoded screen coordinates.
-5. **Research license wording:** simple-desktop-pet README declares MIT, but its tracked tree has no LICENSE/COPYING/NOTICE and package.json has no license field at local commit `1a26517`; asset provenance is unverified. Keep reference-only treatment.
+5. **Research license wording:** simple-desktop-pet README declares MIT, but its tracked tree has no LICENSE/COPYING/NOTICE and package.json has no license field at local commit `1a265174e203169a75d0b525d246f1e26cf0b4e4`; asset provenance is unverified. Local source: `_research/character_engine/simple-desktop-pet`; upstream reference: `github.com/Evanfan007/desktop-pet`. Keep reference-only treatment.
 6. **Research lifecycle pattern:** buddy's `PetSprite.svelte:36,64-67,90-92` combines timeout cancellation with a generation token to reject stale callbacks. Its renderer reports interactive regions while native `avatar-window.ts:79` owns OS click-through. This separation suits ZENO: renderer reports hit-test intent; pywebview/Windows shell owns native input behavior.
 7. **Research timing caution:** simple-desktop-pet advances frames per RAF under a 60 Hz assumption. ZENO should base animation progress on elapsed time or configured sprite FPS. Its state machine starts in IDLE and rejects the initial IDLE transition, so the existing research statement that startup arms its idle timer is inaccurate.
 
@@ -49,7 +49,7 @@ The companion prompt kit is reference material only. Its PySide6 proposal must n
 
 - `node --no-warnings --test scripts/character_support/harness.test.mjs`: 5 pass.
 - `node --no-warnings --test scripts/verify_character_contracts_codex.mjs scripts/verify_character_lifecycle_codex.mjs`: 19 pass, 5 expected TODO gaps, exit 0.
-- `node --no-warnings scripts/verify_character_lifecycle_codex.mjs --strict`: 7 pass, 5 fail, exit 1; each failure reproduces a finding above.
+- `node --no-warnings scripts/verify_character_lifecycle_codex.mjs --strict`: 7 pass, 4 accepted failures, 1 unresolved-policy TODO, exit 1. Accepted failures reproduce the runtime findings above; inactive emotion timing remains undecided.
 - Fresh broad run: `verify_character_engine.mjs`, `verify_character_select.mjs`, and `verify_orb_emotion_engine.mjs` all exited 0; the combined new Node run reported 24 pass and 5 expected TODO gaps.
 - `python -m pytest tests/test_visual_performance.py -q`: 4 pass, 1 pre-existing failure. The August test prohibits any `setInterval(` in `orb.js`; the September emotion-engine commit `d8a157b` intentionally added one. This is an obsolete source-text assertion on baseline `fb38214`, unrelated to this branch's changes. Claude/test owner should replace it with a behavioral work-rate assertion rather than globally permitting or forbidding timer syntax.
 
@@ -66,6 +66,8 @@ The companion prompt kit is reference material only. Its PySide6 proposal must n
 - Define spatial target update/clear events before DesktopDirector movement tests are added.
 - Preserve `setState`, `setEmotion`, `lookAt`, `walkTo`, and `pointAt` as semantic renderer-independent interfaces.
 - Re-run these tests on Claude's current uncommitted renderer integration; this branch intentionally starts at `fb38214` and does not contain his newer files.
+
+Research audit commands: `git ls-files | rg '(LICENSE|COPYING|NOTICE)'`, `git show HEAD:package.json`, and targeted README/source reads. Buddy lifecycle/input reference: local `_research/character_engine/buddy` at `4ac2428e46ff40505d61df15afbe07252b334902`, upstream `github.com/AG9898/buddy`.
 
 ## READY COMMITS
 

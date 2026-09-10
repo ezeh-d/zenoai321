@@ -26,7 +26,7 @@
 
 **Interfaces:** `createHarness()` returns `{ advance(ms), counts(), window, document, install(), restore(), roots() }`. `install/restore` temporarily replace timer/DOM globals and restore original descriptors. `counts()` reports timers by type, callbacks and event listeners. Element rectangles can be changed via `rect` without pretending to implement browser layout.
 
-- [ ] Write tests first: timer cancellation, chronological interval/rAF execution, runaway guard, listener deduplication/removal, element identity and global restoration.
+- [x] Write tests first: timer cancellation, chronological interval/rAF execution, runaway guard, listener deduplication/removal, element identity and global restoration.
 
 ```js
 const h = createHarness();
@@ -40,9 +40,9 @@ assert.deepEqual(calls, [10, 20]);
 h.restore();
 ```
 
-- [ ] Run `node --test scripts/character_support/harness.test.mjs`; observe missing helper failure.
-- [ ] Implement only the test environment: ordered cancellable timers, bounded clock advancement, listener sets, owned element tree, CSS property bag, global restoration. No character behavior in helper.
-- [ ] Rerun self-tests; commit helper and this plan after verification.
+- [x] Run `node --test scripts/character_support/harness.test.mjs`; observe missing helper failure.
+- [x] Implement only the test environment: ordered cancellable timers, bounded clock advancement, listener sets, owned element tree, CSS property bag, global restoration. No character behavior in helper.
+- [x] Rerun self-tests; commit helper and this plan after verification.
 
 ## Task 2: Real-module contracts and reproducible findings
 
@@ -50,7 +50,7 @@ h.restore();
 
 **Consumes:** Real `visual_events.js`, `character_brain.js`, `character.js`; helper above.
 
-- [ ] Add event tests for failure isolation, snapshot delivery, repeated unsubscribe, and 1,000 subscribe/emit/unsubscribe cycles. Example independent outcome:
+- [x] Add event tests for failure isolation, snapshot delivery, repeated unsubscribe, and 1,000 subscribe/emit/unsubscribe cycles. Example independent outcome:
 
 ```js
 const seen = [];
@@ -61,9 +61,9 @@ assert.deepEqual(seen, ['listening']);
 assert.equal(listenerCount('probe'), 0);
 ```
 
-- [ ] Add emotion tests for bounded finite valid inputs, snapshot isolation, capped elapsed-time decay, and idle threshold/probability gates; protect authoritative states in actual character integration.
-- [ ] Add geometry/gesture tests: left/right panel open, bounds of gaze offset, current rectangle coordinates, hold replacement/expiry and 1,000 point operations without growing timers/listeners.
-- [ ] Add desired-behavior probes for inactive work, visibility reactivation, continuous cursor gaze and repeat-init teardown. Each real defect remains an explicit TODO with reason in normal runs; `--strict` removes TODO status. No tests for invented panel-move events: record missing contract for Claude instead.
+- [x] Add emotion tests for bounded finite valid inputs, snapshot isolation, capped elapsed-time decay, and idle threshold/probability gates; protect authoritative states in actual character integration.
+- [x] Add geometry/gesture tests: left/right panel open, bounds of gaze offset, current rectangle coordinates, hold replacement/expiry and 1,000 point operations without growing timers/listeners.
+- [x] Add desired-behavior probes for inactive work, visibility reactivation, continuous cursor gaze and repeat-init teardown. Accepted defects are TODOs in normal runs and fail in `--strict`; the unresolved inactive-emotion policy remains a TODO in both modes. No tests for invented panel-move events: record missing contract for Claude instead.
 
 ```js
 test('cursor gaze updates before continuous movement ends', knownGapOptions, () => {
@@ -77,18 +77,18 @@ test('cursor gaze updates before continuous movement ends', knownGapOptions, () 
 });
 ```
 
-- [ ] Run normal and strict suites. Trace failures to source and document expected/actual/root cause/minimal change for Claude. Do not change production to obtain green.
-- [ ] Record synthetic counts/timing, not invented live performance metrics; commit tests separately.
+- [x] Run normal and strict suites. Trace failures to source and document expected/actual/root cause/minimal change for Claude. Do not change production to obtain green.
+- [x] Record synthetic counts/timing, not invented live performance metrics; commit tests separately.
 
 ## Task 3: Research gaps and handoff
 
 **Files:** Create `docs/agent_handoffs/CODEX_CHARACTER_HANDOFF.md`.
 
-- [ ] Audit only gaps in existing research, with a read-only independent research agent. Verify uncertain license evidence locally without copying assets.
-- [ ] Record ownership, findings, exact commands/outcomes, baseline commit, synthetic limits and ready commits. Asset pipeline is deferred because Claude is now actively adding assets/renderers.
-- [ ] Run both existing character scripts, new suites, relevant existing orb/event verification, and `git diff --check`.
-- [ ] Request independent read-only test review; fix only support-file defects.
-- [ ] Commit final handoff; verify production diff remains empty against fb38214 and leave branch unmerged.
+- [x] Audit only gaps in existing research, with a read-only independent research agent. Verify uncertain license evidence locally without copying assets.
+- [x] Record ownership, findings, exact commands/outcomes, baseline commit, synthetic limits and ready commits. Asset pipeline is deferred because Claude is now actively adding assets/renderers.
+- [x] Run both existing character scripts, new suites, relevant existing orb/event verification, and `git diff --check`.
+- [x] Request independent read-only test review; fix only support-file defects.
+- [x] Commit final handoff; verify production diff remains empty against fb38214 and leave branch unmerged.
 
 ## Plan self-review
 

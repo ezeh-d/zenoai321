@@ -59,13 +59,17 @@ test('DOM keeps distinct roots and mutable measured rectangles', () => {
 });
 
 test('restores original globals even with outstanding fake timers', () => {
-  const original = Object.getOwnPropertyDescriptor(globalThis, 'performance');
-  const originalTimeout = globalThis.setTimeout;
+  const keys = ['window', 'document', 'performance', 'setTimeout', 'clearTimeout',
+    'setInterval', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame'];
+  const originals = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const h = createHarness();
   h.install();
   setTimeout(() => assert.fail('fake timer escaped'), 100);
+  setInterval(() => assert.fail('fake interval escaped'), 100);
+  requestAnimationFrame(() => assert.fail('fake frame escaped'));
   h.restore();
-  assert.equal(globalThis.setTimeout, originalTimeout);
-  assert.deepEqual(Object.getOwnPropertyDescriptor(globalThis, 'performance'), original);
+  for (const [key, descriptor] of originals) {
+    assert.deepEqual(Object.getOwnPropertyDescriptor(globalThis, key), descriptor, `${key} descriptor changed`);
+  }
   h.restore();
 });
