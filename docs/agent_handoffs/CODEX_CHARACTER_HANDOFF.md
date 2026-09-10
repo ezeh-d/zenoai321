@@ -57,8 +57,9 @@ The companion prompt kit is reference material only. Its PySide6 proposal must n
 - `node --no-warnings scripts/verify_character_lifecycle_codex.mjs --strict`: 7 pass, 4 accepted failures, 1 unresolved-policy TODO, exit 1. Accepted failures reproduce the runtime findings above; inactive emotion timing remains undecided.
 - Fresh broad run: `verify_character_engine.mjs`, `verify_character_select.mjs`, and `verify_orb_emotion_engine.mjs` all exited 0; the combined new Node run reported 24 pass and 5 expected TODO gaps.
 - `python -m pytest tests/test_visual_performance.py -q`: 4 pass, 1 pre-existing failure. The August test prohibits any `setInterval(` in `orb.js`; the September emotion-engine commit `d8a157b` intentionally added one. This is an obsolete source-text assertion on baseline `fb38214`, unrelated to this branch's changes. Claude/test owner should replace it with a behavioral work-rate assertion rather than globally permitting or forbidding timer syntax.
-- `python -m pytest tests/test_companion_motion.py -q`: 11 pass. Repeated five times: 11 pass on every run.
-- `python -m pytest tests/test_companion_motion.py tests/test_mini_overlay.py -q`: 16 pass after installing the repository-pinned `pywebview==6.2.1` into the isolated environment. The first attempt failed during collection solely because that declared dependency was absent.
+- `python -m pytest tests/test_companion_motion.py -q`: 13 pass after concurrency review fixes; repeated five times with 13 pass on every run.
+- `python -m pytest tests/test_companion_motion.py tests/test_mini_overlay.py -q`: 18 pass after installing the repository-pinned `pywebview==6.2.1` into the isolated environment. The first attempt failed during collection solely because that declared dependency was absent.
+- Independent re-review of `bb1d425..533277c` found no critical or important issues and marked Task 1 ready to merge.
 
 - Existing `verify_character_engine.mjs` showed one intermittent gaze failure during final verification: its fixed 400 ms wall-clock sleep observed only one damping frame (`x=0.81`, expected `>1`). Ten immediate isolated reruns all passed. Treat this as a pre-existing timing-sensitive test (1 observed failure in 11 final attempts), not proof of a runtime regression; migrate it onto the deterministic clock or a condition-based wait.
 
@@ -85,6 +86,7 @@ Research audit commands: `git ls-files | rg '(LICENSE|COPYING|NOTICE)'`, `git sh
 - `3cccdc7` — approved living desktop companion design
 - `b7e1846` — concrete living companion implementation plan
 - `bb1d425` — bounded native motion controller and TDD suite
+- `533277c` — responsive cancellation and generation-safe callback dispatch
 - Final handoff commit is the commit containing this file.
 
 ## BLOCKERS
